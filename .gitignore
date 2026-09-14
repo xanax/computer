@@ -26,3 +26,5 @@ cptr/frontend/.svelte-kit/
 Thumbs.db
 
 .cptr
+*.log
+cptr/frontend/package-lock.json
