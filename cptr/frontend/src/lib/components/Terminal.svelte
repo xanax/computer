@@ -1,8 +1,15 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { get } from 'svelte/store';
 	import { Terminal } from '@xterm/xterm';
 	import { FitAddon } from '@xterm/addon-fit';
 	import { WebglAddon } from '@xterm/addon-webgl';
+	import { terminalFontSize } from '$lib/stores';
+	import {
+		DEFAULT_TERMINAL_FONT_SIZE,
+		normalizeTerminalFontSize,
+		TERMINAL_LINE_HEIGHT
+	} from '$lib/utils/appearance';
 
 	// ── Compact binary WebSocket protocol ─────────────────────
 	// Client → Server:  byte 0 = type, rest = payload
@@ -236,6 +243,20 @@
 		if (term) term.options.disableStdin = readOnly;
 	});
 
+	// ── Font size ────────────────────────────────────────────────────
+	// xterm measures glyphs in pixels, so this cannot ride on
+	// --app-text-scale (Settings → Appearance → UI Scale). Push the value
+	// into the instance and refit so the PTY learns the new cols/rows.
+	let appliedFontSize = DEFAULT_TERMINAL_FONT_SIZE;
+
+	$effect(() => {
+		const next = normalizeTerminalFontSize($terminalFontSize) ?? DEFAULT_TERMINAL_FONT_SIZE;
+		if (!term || next === appliedFontSize) return;
+		appliedFontSize = next;
+		term.options.fontSize = next;
+		doFit();
+	});
+
 	onMount(() => {
 		if (!containerEl) return;
 
@@ -250,12 +271,15 @@
 		acquireWakeLock();
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 
+		appliedFontSize =
+			normalizeTerminalFontSize(get(terminalFontSize)) ?? DEFAULT_TERMINAL_FONT_SIZE;
+
 		term = new Terminal({
 			cursorBlink: true,
 			cursorStyle: 'bar',
 			fontFamily: '"JetBrains Mono", "Fira Code", ui-monospace, monospace',
-			fontSize: 13,
-			lineHeight: 1.3,
+			fontSize: appliedFontSize,
+			lineHeight: TERMINAL_LINE_HEIGHT,
 			scrollback: 10000,
 			macOptionClickForceSelection: true,
 			disableStdin: readOnly,
@@ -363,7 +387,9 @@
 		let lastTouchY = 0;
 		let touchAccum = 0;
 		let touchingTerminal = false;
-		const LINE_PX = 13 * 1.3; // fontSize * lineHeight
+		// Pixel height of one row, derived from the live font size so touch
+		// scrolling stays accurate after the user changes it.
+		const linePx = () => (term?.options.fontSize ?? appliedFontSize) * TERMINAL_LINE_HEIGHT;
 
 		function isAltBuffer(): boolean {
 			try {
@@ -394,7 +420,7 @@
 			touchAccum += deltaY;
 
 			// Convert accumulated pixel delta to lines
-			const lines = Math.trunc(touchAccum / LINE_PX);
+			const lines = Math.trunc(touchAccum / linePx());
 			if (lines !== 0) {
 				if (isAltBuffer()) {
 					// TUI apps (vim, htop, Claude Code): send arrow keys
@@ -407,7 +433,7 @@
 					// Normal buffer: scroll terminal history
 					term.scrollLines(lines);
 				}
-				touchAccum -= lines * LINE_PX;
+				touchAccum -= lines * linePx();
 			}
 		}
 

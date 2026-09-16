@@ -5,6 +5,7 @@
 	import {
 		borderContrast,
 		expandToolDetails,
+		terminalFontSize,
 		textScale,
 		theme,
 		themeConfig,
@@ -14,9 +15,13 @@
 	import type { Theme, ThemeConfig } from '$lib/stores';
 	import {
 		DEFAULT_BORDER_CONTRAST,
+		DEFAULT_TERMINAL_FONT_SIZE,
 		MAX_BORDER_CONTRAST,
+		MAX_TERMINAL_FONT_SIZE,
+		MIN_TERMINAL_FONT_SIZE,
 		normalizeBorderContrast,
 		normalizeHexColor,
+		normalizeTerminalFontSize,
 		resolveThemeMode,
 		resolveThemeConfig,
 		sanitizeThemeConfig
@@ -25,18 +30,27 @@
 	const minTextScale = 1;
 	const maxTextScale = 1.5;
 	const borderContrastStep = 0.5;
+	const terminalFontStep = 1;
 
 	let fileInput: HTMLInputElement;
 	let scaleEnabled = $state(false);
 	let scaleDraft = $state(1);
 	let borderContrastEnabled = $state(false);
 	let borderContrastDraft = $state(DEFAULT_BORDER_CONTRAST);
+	let terminalFontEnabled = $state(false);
+	let terminalFontDraft = $state(MIN_TERMINAL_FONT_SIZE);
 	let colorDrafts = $state({ background: '', foreground: '' });
 
 	const resolvedTheme = $derived(resolveThemeMode($theme));
 	const resolvedConfig = $derived(resolveThemeConfig($theme, $themeConfig));
 	const hasCustomAppearance = $derived(
-		Boolean($themeConfig || $textScale !== null || $borderContrast !== null || $widescreenMode)
+		Boolean(
+			$themeConfig ||
+			$textScale !== null ||
+			$borderContrast !== null ||
+			$terminalFontSize !== null ||
+			$widescreenMode
+		)
 	);
 
 	$effect(() => {
@@ -55,6 +69,10 @@
 			borderContrastDraft = $borderContrast;
 		} else if (!borderContrastEnabled) {
 			borderContrastDraft = DEFAULT_BORDER_CONTRAST;
+		}
+		if ($terminalFontSize !== null) {
+			terminalFontEnabled = true;
+			terminalFontDraft = $terminalFontSize;
 		}
 	});
 
@@ -135,6 +153,34 @@
 		}
 	}
 
+	function toggleTerminalFontSize() {
+		if (terminalFontEnabled) {
+			terminalFontEnabled = false;
+			terminalFontSize.set(null);
+		} else {
+			terminalFontEnabled = true;
+			terminalFontDraft = $terminalFontSize ?? DEFAULT_TERMINAL_FONT_SIZE;
+			terminalFontSize.set(terminalFontDraft);
+		}
+	}
+
+	function terminalFontLabel(size: number) {
+		return `${size}px`;
+	}
+
+	function setTerminalFontSizePreference(size: number | string) {
+		const next = normalizeTerminalFontSize(size) ?? DEFAULT_TERMINAL_FONT_SIZE;
+		terminalFontDraft = next;
+		if (next === DEFAULT_TERMINAL_FONT_SIZE) {
+			// Same as xterm's built-in default: drop the preference entirely.
+			terminalFontEnabled = false;
+			terminalFontSize.set(null);
+		} else {
+			terminalFontEnabled = true;
+			terminalFontSize.set(next);
+		}
+	}
+
 	function setBorderContrastPreference(contrast: number | string) {
 		const next = normalizeBorderContrast(contrast) ?? DEFAULT_BORDER_CONTRAST;
 		borderContrastDraft = next;
@@ -156,6 +202,8 @@
 		borderContrastDraft = DEFAULT_BORDER_CONTRAST;
 		borderContrast.set(null);
 		widescreenMode.set(false);
+		terminalFontEnabled = false;
+		terminalFontSize.set(null);
 	}
 
 	function exportTheme() {
@@ -164,6 +212,7 @@
 			themeConfig: sanitizeThemeConfig($themeConfig),
 			textScale: $textScale,
 			borderContrast: $borderContrast,
+			terminalFontSize: $terminalFontSize,
 			widescreenMode: $widescreenMode
 		};
 
@@ -213,6 +262,8 @@
 					: undefined;
 			const importedWidescreenMode =
 				typeof parsed?.widescreenMode === 'boolean' ? parsed.widescreenMode : undefined;
+			const importedTerminalFontSize =
+				normalizeTerminalFontSize(parsed?.terminalFontSize) ?? undefined;
 			const importedBorderContrast =
 				normalizeBorderContrast(parsed?.borderContrast) ??
 				(parsed?.highContrastBorders === true ? 12 : undefined);
@@ -222,7 +273,8 @@
 				!importedTheme &&
 				importedScale === undefined &&
 				importedBorderContrast === undefined &&
-				importedWidescreenMode === undefined
+				importedWidescreenMode === undefined &&
+				importedTerminalFontSize === undefined
 			) {
 				throw new Error('empty theme');
 			}
@@ -234,6 +286,7 @@
 					importedBorderContrast === DEFAULT_BORDER_CONTRAST ? null : importedBorderContrast
 				);
 			if (importedWidescreenMode !== undefined) widescreenMode.set(importedWidescreenMode);
+			if (importedTerminalFontSize !== undefined) terminalFontSize.set(importedTerminalFontSize);
 			toast.success($t('appearance.imported'));
 		} catch {
 			toast.error($t('appearance.importFailed'));
@@ -447,6 +500,60 @@
 						aria-labelledby="ui-scale-label"
 						aria-label={$t('general.increaseUiScale')}
 						onclick={() => setTextScalePreference(scaleDraft + 0.1)}
+					>
+						<Icon name="plus" size={12} />
+					</button>
+				</div>
+			{/if}
+		</div>
+
+		<div class="w-full mt-5">
+			<div class="flex items-center gap-2">
+				<span id="terminal-font-size-label" class="text-xs text-gray-600 dark:text-gray-400">
+					{$t('appearance.terminalFontSize')}
+				</span>
+				<button
+					type="button"
+					class="ml-auto h-6 px-2 rounded-lg text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors"
+					aria-live="polite"
+					onclick={toggleTerminalFontSize}
+				>
+					{terminalFontEnabled ? terminalFontLabel(terminalFontDraft) : $t('general.default')}
+				</button>
+			</div>
+
+			{#if terminalFontEnabled}
+				<div class="flex items-center gap-1.5 pt-1.5">
+					<button
+						type="button"
+						class="flex items-center justify-center w-6 h-6 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors"
+						aria-labelledby="terminal-font-size-label"
+						aria-label={$t('appearance.decreaseTerminalFontSize')}
+						onclick={() => setTerminalFontSizePreference(terminalFontDraft - terminalFontStep)}
+					>
+						<Icon name="minus" size={12} />
+					</button>
+					<input
+						id="terminal-font-size-slider"
+						class="appearance-range flex-1 min-w-0"
+						type="range"
+						min={MIN_TERMINAL_FONT_SIZE}
+						max={MAX_TERMINAL_FONT_SIZE}
+						step={terminalFontStep}
+						bind:value={terminalFontDraft}
+						aria-labelledby="terminal-font-size-label"
+						aria-valuemin={MIN_TERMINAL_FONT_SIZE}
+						aria-valuemax={MAX_TERMINAL_FONT_SIZE}
+						aria-valuenow={terminalFontDraft}
+						aria-valuetext={terminalFontLabel(terminalFontDraft)}
+						oninput={() => setTerminalFontSizePreference(terminalFontDraft)}
+					/>
+					<button
+						type="button"
+						class="flex items-center justify-center w-6 h-6 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors"
+						aria-labelledby="terminal-font-size-label"
+						aria-label={$t('appearance.increaseTerminalFontSize')}
+						onclick={() => setTerminalFontSizePreference(terminalFontDraft + terminalFontStep)}
 					>
 						<Icon name="plus" size={12} />
 					</button>

@@ -19,6 +19,7 @@ export type AppearancePreferences = {
 	textScale?: number | null;
 	borderContrast?: number | null;
 	highContrastBorders?: boolean;
+	terminalFontSize?: number | null;
 };
 
 type ResolvedTheme = 'dark' | 'light';
@@ -28,6 +29,23 @@ const DEFAULT_UI_FONT =
 export const DEFAULT_BORDER_CONTRAST = 1.5;
 export const DEFAULT_DIVIDER_CONTRAST = 0.875;
 export const MAX_BORDER_CONTRAST = 16;
+
+/**
+ * Terminal (xterm.js) constants. The font size is a pixel value handed
+ * straight to xterm, so it does not follow --app-text-scale; it is stored
+ * as its own preference instead.
+ */
+export const DEFAULT_TERMINAL_FONT_SIZE = 13;
+export const MIN_TERMINAL_FONT_SIZE = 8;
+export const MAX_TERMINAL_FONT_SIZE = 24;
+export const TERMINAL_LINE_HEIGHT = 1.3;
+
+export function normalizeTerminalFontSize(value: unknown): number | null {
+	if (value === null || value === undefined || value === '') return null;
+	const size = Number(value);
+	if (!Number.isFinite(size)) return null;
+	return Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, Math.round(size)));
+}
 
 export function normalizeBorderContrast(value: unknown): number | null {
 	if (value === null || value === undefined || value === '') return null;

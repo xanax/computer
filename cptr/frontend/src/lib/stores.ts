@@ -36,6 +36,7 @@ import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
 import {
 	applyAppearance,
 	normalizeBorderContrast,
+	normalizeTerminalFontSize,
 	sanitizeThemeConfig,
 	type AppearancePreferences,
 	type Theme,
@@ -143,6 +144,8 @@ export interface UserPreferences {
 	textScale?: number | null;
 	widescreenMode?: boolean;
 	expandToolDetails?: boolean;
+	/** Terminal (xterm.js) font size in px; null = default. */
+	terminalFontSize?: number | null;
 	homeGroup?: EditorGroup;
 	homeState?: HomeState;
 	git?: {
@@ -350,6 +353,8 @@ export const pwaPreferences = writable<PwaPreferences>(defaultPwaPreferences);
 export const themeConfig = writable<ThemeConfig | null>(null);
 export const textScale = writable<number | null>(null);
 export const borderContrast = writable<number | null>(null);
+/** Terminal font size in px; null means DEFAULT_TERMINAL_FONT_SIZE. */
+export const terminalFontSize = writable<number | null>(null);
 export const widescreenMode = writable(false);
 export const expandToolDetails = writable(false);
 
@@ -447,7 +452,8 @@ function persistPreferences(): void {
 				theme: get(theme),
 				themeConfig: sanitizeThemeConfig(get(themeConfig)),
 				textScale: get(textScale),
-				borderContrast: get(borderContrast)
+				borderContrast: get(borderContrast),
+				terminalFontSize: get(terminalFontSize)
 			},
 			sidebarOpen: get(sidebarOpen),
 			sidebarWidth: get(sidebarWidth),
@@ -461,6 +467,7 @@ function persistPreferences(): void {
 			textScale: get(textScale),
 			widescreenMode: get(widescreenMode),
 			expandToolDetails: get(expandToolDetails),
+			terminalFontSize: get(terminalFontSize),
 			homeState: get(homeState)
 		};
 		savePreferences(prefs as unknown as Record<string, unknown>).catch(() => {});
@@ -516,6 +523,9 @@ function subscribeForPersistence() {
 	widescreenMode.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
+	terminalFontSize.subscribe(() => {
+		if (get(stateLoaded)) persistPreferences();
+	});
 	expandToolDetails.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
@@ -563,6 +573,9 @@ export async function loadPreferences(): Promise<void> {
 				(appearance.highContrastBorders === true ? 12 : null)
 		);
 		if (prefs.widescreenMode !== undefined) widescreenMode.set(prefs.widescreenMode as boolean);
+		terminalFontSize.set(
+			normalizeTerminalFontSize(appearance.terminalFontSize ?? prefs.terminalFontSize)
+		);
 		if (prefs.expandToolDetails !== undefined)
 			expandToolDetails.set(prefs.expandToolDetails as boolean);
 		const savedHomeGroup = prefs.homeGroup as EditorGroup | undefined;
@@ -825,6 +838,9 @@ if (typeof BroadcastChannel !== 'undefined') {
 					normalizeBorderContrast(value.borderContrast) ??
 						(value.highContrastBorders === true ? 12 : null)
 				);
+				if (value.terminalFontSize !== undefined) {
+					terminalFontSize.set(normalizeTerminalFontSize(value.terminalFontSize));
+				}
 			} else if (type === 'locale' && value) {
 				changeLocale(value);
 			}
@@ -842,7 +858,8 @@ if (typeof BroadcastChannel !== 'undefined') {
 					theme: t,
 					themeConfig: get(themeConfig),
 					textScale: get(textScale),
-					borderContrast: get(borderContrast)
+					borderContrast: get(borderContrast),
+					terminalFontSize: get(terminalFontSize)
 				}
 			});
 		}
@@ -856,7 +873,8 @@ if (typeof BroadcastChannel !== 'undefined') {
 					theme: get(theme),
 					themeConfig: config,
 					textScale: get(textScale),
-					borderContrast: get(borderContrast)
+					borderContrast: get(borderContrast),
+					terminalFontSize: get(terminalFontSize)
 				}
 			});
 		}
@@ -870,7 +888,8 @@ if (typeof BroadcastChannel !== 'undefined') {
 					theme: get(theme),
 					themeConfig: get(themeConfig),
 					textScale: scale,
-					borderContrast: get(borderContrast)
+					borderContrast: get(borderContrast),
+					terminalFontSize: get(terminalFontSize)
 				}
 			});
 		}
@@ -884,7 +903,23 @@ if (typeof BroadcastChannel !== 'undefined') {
 					theme: get(theme),
 					themeConfig: get(themeConfig),
 					textScale: get(textScale),
-					borderContrast: contrast
+					borderContrast: contrast,
+					terminalFontSize: get(terminalFontSize)
+				}
+			});
+		}
+	});
+
+	terminalFontSize.subscribe((size) => {
+		if (!_syncingFromBroadcast) {
+			channel.postMessage({
+				type: 'appearance',
+				value: {
+					theme: get(theme),
+					themeConfig: get(themeConfig),
+					textScale: get(textScale),
+					borderContrast: get(borderContrast),
+					terminalFontSize: size
 				}
 			});
 		}
