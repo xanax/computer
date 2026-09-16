@@ -77,7 +77,7 @@
 			}}
 			aria-label={$t('a11y.chatOptions')}
 		>
-			<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+			<svg class="h-[0.6875rem] w-[0.6875rem]" viewBox="0 0 16 16" fill="currentColor">
 				<circle cx="3" cy="8" r="1.5" />
 				<circle cx="8" cy="8" r="1.5" />
 				<circle cx="13" cy="8" r="1.5" />

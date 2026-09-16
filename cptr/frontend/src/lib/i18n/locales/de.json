@@ -977,6 +977,7 @@
 	"appearance.reset": "Zurücksetzen",
 	"appearance.background": "Hintergrund",
 	"appearance.foreground": "Vordergrund",
+	"appearance.mutedText": "Gedämpfter Text",
 	"appearance.uiFont": "Oberflächenschrift",
 	"appearance.borderContrast": "Rahmenkontrast",
 	"appearance.decreaseBorderContrast": "Rahmenkontrast verringern",

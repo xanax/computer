@@ -22,6 +22,7 @@
 		normalizeBorderContrast,
 		normalizeHexColor,
 		normalizeTerminalFontSize,
+		deriveMutedTextColor,
 		resolveThemeMode,
 		resolveThemeConfig,
 		sanitizeThemeConfig
@@ -39,10 +40,11 @@
 	let borderContrastDraft = $state(DEFAULT_BORDER_CONTRAST);
 	let terminalFontEnabled = $state(false);
 	let terminalFontDraft = $state(MIN_TERMINAL_FONT_SIZE);
-	let colorDrafts = $state({ background: '', foreground: '' });
+	let colorDrafts = $state({ background: '', foreground: '', muted: '' });
 
 	const resolvedTheme = $derived(resolveThemeMode($theme));
 	const resolvedConfig = $derived(resolveThemeConfig($theme, $themeConfig));
+	const derivedMuted = $derived(deriveMutedTextColor(resolvedConfig));
 	const hasCustomAppearance = $derived(
 		Boolean(
 			$themeConfig ||
@@ -56,7 +58,8 @@
 	$effect(() => {
 		colorDrafts = {
 			background: resolvedConfig.background,
-			foreground: resolvedConfig.foreground
+			foreground: resolvedConfig.foreground,
+			muted: resolvedConfig.muted ?? ''
 		};
 		if ($textScale !== null) {
 			scaleEnabled = true;
@@ -80,7 +83,7 @@
 		theme.set(v);
 	}
 
-	function updateThemeColors(next: { background?: string; foreground?: string }) {
+	function updateThemeColors(next: { background?: string; foreground?: string; muted?: string }) {
 		const current = $themeConfig ?? {};
 		themeConfig.set(
 			sanitizeThemeConfig({
@@ -94,9 +97,17 @@
 		themeConfig.set(sanitizeThemeConfig({ ...($themeConfig ?? {}), ...next }));
 	}
 
-	function updateColor(key: 'background' | 'foreground', value: string) {
+	function updateColor(key: 'background' | 'foreground' | 'muted', value: string) {
 		colorDrafts = { ...colorDrafts, [key]: value };
-		const color = normalizeHexColor(value);
+		const trimmed = value.trim();
+		if (!trimmed) {
+			// Empty field: fall back to the derived default for this colour.
+			const cleared: { background?: string; foreground?: string; muted?: string } = {};
+			cleared[key] = undefined;
+			updateThemeColors(cleared);
+			return;
+		}
+		const color = normalizeHexColor(trimmed);
 		if (color) updateThemeColors({ [key]: color });
 	}
 
@@ -351,7 +362,7 @@
 			{$t('appearance.colors')}
 		</h3>
 		<div class="flex flex-col gap-2.5">
-			{#each [{ key: 'background' as const, label: $t('appearance.background'), value: resolvedConfig.background }, { key: 'foreground' as const, label: $t('appearance.foreground'), value: resolvedConfig.foreground }] as opt}
+			{#each [{ key: 'background' as const, label: $t('appearance.background'), value: resolvedConfig.background, placeholder: '' }, { key: 'foreground' as const, label: $t('appearance.foreground'), value: resolvedConfig.foreground, placeholder: '' }, { key: 'muted' as const, label: $t('appearance.mutedText'), value: resolvedConfig.muted ?? derivedMuted, placeholder: derivedMuted }] as opt}
 				<label class="flex items-center justify-between gap-3">
 					<span class="text-xs text-gray-600 dark:text-gray-400">{opt.label}</span>
 					<div class="flex items-center gap-2 min-w-0">
@@ -364,7 +375,8 @@
 						/>
 						<input
 							value={colorDrafts[opt.key]}
-							class="w-24 bg-transparent text-right text-[0.8125rem] text-gray-700 dark:text-gray-300 outline-none"
+							placeholder={opt.placeholder}
+							class="w-24 bg-transparent text-right text-[0.8125rem] text-gray-700 dark:text-gray-300 outline-none placeholder:text-gray-400 dark:placeholder:text-gray-600"
 							aria-label={opt.label}
 							oninput={(e) => updateColor(opt.key, e.currentTarget.value)}
 						/>

@@ -977,6 +977,7 @@
 	"appearance.reset": "リセット",
 	"appearance.background": "背景",
 	"appearance.foreground": "前景",
+	"appearance.mutedText": "淡色テキスト",
 	"appearance.uiFont": "UIフォント",
 	"appearance.borderContrast": "境界線のコントラスト",
 	"appearance.decreaseBorderContrast": "境界線のコントラストを下げる",

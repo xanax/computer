@@ -977,6 +977,7 @@
 	"appearance.reset": "Réinitialiser",
 	"appearance.background": "Arrière-plan",
 	"appearance.foreground": "Premier plan",
+	"appearance.mutedText": "Texte atténué",
 	"appearance.uiFont": "Police de l’interface",
 	"appearance.borderContrast": "Contraste des bordures",
 	"appearance.decreaseBorderContrast": "Réduire le contraste des bordures",

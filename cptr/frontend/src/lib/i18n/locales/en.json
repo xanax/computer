@@ -1075,6 +1075,7 @@
 	"appearance.reset": "Reset",
 	"appearance.background": "Background",
 	"appearance.foreground": "Foreground",
+	"appearance.mutedText": "Muted text",
 	"appearance.uiFont": "UI font",
 	"appearance.borderContrast": "Border contrast",
 	"appearance.decreaseBorderContrast": "Decrease border contrast",

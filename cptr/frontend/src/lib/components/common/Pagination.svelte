@@ -32,8 +32,7 @@
 			aria-label={$t('a11y.prevPage')}
 		>
 			<svg
-				width="12"
-				height="12"
+				class="h-3 w-3"
 				viewBox="0 0 12 12"
 				fill="none"
 				stroke="currentColor"
@@ -68,8 +67,7 @@
 			aria-label={$t('a11y.nextPage')}
 		>
 			<svg
-				width="12"
-				height="12"
+				class="h-3 w-3"
 				viewBox="0 0 12 12"
 				fill="none"
 				stroke="currentColor"
@@ -138,5 +136,4 @@
 		user-select: none;
 		letter-spacing: 0.0625rem;
 	}
-
 </style>

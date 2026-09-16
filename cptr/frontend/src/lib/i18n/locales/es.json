@@ -977,6 +977,7 @@
 	"appearance.reset": "Restablecer",
 	"appearance.background": "Fondo",
 	"appearance.foreground": "Primer plano",
+	"appearance.mutedText": "Texto atenuado",
 	"appearance.uiFont": "Fuente de interfaz",
 	"appearance.borderContrast": "Contraste de bordes",
 	"appearance.decreaseBorderContrast": "Disminuir contraste de bordes",

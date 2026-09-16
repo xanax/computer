@@ -977,6 +977,7 @@
 	"appearance.reset": "Сбросить",
 	"appearance.background": "Фон",
 	"appearance.foreground": "Передний план",
+	"appearance.mutedText": "Приглушённый текст",
 	"appearance.uiFont": "Шрифт интерфейса",
 	"appearance.borderContrast": "Контраст границ",
 	"appearance.decreaseBorderContrast": "Уменьшить контраст границ",

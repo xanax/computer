@@ -5,6 +5,16 @@ export type Theme = 'dark' | 'light' | 'system';
 export type ThemeColors = {
 	background?: string;
 	foreground?: string;
+	/** Secondary (non-active) text. When unset it is derived from the foreground. */
+	muted?: string;
+};
+
+export type ResolvedThemeConfig = {
+	background: string;
+	foreground: string;
+	/** Explicit secondary text colour, or null when it should be derived. */
+	muted: string | null;
+	uiFont: string;
 };
 
 export type ThemeConfig = {
@@ -78,14 +88,81 @@ export function normalizeHexColor(value: unknown): string | undefined {
 	return undefined;
 }
 
+/**
+ * Perceptual colour mixing, mirroring CSS `color-mix(in oklab, a weight, b)`.
+ * The app itself mixes in CSS; this exists so Settings can preview a derived
+ * colour (e.g. the default secondary text) without touching the DOM.
+ */
+type Oklab = [number, number, number];
+
+function srgbToLinear(value: number): number {
+	return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+
+function linearToSrgb(value: number): number {
+	const clamped = Math.min(1, Math.max(0, value));
+	return clamped <= 0.0031308 ? clamped * 12.92 : 1.055 * clamped ** (1 / 2.4) - 0.055;
+}
+
+function hexToOklab(hex: string): Oklab {
+	const value = hex.replace('#', '');
+	const [r, g, b] = [0, 2, 4].map((offset) =>
+		srgbToLinear(Number.parseInt(value.slice(offset, offset + 2), 16) / 255)
+	);
+	const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+	const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+	const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+	return [
+		0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+		1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+		0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s
+	];
+}
+
+function oklabToHex(lab: Oklab): string {
+	const [L, a, b] = lab;
+	const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+	const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+	const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+	return `#${[
+		4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+		-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+		-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s
+	]
+		.map((channel) =>
+			Math.round(linearToSrgb(channel) * 255)
+				.toString(16)
+				.padStart(2, '0')
+		)
+		.join('')}`;
+}
+
+function mixOklab(hexA: string, hexB: string, weightA: number): string {
+	const a = hexToOklab(hexA);
+	const b = hexToOklab(hexB);
+	const at = (index: number) => a[index] * weightA + b[index] * (1 - weightA);
+	return oklabToHex([at(0), at(1), at(2)]);
+}
+
+/** Weights mirror the --app-fg-muted / --app-fg-subtle rules in app.css. */
+export const MUTED_TEXT_WEIGHT = 0.62;
+export const SUBTLE_FROM_MUTED_WEIGHT = 0.72;
+
+/** Default secondary text colour: the foreground blended towards the background. */
+export function deriveMutedTextColor(colors: { background: string; foreground: string }): string {
+	return mixOklab(colors.foreground, colors.background, MUTED_TEXT_WEIGHT);
+}
+
 function sanitizeThemeColors(value: unknown): ThemeColors | null {
 	if (!value || typeof value !== 'object') return null;
 	const raw = value as Record<string, unknown>;
 	const next: ThemeColors = {};
 	const background = normalizeHexColor(raw.background);
 	const foreground = normalizeHexColor(raw.foreground);
+	const muted = normalizeHexColor(raw.muted);
 	if (background) next.background = background;
 	if (foreground) next.foreground = foreground;
+	if (muted) next.muted = muted;
 	return Object.keys(next).length ? next : null;
 }
 
@@ -108,7 +185,7 @@ export function sanitizeThemeConfig(value: unknown): ThemeConfig | null {
 	return Object.keys(next).length ? next : null;
 }
 
-export function defaultThemeConfig(theme: Theme): Required<ThemeColors> & { uiFont: string } {
+export function defaultThemeConfig(theme: Theme): Omit<ResolvedThemeConfig, 'muted'> {
 	const resolved = resolveThemeMode(theme);
 	return {
 		background: resolved === 'dark' ? '#0a0a0a' : '#ffffff',
@@ -117,14 +194,12 @@ export function defaultThemeConfig(theme: Theme): Required<ThemeColors> & { uiFo
 	};
 }
 
-export function resolveThemeConfig(
-	theme: Theme,
-	config: ThemeConfig | null
-): Required<ThemeColors> & { uiFont: string } {
+export function resolveThemeConfig(theme: Theme, config: ThemeConfig | null): ResolvedThemeConfig {
 	const resolved = resolveThemeMode(theme);
 	return {
 		...defaultThemeConfig(theme),
 		...(config?.[resolved] ?? {}),
+		muted: config?.[resolved]?.muted ?? null,
 		uiFont: config?.uiFont ?? DEFAULT_UI_FONT
 	};
 }
@@ -154,6 +229,14 @@ export function applyAppearance(
 
 	setVar('--app-bg', merged.background);
 	setVar('--app-fg', merged.foreground);
+	if (merged.muted) {
+		setVar('--app-fg-muted', merged.muted);
+		setVar('--app-fg-subtle', mixOklab(merged.muted, merged.background, SUBTLE_FROM_MUTED_WEIGHT));
+	} else {
+		// Fall back to the colour-mix defaults declared in app.css.
+		document.documentElement.style.removeProperty('--app-fg-muted');
+		document.documentElement.style.removeProperty('--app-fg-subtle');
+	}
 	setVar('--app-border', `color-mix(in oklab, var(--app-fg) ${borderMix}%, transparent)`);
 	setVar('--app-divider', `color-mix(in oklab, var(--app-fg) ${dividerMix}%, transparent)`);
 	setVar('--app-ui-font', merged.uiFont);

@@ -2,6 +2,13 @@
 	/**
 	 * Unified icon component using iconoir SVG paths.
 	 * Usage: <Icon name="folder" size={16} />
+	 *
+	 * `size` is the px box at UI Scale 1. The rendered size is multiplied by
+	 * --app-text-scale so icons grow with Settings → Appearance → UI Scale,
+	 * which otherwise only changes the root font-size (and thus rem-based text
+	 * and spacing). Layout that uses this component is rem-based, so icons were
+	 * the only thing left behind at large UI scales. `stroke-width` is in
+	 * viewBox units, so it scales along with the box automatically.
 	 */
 	interface Props {
 		name: string;
@@ -23,6 +30,7 @@
 	stroke-linecap="round"
 	stroke-linejoin="round"
 	class={className}
+	style="width: calc({size}px * var(--app-text-scale, 1)); height: calc({size}px * var(--app-text-scale, 1))"
 >
 	{#if name === 'folder'}
 		<path

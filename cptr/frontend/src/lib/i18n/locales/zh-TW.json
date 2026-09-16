@@ -977,6 +977,7 @@
 	"appearance.reset": "重設",
 	"appearance.background": "背景",
 	"appearance.foreground": "前景",
+	"appearance.mutedText": "弱化文字",
 	"appearance.uiFont": "介面字體",
 	"appearance.borderContrast": "邊框對比度",
 	"appearance.decreaseBorderContrast": "降低邊框對比度",
