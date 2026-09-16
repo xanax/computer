@@ -1499,7 +1499,7 @@ async def run_chat_task(
         if not text_buffer.strip():
             text_buffer = ""
             return None
-        logger.info(
+        logger.debug(
             "[task %s] flush_text: %d chars into message item", message_id[:8], len(text_buffer)
         )
         item = {
@@ -2348,7 +2348,7 @@ async def run_chat_task(
                         )
                         if item.get("status") in (None, "completed"):
                             _upsert_output_item(response_reasoning_items, item)
-                    logger.info(
+                    logger.debug(
                         "[task %s] output item: type=%s status=%s output=%d items reasoning_chars=%d response_reasoning_items=%d",
                         message_id[:8],
                         item.get("type"),

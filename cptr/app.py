@@ -195,6 +195,34 @@ app.add_middleware(
 )
 
 
+# GZip compression for JSON/HTML/JS/CSS responses. Starlette's defaults already
+# skip SSE (text/event-stream), audio, images, fonts, and zip — we additionally
+# skip octet-stream so binary file downloads aren't wastefully re-compressed.
+from starlette.middleware.gzip import GZipMiddleware
+
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1000,
+    compresslevel=6,
+    exclude_content_types=(
+        "application/octet-stream",
+        "application/gzip",
+        "application/x-gzip",
+        "application/zip",
+        "audio/*",
+        "font/woff",
+        "font/woff2",
+        "image/avif",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "text/event-stream",
+        "video/*",
+    ),
+)
+
+
 # Path normalization middleware (Windows: \ → / in JSON responses)
 import platform
 
@@ -493,19 +521,39 @@ async def pwa_manifest():
     }
 
 
-# Frontend (unchanged)
+# Frontend assets. SvelteKit puts content-hashed bundles under /_app/immutable/,
+# so those are safe to cache forever. version.json and index.html must revalidate
+# so clients pick up new builds promptly.
 FRONTEND_BUILD_DIR = Path(__file__).parent / "frontend" / "build"
+
+
+class FrontendStaticFiles(StaticFiles):
+    """Serve /_app assets with content-addressed cache headers."""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if path.startswith("immutable/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 if FRONTEND_BUILD_DIR.exists():
     app.mount(
-        "/_app", StaticFiles(directory=str(FRONTEND_BUILD_DIR / "_app")), name="frontend-assets"
+        "/_app",
+        FrontendStaticFiles(directory=str(FRONTEND_BUILD_DIR / "_app")),
+        name="frontend-assets",
     )
 
     @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
         file_path = FRONTEND_BUILD_DIR / full_path
         if full_path and file_path.is_file():
-            return FileResponse(file_path)
-        return FileResponse(FRONTEND_BUILD_DIR / "index.html")
+            return FileResponse(file_path, headers={"Cache-Control": "no-cache"})
+        return FileResponse(
+            FRONTEND_BUILD_DIR / "index.html", headers={"Cache-Control": "no-cache"}
+        )
 
 
 # Socket.IO: wraps the entire ASGI app
