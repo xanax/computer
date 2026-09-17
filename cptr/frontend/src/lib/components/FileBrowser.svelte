@@ -676,10 +676,11 @@
 		selectedPaths = all;
 	}
 
-	async function archiveSelected() {
-		if (selectedPaths.size === 0) return;
+	/** Downloads one or more paths (files and/or directories) as a zip archive. */
+	async function downloadPathsAsZip(paths: string[]) {
+		if (paths.length === 0) return;
 		try {
-			const res = await downloadArchive([...selectedPaths]);
+			const res = await downloadArchive(paths);
 			if (!res.ok) return;
 			const disposition = res.headers.get('content-disposition') ?? '';
 			const match = disposition.match(/filename="?([^"]+)"?/);
@@ -692,6 +693,11 @@
 			a.click();
 			URL.revokeObjectURL(url);
 		} catch {}
+	}
+
+	async function archiveSelected() {
+		if (selectedPaths.size === 0) return;
+		await downloadPathsAsZip([...selectedPaths]);
 		clearSelection();
 	}
 
@@ -1085,6 +1091,11 @@
 		a.download = entry.name;
 		a.click();
 		closeMenu();
+	}
+
+	async function downloadDir(entry: TreeEntry) {
+		closeMenu();
+		await downloadPathsAsZip([entry.path]);
 	}
 </script>
 
@@ -1645,6 +1656,11 @@
 								toggleDir(contextMenu!.entry.path);
 								closeMenu();
 							}
+						},
+						{
+							label: $t('files.downloadAsZip'),
+							icon: 'download',
+							onclick: () => downloadDir(contextMenu!.entry)
 						},
 						{ label: '', divider: true, onclick: () => {} }
 					]
