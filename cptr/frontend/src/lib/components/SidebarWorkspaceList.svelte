@@ -180,9 +180,9 @@
 
 	function handleMarkChatUnread() {
 		if (!chatMenu) return;
-		closeChatMenu();
+		const { chatId } = chatMenu;
 		// The server echo refreshes this workspace's rows and ordering.
-		markChatUnread(chatMenu.chatId);
+		markChatUnread(chatId);
 	}
 
 	function copyChatPath() {
