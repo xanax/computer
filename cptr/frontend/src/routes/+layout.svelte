@@ -70,6 +70,64 @@
 	let authMode = $state<'password' | 'pam'>('password');
 	let signupEnabled = $state(false);
 
+	// ── On-screen keyboard ────────────────────────────────────────────
+	// `overlaysContent` is a window-wide switch, so it belongs in the app
+	// shell rather than in a view (the terminal used to set it, which meant
+	// the mode flipped on/off with whichever tab happened to be open).
+	// Opting in makes the browser leave the viewport alone when the keyboard
+	// appears and report its geometry via `geometrychange` instead — which
+	// is the only way to know about it on platforms that never resize the
+	// viewport for the keyboard, notably the Windows on-screen keyboard.
+	// We then reserve the keyboard's height inside the main column, so the
+	// app resizes above the keyboard instead of losing its bottom edge.
+	type VirtualKeyboardLike = {
+		overlaysContent: boolean;
+		readonly boundingRect: DOMRect;
+		addEventListener(type: 'geometrychange', listener: () => void): void;
+		removeEventListener(type: 'geometrychange', listener: () => void): void;
+	};
+
+	onMount(() => {
+		const vk = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboardLike }).virtualKeyboard;
+		if (vk) vk.overlaysContent = true;
+
+		// Browsers without the VirtualKeyboard API (iOS Safari) keep
+		// 100vh/100dvh at the layout viewport height and pan the visual
+		// viewport instead; there visualViewport tells us how much of the
+		// bottom of the layout viewport is covered.
+		const vv = window.visualViewport;
+		const syncKeyboardInset = () => {
+			let keyboardInset: number;
+			if (vk?.overlaysContent) {
+				// Overlay mode: the viewport is untouched, so the keyboard's
+				// own rectangle is the only source of truth.
+				keyboardInset = vk.boundingRect?.height ?? 0;
+			} else {
+				const visualBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+				keyboardInset = Math.max(0, window.innerHeight - visualBottom);
+			}
+			document.documentElement.style.setProperty(
+				'--keyboard-inset-bottom',
+				keyboardInset > 100 ? `${keyboardInset}px` : '0'
+			);
+		};
+
+		syncKeyboardInset();
+		window.addEventListener('resize', syncKeyboardInset);
+		// iOS may fire 'scroll' instead of 'resize' when keyboard opens.
+		vv?.addEventListener('resize', syncKeyboardInset);
+		vv?.addEventListener('scroll', syncKeyboardInset);
+		vk?.addEventListener('geometrychange', syncKeyboardInset);
+
+		return () => {
+			document.documentElement.style.removeProperty('--keyboard-inset-bottom');
+			window.removeEventListener('resize', syncKeyboardInset);
+			vv?.removeEventListener('resize', syncKeyboardInset);
+			vv?.removeEventListener('scroll', syncKeyboardInset);
+			vk?.removeEventListener('geometrychange', syncKeyboardInset);
+		};
+	});
+
 	onMount(async () => {
 		// Check auth first
 		await checkAuth();
@@ -89,26 +147,6 @@
 			},
 			30 * 60 * 1000
 		);
-		// iOS Safari keeps 100vh/100dvh at the layout viewport height when
-		// the keyboard opens. visualViewport tells us how much of the bottom
-		// of that layout viewport is covered, so reserve that space inside the
-		// main column instead of moving or clipping the whole shell.
-		const vv = window.visualViewport;
-		const syncKeyboardInset = () => {
-			const visualBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
-			const keyboardInset = Math.max(0, window.innerHeight - visualBottom);
-			document.documentElement.style.setProperty(
-				'--keyboard-inset-bottom',
-				keyboardInset > 100 ? `${keyboardInset}px` : '0'
-			);
-		};
-
-		syncKeyboardInset();
-		window.addEventListener('resize', syncKeyboardInset);
-		// iOS may fire 'scroll' instead of 'resize' when keyboard opens.
-		vv?.addEventListener('resize', syncKeyboardInset);
-		vv?.addEventListener('scroll', syncKeyboardInset);
-
 		if (isInstalledPwa()) {
 			registerServiceWorker().catch(() => {});
 		} else {
@@ -125,10 +163,6 @@
 
 		return () => {
 			clearInterval(healthCheck);
-			document.documentElement.style.removeProperty('--keyboard-inset-bottom');
-			window.removeEventListener('resize', syncKeyboardInset);
-			vv?.removeEventListener('resize', syncKeyboardInset);
-			vv?.removeEventListener('scroll', syncKeyboardInset);
 			window.removeEventListener('offline', showOfflineToast);
 			window.removeEventListener('online', showOnlineToast);
 			window.removeEventListener('cptr:open-settings', openSettings as EventListener);

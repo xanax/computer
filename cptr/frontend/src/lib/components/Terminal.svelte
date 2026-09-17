@@ -239,12 +239,10 @@
 	onMount(() => {
 		if (!containerEl) return;
 
-		// ── Virtual Keyboard API ────────────────────────────────
-		// In overlay mode the keyboard covers content instead of resizing
-		// the viewport, which avoids jarring layout shifts in the terminal.
-		if ('virtualKeyboard' in navigator) {
-			(navigator as any).virtualKeyboard.overlaysContent = true;
-		}
+		// The on-screen keyboard is handled app-wide in +layout.svelte
+		// (overlaysContent + --keyboard-inset-bottom). It used to be
+		// configured here, but this is a window-wide setting, so a mounted
+		// terminal changed the keyboard behaviour of every other view too.
 
 		// Acquire wake lock to keep screen on during terminal session
 		acquireWakeLock();
@@ -428,7 +426,8 @@
 
 		// ResizeObserver is the SOLE trigger for refitting on container
 		// size changes. No other resize listener needed; the layout
-		// already handles visualViewport → container height propagation.
+		// already propagates keyboard inset / visualViewport → container
+		// height, so the terminal reflows when the keyboard opens.
 		resizeObserver = new ResizeObserver(() => {
 			debouncedFit();
 		});
@@ -447,10 +446,6 @@
 			document.removeEventListener('touchmove', onTouchMove);
 			document.removeEventListener('touchend', onTouchEnd);
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
-			// Reset virtual keyboard mode so other views aren't affected
-			if ('virtualKeyboard' in navigator) {
-				(navigator as any).virtualKeyboard.overlaysContent = false;
-			}
 		};
 	});
 
