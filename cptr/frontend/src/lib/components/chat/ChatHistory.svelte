@@ -11,6 +11,7 @@
 		ondelete: (id: string) => void;
 		onrename: (id: string) => void;
 		oncopy?: (id: string) => void;
+		onmarkunread?: (id: string) => void;
 		page?: number;
 		totalPages?: number;
 		perPage?: number;
@@ -25,6 +26,7 @@
 		ondelete,
 		onrename,
 		oncopy,
+		onmarkunread,
 		page = 1,
 		totalPages = 1,
 		perPage = 10,
@@ -166,6 +168,17 @@
 					if (menuChatId) onrename(menuChatId);
 				}
 			},
+			...(onmarkunread
+				? [
+						{
+							label: $t('chat.markUnread'),
+							icon: 'mail',
+							onclick: () => {
+								if (menuChatId) onmarkunread(menuChatId);
+							}
+						}
+					]
+				: []),
 			{
 				label: $t('chat.history.delete'),
 				icon: 'trash',

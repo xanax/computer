@@ -841,6 +841,7 @@
 	"chat.history.title": "Название",
 	"chat.history.updated": "Обновлено",
 	"chat.history.delete": "Удалить",
+	"chat.markUnread": "Отметить как непрочитанное",
 	"chat.edit.text": "Текст",
 	"chat.edit.thought": "Мысль",
 	"chat.thinking": "Думает",

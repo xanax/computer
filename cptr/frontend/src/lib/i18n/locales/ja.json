@@ -841,6 +841,7 @@
 	"chat.history.title": "タイトル",
 	"chat.history.updated": "更新日",
 	"chat.history.delete": "削除",
+	"chat.markUnread": "未読にする",
 	"chat.edit.text": "テキスト",
 	"chat.edit.thought": "思考",
 	"chat.thinking": "思考中",

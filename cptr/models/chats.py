@@ -262,7 +262,11 @@ class Chat(Base):
 
     @staticmethod
     async def update_last_read_at(chat_id: str, user_id: str, last_read_at: int) -> bool:
-        """Mark a chat read without changing its activity timestamp."""
+        """Set a chat's read watermark without changing its activity timestamp.
+
+        A watermark older than `updated_at` (including 0) makes the chat
+        count as unread again.
+        """
         async with await get_db() as db:
             result = await db.execute(
                 update(Chat)

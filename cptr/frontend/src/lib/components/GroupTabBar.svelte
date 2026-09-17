@@ -21,7 +21,13 @@
 		type Tab
 	} from '$lib/stores';
 	import { openChatTab } from '$lib/stores';
-	import { chatEnabled, chatStatuses, isChatUnread, streamingChatTabs } from '$lib/stores/chat';
+	import {
+		chatEnabled,
+		chatStatuses,
+		isChatUnread,
+		markChatUnread,
+		streamingChatTabs
+	} from '$lib/stores/chat';
 	import { voiceMemosEnabled, showVoiceMemo } from '$lib/stores/audio';
 	import { keybindings, formatChord } from '$lib/stores/keybindings';
 	import Icon from './Icon.svelte';
@@ -294,6 +300,15 @@
 				label: $t('bar.splitDown'),
 				icon: 'split-vertical',
 				onclick: () => openInSplit(tab.filePath!, 'vertical')
+			});
+		}
+
+		if (tab.type === 'chat' && tab.path) {
+			if (items.length > 0) items.push({ label: '', onclick: () => {}, divider: true });
+			items.push({
+				label: $t('chat.markUnread'),
+				icon: 'mail',
+				onclick: () => markChatUnread(tab.path!)
 			});
 		}
 

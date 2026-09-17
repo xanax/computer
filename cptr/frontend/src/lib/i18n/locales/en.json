@@ -939,6 +939,7 @@
 	"chat.history.title": "Title",
 	"chat.history.updated": "Updated",
 	"chat.history.delete": "Delete",
+	"chat.markUnread": "Mark as unread",
 	"chat.edit.text": "Text",
 	"chat.edit.thought": "Thought",
 	"chat.thinking": "Thinking",

@@ -98,28 +98,58 @@ async def on_chat_read(sid, data):
             subject_type="chat",
             source="socket",
         )
-        chat = await Chat.get_by_id(chat_id)
-        workspace = (chat.meta or {}).get("workspace", "") if chat else ""
-        from cptr.utils.chat_task import get_active_chat_ids
+        await broadcast_chat_read_state(user_id, chat_id, last_read_at)
 
-        unread_counts = await Chat.unread_counts_by_workspace(
-            user_id, [workspace], get_active_chat_ids()
+
+@sio.on("chat:unread")
+async def on_chat_unread(sid, data):
+    """Flag a chat as unread again so its unread indicator reappears."""
+    session = await sio.get_session(sid)
+    user_id = session.get("user_id")
+    chat_id = data.get("chat_id") if isinstance(data, dict) else None
+    if not user_id or not isinstance(chat_id, str):
+        return
+
+    # A watermark of 0 is older than any activity timestamp, so the chat
+    # counts as unread again without touching updated_at.
+    last_read_at = 0
+    if await Chat.update_last_read_at(chat_id, user_id, last_read_at):
+        from cptr.events import EVENTS, publish_event
+
+        await publish_event(
+            EVENTS.CHAT_UNREAD,
+            actor={"id": user_id},
+            subject_id=chat_id,
+            subject_type="chat",
+            source="socket",
         )
-        await emit_to_user(
-            user_id,
-            {
-                "chat_id": chat_id,
-                "workspace": workspace,
-                "last_read_at": last_read_at,
-                "workspace_unread_count": unread_counts.get(workspace, 0),
-            },
-        )
+        await broadcast_chat_read_state(user_id, chat_id, last_read_at)
 
 
 async def emit_to_user(user_id: str, data: dict):
     """Send events:chat to all of a user's connected tabs/windows."""
     for sid in list(_user_sids.get(user_id, set())):
         await sio.emit("events:chat", data, to=sid)
+
+
+async def broadcast_chat_read_state(user_id: str, chat_id: str, last_read_at: int) -> None:
+    """Echo a chat's read watermark plus its workspace unread count."""
+    chat = await Chat.get_by_id(chat_id)
+    workspace = (chat.meta or {}).get("workspace", "") if chat else ""
+    from cptr.utils.chat_task import get_active_chat_ids
+
+    unread_counts = await Chat.unread_counts_by_workspace(
+        user_id, [workspace], get_active_chat_ids()
+    )
+    await emit_to_user(
+        user_id,
+        {
+            "chat_id": chat_id,
+            "workspace": workspace,
+            "last_read_at": last_read_at,
+            "workspace_unread_count": unread_counts.get(workspace, 0),
+        },
+    )
 
 
 def is_chat_visible(user_id: str, chat_id: str) -> bool:

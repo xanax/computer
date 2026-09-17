@@ -173,6 +173,8 @@
 	let generatingCommitMessage = $state(false);
 	let panelHeight = $state(280);
 	let resizing = $state(false);
+	let maximized = $state(false);
+	let restorePanelHeight = 280;
 	let containerEl = $state<HTMLElement | null>(null);
 
 	let gitStatus = $derived(
@@ -1404,6 +1406,8 @@
 	});
 
 	function onResizeStart(e: PointerEvent) {
+		// Dragging the handle takes back manual control of the panel height
+		maximized = false;
 		resizing = true;
 		const startY = e.clientY;
 		const startH = panelHeight;
@@ -1423,6 +1427,55 @@
 	function getMaxHeight() {
 		return (containerEl?.parentElement?.clientHeight ?? window.innerHeight) - 100;
 	}
+
+	function expandPanel() {
+		expanded = true;
+		refresh();
+		if (view === 'history') loadHistory();
+		if (view === 'pullRequests') loadPullRequests();
+	}
+
+	function toggleExpanded() {
+		if (!expanded) {
+			expandPanel();
+			return;
+		}
+		expanded = false;
+		restoreFromMaximize();
+	}
+
+	function restoreFromMaximize() {
+		if (!maximized) return;
+		maximized = false;
+		panelHeight = restorePanelHeight;
+	}
+
+	function toggleMaximize(e?: Event) {
+		e?.stopPropagation();
+		if (maximized) {
+			restoreFromMaximize();
+			return;
+		}
+		if (!expanded) expandPanel();
+		restorePanelHeight = panelHeight;
+		maximized = true;
+		panelHeight = getMaxHeight();
+	}
+
+	// Keep a maximized panel filling the viewport as the window/parent resizes
+	$effect(() => {
+		if (!maximized) return;
+		const update = () => (panelHeight = getMaxHeight());
+		update();
+		window.addEventListener('resize', update);
+		const parent = containerEl?.parentElement ?? null;
+		const observer = parent ? new ResizeObserver(update) : null;
+		if (parent && observer) observer.observe(parent);
+		return () => {
+			window.removeEventListener('resize', update);
+			observer?.disconnect();
+		};
+	});
 
 	$effect(() => {
 		if (!expanded) return;
@@ -1453,14 +1506,7 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			class="flex min-w-0 items-center h-7 px-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-white/3 transition-colors duration-75"
-			onclick={() => {
-				expanded = !expanded;
-				if (expanded) {
-					refresh();
-					if (view === 'history') loadHistory();
-					if (view === 'pullRequests') loadPullRequests();
-				}
-			}}
+			onclick={toggleExpanded}
 		>
 			<!-- Branch button (opens branch picker, stops expand) -->
 			<button
@@ -1549,6 +1595,16 @@
 			>
 				<Icon name={syncAction.icon} size={12} />
 				<span class="whitespace-nowrap">{syncAction.label}</span>
+			</button>
+
+			<!-- Maximize button -->
+			<button
+				class="flex shrink-0 items-center justify-center w-6 h-6 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors duration-75"
+				onclick={toggleMaximize}
+				aria-label={maximized ? $t('git.restore') : $t('git.maximize')}
+				use:tooltip={maximized ? $t('git.restore') : $t('git.maximize')}
+			>
+				<Icon name={maximized ? 'collapse' : 'expand'} size={11} />
 			</button>
 
 			<!-- Chevron indicator -->
@@ -1906,6 +1962,15 @@
 							<Icon name="external-link" size={12} />
 						</a>
 					{/if}
+
+					<button
+						class="flex items-center justify-center w-6 h-6 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors duration-75"
+						onclick={toggleMaximize}
+						use:tooltip={maximized ? $t('git.restore') : $t('git.maximize')}
+						aria-label={maximized ? $t('git.restore') : $t('git.maximize')}
+					>
+						<Icon name={maximized ? 'collapse' : 'expand'} size={12} />
+					</button>
 
 					<button
 						bind:this={diffSettingsBtnEl}

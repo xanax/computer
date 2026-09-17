@@ -27,6 +27,7 @@
 		chatModels,
 		defaultModel,
 		setChatReadAt,
+		markChatUnread,
 		streamingChatTabs,
 		registerStreamingChat,
 		unregisterStreamingChat,
@@ -402,6 +403,14 @@
 	function markChatRead(id: string) {
 		setChatReadAt(id);
 		socketStore.getSocket()?.emit('chat:read', { chat_id: id });
+	}
+
+	function markChatAsUnread(id: string) {
+		// The server echo re-sorts and re-syncs the list.
+		previousChats = previousChats.map((chat) =>
+			chat.id === id ? { ...chat, last_read_at: 0 } : chat
+		);
+		markChatUnread(id);
 	}
 
 	async function loadChat(id: string) {
@@ -1828,6 +1837,7 @@
 					onopen={openChat}
 					ondelete={deleteChat}
 					onrename={renameChat}
+					onmarkunread={markChatAsUnread}
 					oncopy={workspace ? copyChatPath : undefined}
 					page={chatPage}
 					{totalPages}

@@ -75,6 +75,15 @@ export function setChatReadAt(chatId: string, lastReadAt = Date.now()) {
 	});
 }
 
+/**
+ * Mark a chat unread again so its unread indicator shows in chat lists,
+ * workspace badges, and tabs. The server echoes the change to every session.
+ */
+export function markChatUnread(chatId: string) {
+	setChatReadAt(chatId, 0);
+	socketStore.getSocket()?.emit('chat:unread', { chat_id: chatId });
+}
+
 export function isChatUnread(status: ChatStatus | undefined): boolean {
 	return (
 		!!status &&

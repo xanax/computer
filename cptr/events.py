@@ -31,6 +31,11 @@ class EventDefinitions:
         "The user explicitly marked a chat as read.",
         "Chat read",
     )
+    CHAT_UNREAD = EventDefinition(
+        "chat.unread",
+        "The user explicitly marked a chat as unread.",
+        "Chat unread",
+    )
     CHAT_USER_MESSAGE = EventDefinition(
         "chat.user_message",
         "A user message was added to a chat.",

@@ -8,7 +8,7 @@
 		activeTab,
 		currentWorkspace
 	} from '$lib/stores';
-	import { chatEnabled, updateChatStatuses } from '$lib/stores/chat';
+	import { chatEnabled, markChatUnread, updateChatStatuses } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import {
 		deleteChat as apiDeleteChat,
@@ -176,6 +176,13 @@
 			...wsChatsCache,
 			[wsPath, chats.map((item) => (item.id === chatId ? { ...item, title } : item))]
 		]);
+	}
+
+	function handleMarkChatUnread() {
+		if (!chatMenu) return;
+		closeChatMenu();
+		// The server echo refreshes this workspace's rows and ordering.
+		markChatUnread(chatMenu.chatId);
 	}
 
 	function copyChatPath() {
@@ -474,6 +481,11 @@
 				label: $t('files.rename'),
 				icon: 'pencil',
 				onclick: handleRenameChat
+			},
+			{
+				label: $t('chat.markUnread'),
+				icon: 'mail',
+				onclick: handleMarkChatUnread
 			},
 			{
 				label: $t('chat.history.delete'),

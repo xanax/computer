@@ -841,6 +841,7 @@
 	"chat.history.title": "제목",
 	"chat.history.updated": "수정됨",
 	"chat.history.delete": "삭제",
+	"chat.markUnread": "읽지 않음으로 표시",
 	"chat.edit.text": "텍스트",
 	"chat.edit.thought": "생각",
 	"chat.thinking": "생각 중",

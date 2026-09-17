@@ -841,6 +841,7 @@
 	"chat.history.title": "Título",
 	"chat.history.updated": "Atualizado",
 	"chat.history.delete": "Excluir",
+	"chat.markUnread": "Marcar como não lido",
 	"chat.edit.text": "Texto",
 	"chat.edit.thought": "Pensamento",
 	"chat.thinking": "Pensando",
