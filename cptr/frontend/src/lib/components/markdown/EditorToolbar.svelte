@@ -303,7 +303,9 @@
 	@media (max-width: 767px) {
 		.editor-toolbar {
 			position: fixed;
-			bottom: 0;
+			/* Lift the bar above the on-screen keyboard, which overlays the
+			   viewport instead of resizing it (see +layout.svelte). */
+			bottom: var(--keyboard-inset-bottom, 0);
 			left: 0;
 			right: 0;
 			z-index: 60;
