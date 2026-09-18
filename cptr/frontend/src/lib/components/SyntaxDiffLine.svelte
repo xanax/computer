@@ -189,6 +189,7 @@
 </script>
 
 <code
+	data-diff-type={type}
 	class="syntax-diff-line block px-2 {wrap
 		? 'whitespace-pre-wrap break-words'
 		: 'whitespace-pre'} {className}">{@html html}</code
@@ -229,5 +230,34 @@
 	:global(.dark) .syntax-diff-line :global(.inline-removed) {
 		background: rgba(248, 113, 113, 0.4);
 		box-shadow: inset 0 -0.125rem 0 rgba(252, 165, 165, 0.48);
+	}
+
+	/* Monochrome: Shiki's token colours are the last colour left in the diff,
+	   so the syntax palette collapses to ink. Added lines read as *bold* and
+	   removed lines as *strikethrough*; the exact changed run keeps a rule. */
+	:global(.mono) .syntax-diff-line :global(span) {
+		color: var(--app-fg) !important;
+	}
+
+	:global(.mono) .syntax-diff-line[data-diff-type='added'] {
+		font-weight: 700;
+	}
+
+	:global(.mono) .syntax-diff-line[data-diff-type='removed'] {
+		text-decoration: line-through;
+		text-decoration-thickness: 0.0625rem;
+	}
+
+	:global(.mono) .syntax-diff-line :global(.inline-added) {
+		box-shadow: inset 0 -0.125rem 0 var(--app-fg);
+		background: transparent;
+		font-weight: 700;
+	}
+
+	:global(.mono) .syntax-diff-line :global(.inline-removed) {
+		box-shadow: inset 0 -0.0625rem 0 var(--app-fg);
+		background: transparent;
+		text-decoration: line-through;
+		text-decoration-thickness: 0.0625rem;
 	}
 </style>

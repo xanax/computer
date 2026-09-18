@@ -162,6 +162,8 @@
 	"general.light": "ライト",
 	"general.dark": "ダーク",
 	"general.system": "システム",
+	"general.bw": "白黒",
+	"general.bwDark": "黒地に白",
 	"general.language": "言語",
 	"general.tools": "ツール",
 	"general.autoApproveTools": "すべてのツール呼び出しを自動承認",

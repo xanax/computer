@@ -162,6 +162,8 @@
 	"general.light": "Claro",
 	"general.dark": "Escuro",
 	"general.system": "Sistema",
+	"general.bw": "Preto e branco",
+	"general.bwDark": "Branco sobre preto",
 	"general.language": "Idioma",
 	"general.tools": "Ferramentas",
 	"general.autoApproveTools": "Aprovar automaticamente todas as chamadas de ferramentas",

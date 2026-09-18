@@ -1756,12 +1756,12 @@
 	{#if !isLanding}
 		<div
 			class="relative z-30 -mb-12 flex h-7 shrink-0 items-center gap-2 pl-3 pr-2 dark:border-white/6"
-			style="border-color: color-mix(in oklab, var(--app-fg) 8%, transparent);"
+			style="border-color: var(--app-border);"
 		>
 			<div
 				aria-hidden="true"
 				class="pointer-events-none absolute inset-0 -bottom-10 -z-10"
-				style="background: linear-gradient(to bottom, var(--app-bg), color-mix(in oklab, var(--app-bg) 95%, transparent) 40%, transparent 97%);"
+				style="background: var(--app-bar-scrim, linear-gradient(to bottom, var(--app-bg), color-mix(in oklab, var(--app-bg) 95%, transparent) 40%, transparent 97%));"
 			></div>
 			<div
 				class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-gray-600 dark:text-gray-400"

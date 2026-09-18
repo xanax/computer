@@ -175,6 +175,16 @@
 		box-shadow: inset 0.1875rem 0 0 #22c55e;
 	}
 
+	/* Monochrome: an added row is a solid ink bar and a removed row a dotted
+	   ink edge, so the two sides read as bold vs. lighter without a grey tone. */
+	:global(.mono) .diff-gutter-added {
+		box-shadow: inset 0.1875rem 0 0 var(--app-fg);
+	}
+
+	:global(.mono) .diff-gutter-removed {
+		background-image: radial-gradient(circle, var(--app-fg) 1px, transparent 1px);
+	}
+
 	:global(.dark) .diff-gutter-added {
 		box-shadow: inset 0.1875rem 0 0 #4ade80;
 	}

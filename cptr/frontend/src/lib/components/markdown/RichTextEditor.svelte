@@ -431,6 +431,13 @@
 		background: rgba(255, 213, 79, 0.2);
 	}
 
+	/* Monochrome: a highlight is a solid inversion (ink bar, paper text),
+	   enforced globally in app.css; this only supplies the ink background. */
+	:global(.mono) .rte-container :global(.rte-prosemirror mark) {
+		background: var(--app-fg);
+		color: var(--app-bg);
+	}
+
 	/* ── Selection ──────────────────────────────────── */
 
 	.rte-container :global(.rte-prosemirror ::selection) {

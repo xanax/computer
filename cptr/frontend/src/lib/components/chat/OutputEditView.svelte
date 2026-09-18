@@ -24,9 +24,17 @@
 	let cmEditor: EditorView | null = null;
 	let editorTheme = new Compartment();
 
+	// Monochrome has no colours to spend on syntax, so the editor only needs to
+	// agree with the palette it sits in.
+	const monoEditorChrome = EditorView.theme({
+		'&': { backgroundColor: 'var(--app-bg)', color: 'var(--app-fg)' },
+		'.cm-gutters': { backgroundColor: 'var(--app-bg)', color: 'var(--app-fg)', border: 'none' }
+	});
+
 	function initCodeMirror() {
 		if (cmEditor || !cmContainer) return;
 		const isDark = document.documentElement.classList.contains('dark');
+		const isMono = document.documentElement.classList.contains('mono');
 		cmEditor = new EditorView({
 			state: EditorState.create({
 				doc: JSON.stringify(output, null, 2),
@@ -35,7 +43,7 @@
 					keymap.of([indentWithTab]),
 					indentUnit.of('  '),
 					json(),
-					editorTheme.of(isDark ? oneDark : []),
+					editorTheme.of(isMono ? monoEditorChrome : isDark ? oneDark : []),
 					EditorView.theme({
 						'&': { fontSize: '0.8125rem' },
 						'.cm-content': { fontFamily: 'ui-monospace, monospace' },

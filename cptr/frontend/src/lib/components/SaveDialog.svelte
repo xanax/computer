@@ -240,11 +240,11 @@
 
 <style>
 	.directory-row {
-		color: color-mix(in oklab, var(--app-fg) 62%, var(--app-bg));
+		color: var(--app-fg-muted);
 	}
 
 	.directory-row:hover {
-		background: color-mix(in oklab, var(--app-fg) 7%, transparent);
+		background: var(--app-active);
 		color: var(--app-fg);
 	}
 </style>

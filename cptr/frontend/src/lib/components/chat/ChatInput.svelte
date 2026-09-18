@@ -1725,7 +1725,7 @@
 	.chat-editor-mount :global(.chat-prosemirror p.is-editor-empty:first-child::before) {
 		content: attr(data-placeholder);
 		@apply float-left pointer-events-none h-0;
-		color: color-mix(in oklab, var(--app-fg) 48%, var(--app-bg));
+		color: var(--app-fg-subtle);
 	}
 
 	/* Paragraphs */
@@ -1757,13 +1757,13 @@
 	/* Inline code */
 	.chat-editor-mount :global(.chat-prosemirror code) {
 		@apply rounded-sm px-1 py-px text-xs font-mono;
-		background: color-mix(in oklab, var(--app-fg) 7%, transparent);
+		background: var(--app-active);
 	}
 
 	/* Code blocks */
 	.chat-editor-mount :global(.chat-prosemirror pre) {
 		@apply rounded-md px-3 py-2 overflow-x-auto my-1 text-xs font-mono;
-		background: color-mix(in oklab, var(--app-fg) 5%, transparent);
+		background: var(--app-hover);
 	}
 	.chat-editor-mount :global(.chat-prosemirror pre code) {
 		@apply bg-transparent p-0 rounded-none text-inherit;
@@ -1773,7 +1773,7 @@
 	.chat-editor-mount :global(.chat-prosemirror blockquote) {
 		@apply my-1 py-0.5 pl-3 border-l-2;
 		border-color: color-mix(in oklab, var(--app-fg) 18%, transparent);
-		color: color-mix(in oklab, var(--app-fg) 62%, var(--app-bg));
+		color: var(--app-fg-muted);
 	}
 
 	/* Strong */

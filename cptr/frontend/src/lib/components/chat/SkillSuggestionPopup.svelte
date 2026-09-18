@@ -67,11 +67,11 @@
 
 <style>
 	.suggestion-row {
-		color: color-mix(in oklab, var(--app-fg) 62%, var(--app-bg));
+		color: var(--app-fg-muted);
 	}
 
 	.suggestion-row:hover {
-		background: color-mix(in oklab, var(--app-fg) 6%, transparent);
+		background: var(--app-hover);
 		color: var(--app-fg);
 	}
 </style>

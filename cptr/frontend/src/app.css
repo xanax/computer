@@ -33,8 +33,15 @@
 	--app-divider: color-mix(in oklab, var(--app-fg) 0.875%, transparent);
 	--app-hover: color-mix(in oklab, var(--app-fg) 6%, transparent);
 	--app-active: color-mix(in oklab, var(--app-fg) 7%, transparent);
+	/* Opaque stand-in for a tint inside a checkerboard or a gradient. */
+	--app-checker: var(--app-hover);
+	/* Opaque stand-in for a translucent modal scrim / loading veil. */
+	--app-scrim: color-mix(in oklab, var(--app-bg) 92%, var(--app-fg));
 	--app-ui-font: var(--font-sans);
 }
+
+/* The monochrome (e-ink) themes live in one block at the end of this file so
+   that they win cascade ties against the --app-* remaps above. */
 
 @layer base {
 	*,
@@ -360,4 +367,653 @@
 	background: var(--app-bg);
 	color: var(--app-fg);
 	border-color: var(--app-border);
+}
+
+/* ── Monochrome (e-ink) themes ───────────────────────────────────
+   `bw`       black on white
+   `bw-dark`  white on black
+
+   Each palette keeps pure ink/paper for foreground and background with no
+   mid-tones. Hover, active and selected surfaces are a solid inversion (ink
+   surface, paper text); code/diagram surfaces stay paper with an ink border.
+
+     * Tailwind's *hue* utilities (sky, red, emerald, ...) would still paint
+       colour, so the ones in the source are neutralised by the generated block
+       at the very end of this file. Regenerate it with
+       `python3 scripts/generate-mono-css.py` after using a new colour utility.
+       The grey families collapse to ink and paper instead (see the ramp below).
+
+   This block sits last on purpose: it should win cascade ties against the
+   --app-* remaps above. */
+
+.mono {
+	/* The grey ramp collapses to the two palette colours: 50–200 are paper
+	   (used as faint washes) and 300–950 are ink (text and structure). */
+	--color-gray-50: var(--app-bg);
+	--color-gray-100: var(--app-bg);
+	--color-gray-200: var(--app-bg);
+	--color-gray-300: var(--app-fg);
+	--color-gray-400: var(--app-fg);
+	--color-gray-500: var(--app-fg);
+	--color-gray-600: var(--app-fg);
+	--color-gray-700: var(--app-fg);
+	--color-gray-800: var(--app-fg);
+	--color-gray-850: var(--app-fg);
+	--color-gray-900: var(--app-fg);
+	--color-gray-950: var(--app-fg);
+
+	/* Native form controls and the I-beam follow the palette. */
+	accent-color: var(--app-fg);
+	caret-color: var(--app-fg);
+
+	/* `scrollbar-color` beats the ::-webkit-scrollbar rules below and inherits,
+	   so one declaration covers every scroller in the app. A solid ink thumb is
+	   the most legible target on an e-ink panel. */
+	scrollbar-color: var(--app-fg) transparent;
+}
+
+/* Text selection is a solid inversion rather than the browser's blue wash.
+   `!important` because the rich-text editor paints its own ::selection. */
+.mono ::selection {
+	background-color: var(--app-fg) !important;
+	color: var(--app-bg) !important;
+}
+
+/* Outside the --app-* remap: the 32%-opacity scrollbar thumb, and the rules in
+   chat prose. */
+.mono ::-webkit-scrollbar-thumb {
+	background-color: var(--app-fg);
+}
+
+/* ── Palettes that are defined outside this app ───────────────────────────
+   Tailwind Typography, Shiki, highlight.js, CodeMirror and xterm all ship
+   their own colours: some as literals in classes we cannot rewrite, some as
+   inline custom properties. None of them can see --app-*.
+
+   Where a rule here has to beat a scoped component style or an inline custom
+   property, it says `!important`; everywhere else the extra class drop is
+   enough, since these overrides are unlayered and Tailwind's utilities are
+   not. */
+
+/* Typography bakes oklch literals into --tw-prose-* for the chat transcript and
+   task descriptions. Point the whole ramp at the foreground: emphasis keeps
+   coming from weight, italics and rules, none of which are colour. */
+.mono :where(.prose) {
+	--tw-prose-body: var(--app-fg);
+	--tw-prose-headings: var(--app-fg);
+	--tw-prose-lead: var(--app-fg);
+	--tw-prose-links: var(--app-fg);
+	--tw-prose-bold: var(--app-fg);
+	--tw-prose-counters: var(--app-fg);
+	--tw-prose-bullets: var(--app-fg);
+	--tw-prose-hr: var(--app-fg);
+	--tw-prose-quotes: var(--app-fg);
+	--tw-prose-quote-borders: var(--app-fg);
+	--tw-prose-captions: var(--app-fg);
+	--tw-prose-code: var(--app-fg);
+	--tw-prose-pre-code: var(--app-fg);
+	--tw-prose-pre-bg: var(--app-bg);
+	--tw-prose-th-borders: var(--app-fg);
+	--tw-prose-td-borders: var(--app-fg);
+	--tw-prose-kbd: var(--app-fg);
+	--tw-prose-kbd-shadows: none;
+	--tw-prose-invert-body: var(--app-fg);
+	--tw-prose-invert-headings: var(--app-fg);
+	--tw-prose-invert-lead: var(--app-fg);
+	--tw-prose-invert-links: var(--app-fg);
+	--tw-prose-invert-bold: var(--app-fg);
+	--tw-prose-invert-counters: var(--app-fg);
+	--tw-prose-invert-bullets: var(--app-fg);
+	--tw-prose-invert-hr: var(--app-fg);
+	--tw-prose-invert-quotes: var(--app-fg);
+	--tw-prose-invert-quote-borders: var(--app-fg);
+	--tw-prose-invert-captions: var(--app-fg);
+	--tw-prose-invert-code: var(--app-fg);
+	--tw-prose-invert-pre-code: var(--app-fg);
+	--tw-prose-invert-pre-bg: var(--app-bg);
+	--tw-prose-invert-th-borders: var(--app-fg);
+	--tw-prose-invert-td-borders: var(--app-fg);
+	--tw-prose-invert-kbd: var(--app-fg);
+	--tw-prose-invert-kbd-shadows: none;
+}
+
+/* Shiki hands each token its colour as an inline custom property, so this is
+   the one place a stylesheet has to shout. Weight and italics are untouched. */
+.mono :where(pre) :where(span) {
+	--shiki-light: var(--app-fg) !important;
+	--shiki-dark: var(--app-fg) !important;
+}
+
+/* highlight.js token palette (chat input, rich-text editor). */
+.mono :where(
+		.hljs-attr,
+		.hljs-attribute,
+		.hljs-built_in,
+		.hljs-bullet,
+		.hljs-code,
+		.hljs-comment,
+		.hljs-doctag,
+		.hljs-emphasis,
+		.hljs-formula,
+		.hljs-keyword,
+		.hljs-literal,
+		.hljs-meta,
+		.hljs-name,
+		.hljs-number,
+		.hljs-params,
+		.hljs-property,
+		.hljs-quote,
+		.hljs-regexp,
+		.hljs-section,
+		.hljs-selector-attr,
+		.hljs-selector-class,
+		.hljs-selector-id,
+		.hljs-selector-pseudo,
+		.hljs-selector-tag,
+		.hljs-string,
+		.hljs-strong,
+		.hljs-symbol,
+		.hljs-tag,
+		.hljs-template-tag,
+		.hljs-template-variable,
+		.hljs-title,
+		.hljs-type,
+		.hljs-variable
+	) {
+	color: var(--app-fg) !important;
+}
+
+/* CodeMirror paints syntax with one-off obfuscated classes, and its base theme
+   brings a lavender selection, a black cursor and grey popups along. */
+.mono .cm-content :where(span) {
+	color: var(--app-fg) !important;
+}
+.mono .cm-selectionBackground,
+.mono .cm-content ::selection {
+	background-color: var(--app-fg) !important;
+	background-image: none !important;
+}
+.mono :where(.cm-cursor, .cm-dropCursor) {
+	border-left-color: var(--app-fg) !important;
+}
+.mono :where(.cm-activeLine, .cm-activeLineGutter) {
+	background: var(--app-fg) !important;
+}
+.mono :where(.cm-activeLine) :where(span),
+.mono :where(.cm-activeLineGutter) {
+	color: var(--app-bg) !important;
+}
+.mono :where(.cm-tooltip, .cm-panels) {
+	background: var(--app-bg) !important;
+	color: var(--app-fg) !important;
+	border-color: var(--app-border) !important;
+}
+.mono :where(.cm-tooltip-autocomplete) :where(li[aria-selected]) {
+	background: var(--app-fg) !important;
+	color: var(--app-bg) !important;
+}
+.mono :where(.cm-searchMatch, .cm-selectionMatch, .cm-matchingBracket) {
+	background: transparent !important;
+	box-shadow: inset 0 0 0 1px var(--app-fg);
+}
+
+/* Translucent rules are grey lines on either palette, in or out of .app-theme. */
+.mono :where([class*='border-white/'], [class*='border-black/']) {
+	border-color: var(--app-fg);
+}
+.mono :where([class*='divide-white/'], [class*='divide-black/']) > :not(:last-child) {
+	border-color: var(--app-fg);
+}
+
+/* The rich-text highlighter is a solid inversion: ink bar, paper text. */
+.mono :where(mark) {
+	background: var(--app-fg) !important;
+	color: var(--app-bg) !important;
+}
+
+/* xterm injects a scrollbar sheet whose slider is the terminal foreground at
+   20/40/50% opacity: three greys. */
+.mono .xterm .xterm-scrollable-element > .scrollbar > .slider,
+.mono .xterm .xterm-scrollable-element > .scrollbar > .slider:hover,
+.mono .xterm .xterm-scrollable-element > .scrollbar > .slider.active {
+	background: var(--app-fg) !important;
+}
+.mono .chat-prosemirror blockquote,
+.mono .chat-prosemirror hr {
+	border-color: var(--app-fg) !important;
+}
+
+/* Elevation shadows, glows and backdrop blurs all resolve to a grey smear on
+   e-ink. Drop them, and give keyboard focus a crisp ring instead of the
+   box-shadow one. */
+.mono :where([class*='shadow-'], [class*='backdrop-blur']) {
+	box-shadow: none !important;
+	backdrop-filter: none !important;
+	-webkit-backdrop-filter: none !important;
+}
+.mono .tippy-box {
+	box-shadow: none !important;
+}
+.mono *:focus-visible {
+	outline: 2px solid var(--app-fg);
+	outline-offset: 2px;
+}
+
+/* Partial opacity is ordinary grey coverage, so "de-emphasis" has to come from
+   the palette rather than from dimming. */
+.mono :where(
+		[class*='opacity-3'],
+		[class*='opacity-4'],
+		[class*='opacity-5'],
+		[class*='opacity-6'],
+		[class*='opacity-7'],
+		[class*='opacity-8'],
+		[class*='opacity-9']
+	) {
+	opacity: 1;
+}
+
+/* Translucent veils composite into a grey wash on either palette. */
+.mono :where([class*='bg-white/'], [class*='bg-black/']) {
+	background-color: transparent;
+}
+
+/* A scrim is a veil: solid ink dims the page behind a dialog while staying
+   strictly monochrome (a full inversion, no mid-tone). */
+.mono :where(
+		[class~='bg-black/45'],
+		[class~='bg-black/50'],
+		[class~='bg-black/60'],
+		[class~='bg-black/70'],
+		[class~='bg-black/80'],
+		[class~='bg-black/90'],
+		[class~='bg-white/70'],
+		[class~='bg-white/75'],
+		[class~='bg-white/80'],
+		[class~='bg-white/90']
+	) {
+	background: var(--app-scrim);
+}
+
+/* Hard-coded white/black utilities flip to whichever palette colour keeps the
+   `bg-black text-white` pairs legible in both monochrome themes. */
+.mono :where([class~='bg-white']) {
+	background-color: var(--app-bg);
+}
+.mono :where([class~='bg-black']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='text-white']) {
+	color: var(--app-bg);
+}
+.mono :where([class~='text-black']) {
+	color: var(--app-fg);
+}
+
+/* Interactive state is a solid inversion. `--app-hover` / `--app-active` are
+   pure ink, so every surface that paints them also needs its text flipped to
+   paper. These selectors mirror the component-scoped hover/active rules. */
+.mono :where(
+		.app-interactive:hover,
+		.app-interactive-active,
+		.menu-row:hover,
+		.directory-row:hover,
+		.suggestion-row:hover,
+		.schedule-trigger:hover,
+		.tb-btn:hover,
+		.tb-btn.active,
+		.zoom-btn:hover,
+		.zoom-level:hover,
+		.page-btn:hover:not(:disabled),
+		.pagination-btn:hover:not(:disabled):not(.active),
+		.pagination-btn.active,
+		.resize-handle:hover,
+		.resize-handle.active,
+		.git-resize-handle:hover,
+		.git-resize-handle.active
+	) {
+	background: var(--app-fg) !important;
+	color: var(--app-bg) !important;
+}
+/* Descendants of an inverted surface must flip to paper text, otherwise the
+   collapsed grey ramp (`text-gray-*`) and the prose palette would paint ink
+   on an ink background. Media elements are left alone. */
+.mono
+	:where(
+		.app-interactive:hover,
+		.app-interactive-active,
+		.menu-row:hover,
+		.directory-row:hover,
+		.suggestion-row:hover,
+		.schedule-trigger:hover,
+		.tb-btn:hover,
+		.tb-btn.active,
+		.zoom-btn:hover,
+		.zoom-level:hover,
+		.page-btn:hover:not(:disabled),
+		.pagination-btn:hover:not(:disabled):not(.active),
+		.pagination-btn.active,
+		.resize-handle:hover,
+		.resize-handle.active,
+		.git-resize-handle:hover,
+		.git-resize-handle.active
+	)
+	:not(img, video, canvas, iframe) {
+	color: var(--app-bg) !important;
+}
+
+/* Tailwind's `hover:bg-*` washes collapse to paper (invisible) in mono, so the
+   hover highlight is lost entirely. Invert them instead: any hoverable surface
+   becomes a solid ink bar with paper text (media descendants excluded). */
+.mono :where([class*='hover:bg-']):hover {
+	background-color: var(--app-fg) !important;
+	color: var(--app-bg) !important;
+}
+.mono :where([class*='hover:bg-']):hover :not(img, video, canvas, iframe) {
+	color: var(--app-bg) !important;
+}
+
+/* Table headers, spreadsheet row-number gutters and keycaps are structural
+   fills, not hover washes: render them as inverted bars too. */
+.mono :where(
+		th,
+		.xlsx-content .rn,
+		.key-pill,
+		.key,
+		.recording-indicator,
+		.highlight-icon
+	) {
+	background: var(--app-fg) !important;
+	color: var(--app-bg) !important;
+}
+.mono :where(tbody tr:hover td) {
+	background: var(--app-fg) !important;
+	color: var(--app-bg) !important;
+}
+.mono :where(tbody tr:hover td) :not(img, video, canvas, iframe) {
+	color: var(--app-bg) !important;
+}
+
+/* Code and diagram surfaces are content, not chrome: a solid ink backdrop would
+   hide them, so they keep paper with a crisp ink border where useful. */
+.mono :where(.codespan),
+.mono :where(.rte-prosemirror code, .chat-prosemirror code) {
+	background: transparent !important;
+	color: var(--app-fg) !important;
+}
+.mono :where(.rte-prosemirror pre, .chat-prosemirror pre, .mermaid-container, .mermaid-source) {
+	background: transparent !important;
+}
+.mono :where(.rte-prosemirror pre, .chat-prosemirror pre, .mermaid-container) {
+	border: 1px solid var(--app-fg);
+}
+
+/* @mono:begin */
+/* Coloured --tw-ring-color reads as monochrome. */
+.mono :where(
+	[class*='ring-blue-500']
+) {
+	--tw-ring-color: var(--app-fg);
+}
+
+/* Coloured border-color reads as monochrome. */
+.mono :where(
+	[class*='border-blue-400'],
+	[class*='border-blue-500']
+) {
+	border-color: var(--app-fg);
+}
+
+/* Coloured color reads as monochrome. */
+.mono :where(
+	[class*='text-amber-400'],
+	[class*='text-amber-500'],
+	[class*='text-amber-600'],
+	[class*='text-blue-400'],
+	[class*='text-blue-500'],
+	[class*='text-blue-600'],
+	[class*='text-emerald-300/85'],
+	[class*='text-emerald-400'],
+	[class*='text-emerald-500'],
+	[class*='text-emerald-600'],
+	[class*='text-emerald-600/85'],
+	[class*='text-emerald-700/85'],
+	[class*='text-green-300'],
+	[class*='text-green-400'],
+	[class*='text-green-500'],
+	[class*='text-green-600'],
+	[class*='text-green-700'],
+	[class*='text-green-900'],
+	[class*='text-orange-300/90'],
+	[class*='text-orange-500'],
+	[class*='text-orange-500/90'],
+	[class*='text-orange-600/90'],
+	[class*='text-purple-400'],
+	[class*='text-purple-500'],
+	[class*='text-red-300'],
+	[class*='text-red-400'],
+	[class*='text-red-500'],
+	[class*='text-red-600'],
+	[class*='text-red-700'],
+	[class*='text-red-900'],
+	[class*='text-rose-300'],
+	[class*='text-rose-300/85'],
+	[class*='text-rose-500'],
+	[class*='text-rose-500/85'],
+	[class*='text-rose-600/85'],
+	[class*='text-sky-300'],
+	[class*='text-sky-300/80'],
+	[class*='text-sky-300/85'],
+	[class*='text-sky-500/80'],
+	[class*='text-sky-500/85'],
+	[class*='text-sky-600'],
+	[class*='text-sky-600/80'],
+	[class*='text-sky-600/85'],
+	[class*='text-violet-300/80'],
+	[class*='text-violet-500/80'],
+	[class*='text-violet-600/80'],
+	[class*='text-yellow-400'],
+	[class*='text-yellow-600']
+) {
+	color: var(--app-fg);
+}
+
+/* Washes behind text collapse so the glyphs they label stay legible. */
+.mono :where(
+	[class*='bg-blue-100'],
+	[class*='bg-blue-400/10'],
+	[class*='bg-blue-50'],
+	[class*='bg-blue-50/60'],
+	[class*='bg-blue-500/10'],
+	[class*='bg-blue-500/20'],
+	[class*='bg-blue-500/5'],
+	[class*='bg-blue-500/8'],
+	[class*='bg-cyan-100'],
+	[class*='bg-green-100'],
+	[class*='bg-green-50'],
+	[class*='bg-green-50/80'],
+	[class*='bg-green-500/10'],
+	[class*='bg-green-500/15'],
+	[class*='bg-green-600/10'],
+	[class*='bg-green-950/20'],
+	[class*='bg-orange-100'],
+	[class*='bg-purple-100'],
+	[class*='bg-purple-500/10'],
+	[class*='bg-red-100'],
+	[class*='bg-red-50'],
+	[class*='bg-red-50/80'],
+	[class*='bg-red-500/10'],
+	[class*='bg-red-500/15'],
+	[class*='bg-red-600/10'],
+	[class*='bg-red-950/20'],
+	[class*='bg-rose-100'],
+	[class*='bg-rose-50'],
+	[class*='bg-rose-500/10'],
+	[class*='bg-sky-400/10'],
+	[class*='bg-sky-500/10'],
+	[class*='bg-yellow-100'],
+	[class*='bg-yellow-500/10']
+) {
+	background-color: transparent;
+}
+
+/* Filled accents (status dots, badges, filled buttons) stay visible.
+   The whole utility is matched, so `hover:`/`focus:` stay states. */
+.mono :where([class~='bg-amber-400']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-blue-300']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-blue-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-blue-700']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-cyan-300']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-cyan-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-cyan-700']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-emerald-400']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-emerald-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-emerald-500/70']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-green-300']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-green-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-green-700']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-neutral-200']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-neutral-400']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-neutral-600']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-neutral-800']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-orange-300']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-orange-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-orange-500/75']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-orange-700']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-purple-300']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-purple-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-purple-700']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-red-300']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-red-400']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-red-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-red-700']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-rose-300']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-rose-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-rose-500/70']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-rose-700']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-sky-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-sky-500/65']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-sky-500/70']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-violet-500/65']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-yellow-300']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-yellow-500']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='bg-yellow-700']) {
+	background-color: var(--app-fg);
+}
+.mono :where([class~='hover:bg-blue-600']:hover) {
+	background-color: var(--app-fg);
+}
+
+/* @mono:end */
+
+/* ── Monochrome: utilities whose *meaning* doesn't survive the ramp ────────
+   The grey ramp collapses to ink/paper above, so most neutral utilities are
+   already monochrome. What remains are the cases where a utility's meaning
+   would otherwise be lost: the inverted `white`/`black` pair, the faint
+   `bg-gray-200/` wash (dropped entirely), and grey borders/rings/accents. */
+
+/* `white` and `black` are the two palette colours themselves, which is exactly
+   what an inverted surface wants: `text-white` sits on ink, `bg-white` is a
+   canvas. */
+.mono {
+	--color-white: var(--app-bg);
+	--color-black: var(--app-fg);
+}
+
+/* The faint grey wash disappears on e-ink: a wash has no monochrome equivalent,
+   so it becomes paper (transparent) rather than a mid-tone. */
+.mono :where([class*='bg-gray-200/']) {
+	background: transparent;
+}
+
+/* Grey borders resolve to solid ink. */
+.mono :where([class*='border-gray-']),
+.mono :where([class*='divide-gray-']) > :not(:last-child) {
+	border-color: var(--app-fg);
+}
+
+/* Focus rings are single-colour by definition here. */
+.mono :where([class*='ring-gray-'], [class*='ring-white/'], [class*='ring-black/']) {
+	--tw-ring-color: var(--app-fg);
+}
+
+/* Form controls too (`accent-gray-*` on checkboxes and radios). */
+.mono :where([class*='accent-gray-']) {
+	accent-color: var(--app-fg);
 }

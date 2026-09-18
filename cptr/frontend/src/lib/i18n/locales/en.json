@@ -203,6 +203,8 @@
 	"general.light": "Light",
 	"general.dark": "Dark",
 	"general.system": "System",
+	"general.bw": "Black & White",
+	"general.bwDark": "White on Black",
 	"general.language": "Language",
 	"general.tools": "Tools",
 	"general.autoApproveTools": "Auto-approve all tool calls",

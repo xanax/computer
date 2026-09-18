@@ -162,6 +162,8 @@
 	"general.light": "Светлая",
 	"general.dark": "Тёмная",
 	"general.system": "Системная",
+	"general.bw": "Чёрно-белый",
+	"general.bwDark": "Белый на чёрном",
 	"general.language": "Язык",
 	"general.tools": "Инструменты",
 	"general.autoApproveTools": "Автоматически одобрять все вызовы инструментов",

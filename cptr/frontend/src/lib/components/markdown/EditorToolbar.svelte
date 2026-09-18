@@ -299,6 +299,12 @@
 		font-size: 0.6875rem;
 	}
 
+	/* Monochrome: the highlight swatch is a solid inversion. */
+	:global(.mono) .highlight-icon {
+		background: var(--app-fg);
+		color: var(--app-bg);
+	}
+
 	/* ── Mobile: pin to bottom above keyboard ────── */
 	@media (max-width: 767px) {
 		.editor-toolbar {

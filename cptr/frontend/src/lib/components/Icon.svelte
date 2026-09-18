@@ -155,6 +155,9 @@
 		<path d="M12 16V8" />
 		<path d="M16 16V10" />
 		<path d="M20 16V6" />
+	{:else if name === 'contrast'}
+		<path d="M12 3a9 9 0 1 0 0 18V3Z" fill="currentColor" stroke="none" />
+		<circle cx="12" cy="12" r="9" />
 	{:else if name === 'half-moon'}
 		<path
 			d="M3 11.5066C3 16.7497 7.25034 21 12.4934 21C16.2209 21 19.4466 18.8518 21 15.7259C12.4934 15.7259 8.27411 11.5066 8.27411 3C5.14821 4.55344 3 7.77915 3 11.5066Z"

@@ -23,6 +23,7 @@
 		normalizeHexColor,
 		normalizeTerminalFontSize,
 		deriveMutedTextColor,
+		isMonoResolved,
 		resolveThemeMode,
 		resolveThemeConfig,
 		sanitizeThemeConfig
@@ -84,6 +85,8 @@
 	}
 
 	function updateThemeColors(next: { background?: string; foreground?: string; muted?: string }) {
+		// The monochrome palettes are fixed: there is nothing to configure.
+		if (isMonoResolved(resolvedTheme)) return;
 		const current = $themeConfig ?? {};
 		themeConfig.set(
 			sanitizeThemeConfig({
@@ -264,7 +267,9 @@
 			if (!source || typeof source !== 'object') throw new Error('invalid theme');
 			validateImportedColors(source);
 			const importedConfig = sanitizeThemeConfig(source);
-			const importedTheme = ['system', 'light', 'dark'].includes(parsed?.theme)
+			const importedTheme = ['system', 'light', 'dark', 'bw', 'bw-dark'].includes(
+				parsed?.theme
+			)
 				? (parsed.theme as Theme)
 				: null;
 			const importedScale =
@@ -343,8 +348,8 @@
 		</div>
 
 		<h3 class="text-xs text-gray-400 dark:text-gray-600 mb-2">{$t('general.theme')}</h3>
-		<div class="flex gap-1">
-			{#each [{ value: 'light' as Theme, label: $t('general.light'), icon: 'sun-light' }, { value: 'dark' as Theme, label: $t('general.dark'), icon: 'half-moon' }, { value: 'system' as Theme, label: $t('general.system'), icon: 'monitor' }] as opt}
+		<div class="flex flex-wrap gap-1">
+			{#each [{ value: 'light' as Theme, label: $t('general.light'), icon: 'sun-light' }, { value: 'dark' as Theme, label: $t('general.dark'), icon: 'half-moon' }, { value: 'bw' as Theme, label: $t('general.bw'), icon: 'contrast' }, { value: 'bw-dark' as Theme, label: $t('general.bwDark'), icon: 'contrast', iconClass: 'rotate-180' }, { value: 'system' as Theme, label: $t('general.system'), icon: 'monitor' }] as opt}
 				<button
 					class="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-xs transition-colors duration-100
 					{$theme === opt.value
@@ -352,7 +357,7 @@
 						: 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}"
 					onclick={() => setTheme(opt.value)}
 				>
-					<Icon name={opt.icon} size={13} />
+					<Icon name={opt.icon} size={13} class={opt.iconClass ?? ''} />
 					{opt.label}
 				</button>
 			{/each}

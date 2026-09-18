@@ -171,7 +171,7 @@
 			></pre>
 	{:else}
 		<pre
-			class="!m-0 !pb-3 !px-4 overflow-x-auto text-[0.8125rem] leading-normal !bg-transparent text-[#24292e] dark:text-[#e1e4e8] font-mono"><code
+			class="!m-0 !pb-3 !px-4 overflow-x-auto text-[0.8125rem] leading-normal !bg-transparent text-gray-800 dark:text-gray-200 font-mono"><code
 				class="font-[inherit]"
 				bind:this={codeEl}>{code}</code
 			></pre>
@@ -223,5 +223,14 @@
 
 	:global(.dark) .diff-line.diff-range {
 		color: #a78bfa;
+	}
+
+	/* Monochrome: the +/- each line already carries is the signal, and a diff
+	   row is a surface rather than an accent. */
+	:global(.mono) .diff-line.diff-add,
+	:global(.mono) .diff-line.diff-del,
+	:global(.mono) .diff-line.diff-range {
+		background: none;
+		color: var(--app-fg);
 	}
 </style>

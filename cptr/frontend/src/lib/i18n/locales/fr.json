@@ -162,6 +162,8 @@
 	"general.light": "Clair",
 	"general.dark": "Sombre",
 	"general.system": "Système",
+	"general.bw": "Noir et blanc",
+	"general.bwDark": "Blanc sur noir",
 	"general.language": "Langue",
 	"general.tools": "Outils",
 	"general.autoApproveTools": "Approuver automatiquement tous les appels d’outils",

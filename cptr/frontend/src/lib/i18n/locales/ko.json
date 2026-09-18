@@ -162,6 +162,8 @@
 	"general.light": "라이트",
 	"general.dark": "다크",
 	"general.system": "시스템",
+	"general.bw": "흑백",
+	"general.bwDark": "반전 흑백",
 	"general.language": "언어",
 	"general.tools": "도구",
 	"general.autoApproveTools": "모든 도구 호출 자동 승인",

@@ -173,16 +173,61 @@
 		return `rgba(${parseInt(hex.slice(0, 2), 16)}, ${parseInt(hex.slice(2, 4), 16)}, ${parseInt(hex.slice(4, 6), 16)}, ${alpha})`;
 	}
 
+	/**
+	 * True while a monochrome (e-ink) palette is active. Those themes are
+	 * strictly two-tone, so the terminal has to drop its colour palette, its
+	 * translucent (i.e. grey) selection highlight and its blinking cursor.
+	 */
+	function isMonoMode() {
+		return document.documentElement.classList.contains('mono');
+	}
+
 	function terminalTheme() {
 		const background = themeColor('--app-bg');
 		const foreground = themeColor('--app-fg');
-		return {
+		const base = {
 			background,
 			foreground,
 			cursor: foreground,
 			cursorAccent: background,
 			selectionBackground: withAlpha(foreground, 0.2)
 		};
+		if (!isMonoMode()) return base;
+
+		// Every ANSI slot collapses onto the foreground colour, and selection is
+		// a solid inversion instead of a grey veil. `selectionForeground` is what
+		// keeps the selected text readable on an opaque selection.
+		const ansi: Record<string, string> = {
+			selectionBackground: foreground,
+			selectionForeground: background,
+			selectionInactiveBackground: foreground,
+			// xterm derives its scrollbar thumb from the foreground at 20% alpha,
+			// and a translucent ink is a grey: mono pins it to solid ink.
+			scrollbarSliderBackground: foreground,
+			scrollbarSliderHoverBackground: foreground,
+			scrollbarSliderActiveBackground: foreground
+		};
+		for (const name of [
+			'black',
+			'red',
+			'green',
+			'yellow',
+			'blue',
+			'magenta',
+			'cyan',
+			'white',
+			'brightBlack',
+			'brightRed',
+			'brightGreen',
+			'brightYellow',
+			'brightBlue',
+			'brightMagenta',
+			'brightCyan',
+			'brightWhite'
+		]) {
+			ansi[name] = foreground;
+		}
+		return { ...base, ...ansi };
 	}
 
 	// Send input to PTY via WebSocket (binary prefix protocol).
@@ -273,7 +318,7 @@
 			normalizeTerminalFontSize(get(terminalFontSize)) ?? DEFAULT_TERMINAL_FONT_SIZE;
 
 		term = new Terminal({
-			cursorBlink: true,
+			cursorBlink: !isMonoMode(),
 			cursorStyle: 'bar',
 			fontFamily: '"JetBrains Mono", "Fira Code", ui-monospace, monospace',
 			fontSize: appliedFontSize,
@@ -288,6 +333,8 @@
 		themeObserver = new MutationObserver(() => {
 			if (term) {
 				term.options.theme = terminalTheme();
+				// A blinking cursor is a full-frame refresh on e-ink.
+				term.options.cursorBlink = !isMonoMode();
 			}
 		});
 		themeObserver.observe(document.documentElement, {

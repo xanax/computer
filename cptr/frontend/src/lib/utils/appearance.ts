@@ -1,6 +1,28 @@
 import { setTextScale } from '$lib/utils/text-scale';
 
-export type Theme = 'dark' | 'light' | 'system';
+export type Theme = 'dark' | 'light' | 'system' | 'bw' | 'bw-dark';
+
+/**
+ * Monochrome (e-ink) themes. Each is a fixed ink/paper palette — `bw` is
+ * black-on-white, `bw-dark` is white-on-black — with no grey tones at all:
+ * text, borders and dividers resolve to solid ink, and interactive state is
+ * a solid inversion (ink surface, paper text). Coloured accents are still
+ * neutralised in CSS.
+ */
+export type MonoTheme = 'bw' | 'bw-dark';
+
+export const MONO_PALETTES: Record<MonoTheme, { background: string; foreground: string }> = {
+	bw: { background: '#ffffff', foreground: '#000000' },
+	'bw-dark': { background: '#000000', foreground: '#ffffff' }
+};
+
+export function isMonoTheme(theme: Theme): theme is MonoTheme {
+	return theme === 'bw' || theme === 'bw-dark';
+}
+
+export function isMonoResolved(resolved: string): resolved is MonoTheme {
+	return resolved === 'bw' || resolved === 'bw-dark';
+}
 
 export type ThemeColors = {
 	background?: string;
@@ -32,7 +54,7 @@ export type AppearancePreferences = {
 	terminalFontSize?: number | null;
 };
 
-type ResolvedTheme = 'dark' | 'light';
+type ResolvedTheme = 'dark' | 'light' | MonoTheme;
 
 const DEFAULT_UI_FONT =
 	"'Inter', -apple-system, BlinkMacSystemFont, ui-sans-serif, system-ui, sans-serif";
@@ -68,6 +90,7 @@ export function normalizeBorderContrast(value: unknown): number | null {
 }
 
 export function resolveThemeMode(theme: Theme): ResolvedTheme {
+	if (isMonoTheme(theme)) return theme;
 	if (theme === 'system' && typeof window !== 'undefined') {
 		return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 	}
@@ -187,6 +210,9 @@ export function sanitizeThemeConfig(value: unknown): ThemeConfig | null {
 
 export function defaultThemeConfig(theme: Theme): Omit<ResolvedThemeConfig, 'muted'> {
 	const resolved = resolveThemeMode(theme);
+	if (isMonoResolved(resolved)) {
+		return { ...MONO_PALETTES[resolved], uiFont: DEFAULT_UI_FONT };
+	}
 	return {
 		background: resolved === 'dark' ? '#0a0a0a' : '#ffffff',
 		foreground: resolved === 'dark' ? '#d4d4d4' : '#525252',
@@ -196,10 +222,23 @@ export function defaultThemeConfig(theme: Theme): Omit<ResolvedThemeConfig, 'mut
 
 export function resolveThemeConfig(theme: Theme, config: ThemeConfig | null): ResolvedThemeConfig {
 	const resolved = resolveThemeMode(theme);
+	if (isMonoResolved(resolved)) {
+		// Monochrome themes ignore custom colours entirely; the muted colour is
+		// solid ink so nothing reads as grey.
+		const palette = MONO_PALETTES[resolved];
+		return {
+			background: palette.background,
+			foreground: palette.foreground,
+			muted: palette.foreground,
+			uiFont: config?.uiFont ?? DEFAULT_UI_FONT
+		};
+	}
+	// `resolved` is dark/light here.
+	const bucket: 'dark' | 'light' = resolved;
 	return {
 		...defaultThemeConfig(theme),
-		...(config?.[resolved] ?? {}),
-		muted: config?.[resolved]?.muted ?? null,
+		...(config?.[bucket] ?? {}),
+		muted: config?.[bucket]?.muted ?? null,
 		uiFont: config?.uiFont ?? DEFAULT_UI_FONT
 	};
 }
@@ -218,6 +257,8 @@ export function applyAppearance(
 
 	const resolved = resolveThemeMode(theme);
 	const merged = resolveThemeConfig(theme, config);
+	const isMono = isMonoResolved(resolved);
+	const monoPalette = isMono ? MONO_PALETTES[resolved] : null;
 	const borderMix = normalizeBorderContrast(borderContrast) ?? DEFAULT_BORDER_CONTRAST;
 	const dividerMix =
 		borderMix === DEFAULT_BORDER_CONTRAST
@@ -225,20 +266,54 @@ export function applyAppearance(
 			: Number(((borderMix * 2) / 3).toFixed(3));
 
 	document.documentElement.classList.toggle('dark', resolved === 'dark');
-	document.documentElement.style.colorScheme = resolved;
+	document.documentElement.classList.toggle('mono', isMono);
+	document.documentElement.classList.toggle('bw', resolved === 'bw');
+	document.documentElement.classList.toggle('bw-dark', resolved === 'bw-dark');
+	// Native widgets (scrollbars, form controls, canvas backdrop) follow
+	// color-scheme, so point it at the monochrome background.
+	document.documentElement.style.colorScheme = isMono
+		? resolved === 'bw-dark'
+			? 'dark'
+			: 'light'
+		: resolved;
 
 	setVar('--app-bg', merged.background);
 	setVar('--app-fg', merged.foreground);
-	if (merged.muted) {
-		setVar('--app-fg-muted', merged.muted);
-		setVar('--app-fg-subtle', mixOklab(merged.muted, merged.background, SUBTLE_FROM_MUTED_WEIGHT));
+	if (isMono && monoPalette) {
+		// Monochrome themes keep pure ink/paper for foreground and background.
+		// Muted text, borders and dividers resolve to solid ink so nothing reads
+		// as a grey tone. Interactive state is a solid inversion: hover, active,
+		// selected and scrim surfaces are pure ink, and the CSS in app.css flips
+		// their text to paper. No dithering, no mid-tones.
+		setVar('--app-fg-muted', monoPalette.foreground);
+		setVar('--app-fg-subtle', monoPalette.foreground);
+		setVar('--app-border', monoPalette.foreground);
+		setVar('--app-divider', monoPalette.foreground);
+		setVar('--app-hover', monoPalette.foreground);
+		setVar('--app-active', monoPalette.foreground);
+		setVar('--app-checker', monoPalette.foreground);
+		setVar('--app-scrim', monoPalette.foreground);
+		setVar('--app-bar-scrim', monoPalette.background);
 	} else {
-		// Fall back to the colour-mix defaults declared in app.css.
-		document.documentElement.style.removeProperty('--app-fg-muted');
-		document.documentElement.style.removeProperty('--app-fg-subtle');
+		document.documentElement.style.removeProperty('--app-hover');
+		document.documentElement.style.removeProperty('--app-active');
+		document.documentElement.style.removeProperty('--app-checker');
+		document.documentElement.style.removeProperty('--app-scrim');
+		document.documentElement.style.removeProperty('--app-bar-scrim');
+		if (merged.muted) {
+			setVar('--app-fg-muted', merged.muted);
+			setVar(
+				'--app-fg-subtle',
+				mixOklab(merged.muted, merged.background, SUBTLE_FROM_MUTED_WEIGHT)
+			);
+		} else {
+			// Fall back to the colour-mix defaults declared in app.css.
+			document.documentElement.style.removeProperty('--app-fg-muted');
+			document.documentElement.style.removeProperty('--app-fg-subtle');
+		}
+		setVar('--app-border', `color-mix(in oklab, var(--app-fg) ${borderMix}%, transparent)`);
+		setVar('--app-divider', `color-mix(in oklab, var(--app-fg) ${dividerMix}%, transparent)`);
 	}
-	setVar('--app-border', `color-mix(in oklab, var(--app-fg) ${borderMix}%, transparent)`);
-	setVar('--app-divider', `color-mix(in oklab, var(--app-fg) ${dividerMix}%, transparent)`);
 	setVar('--app-ui-font', merged.uiFont);
 	setVar('--font-sans', merged.uiFont);
 

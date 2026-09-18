@@ -352,6 +352,12 @@
 		color: #ef4444;
 	}
 
+	/* Monochrome: an error keeps its weight, not a hue. */
+	:global(.mono) .error-msg {
+		color: var(--app-fg);
+		font-weight: 600;
+	}
+
 	/* ── DOCX ────────────────────────────────────── */
 
 	.docx-content {
@@ -476,6 +482,10 @@
 		color: #fbbf24;
 	}
 
+	:global(.mono) .xlsx-content :global(.num) {
+		color: var(--app-fg);
+	}
+
 	/* ── PPTX ────────────────────────────────────── */
 
 	.pptx-content {
@@ -513,5 +523,13 @@
 		background: rgba(0, 0, 0, 0.4);
 		padding: 0.0625rem 0.375rem;
 		border-radius: 0.1875rem;
+	}
+
+	/* Monochrome: the chip sits on a slide image, so it inverts to stay legible
+	   whatever the image behind it is — a solid background, not a translucent
+	   one, which would be a grey. */
+	:global(.mono) .slide-num {
+		color: var(--app-bg);
+		background: var(--app-fg);
 	}
 </style>

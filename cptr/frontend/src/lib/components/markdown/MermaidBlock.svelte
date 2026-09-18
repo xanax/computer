@@ -7,6 +7,64 @@
 	let error = $state<string | null>(null);
 	let rendered = $state(false);
 
+	/**
+	 * Mermaid builds its whole palette out of `themeVariables`, and derives
+	 * further shades from whatever it is handed. Monochrome hands it the two
+	 * palette colours and nothing else, so every node, edge, label and note
+	 * lands on black or white instead of a mermaid grey.
+	 */
+	function monoThemeVariables() {
+		const dark = document.documentElement.classList.contains('bw-dark');
+		const foreground = dark ? '#ffffff' : '#000000';
+		const background = dark ? '#000000' : '#ffffff';
+		return {
+			background,
+			darkMode: dark,
+			primaryColor: background,
+			primaryTextColor: foreground,
+			primaryBorderColor: foreground,
+			secondaryColor: background,
+			tertiaryColor: background,
+			lineColor: foreground,
+			textColor: foreground,
+			mainBkg: background,
+			nodeBorder: foreground,
+			nodeTextColor: foreground,
+			clusterBkg: background,
+			clusterBorder: foreground,
+			titleColor: foreground,
+			edgeLabelBackground: background,
+			labelBackground: background,
+			labelTextColor: foreground,
+			noteBkgColor: background,
+			noteTextColor: foreground,
+			noteBorderColor: foreground,
+			actorBkg: background,
+			actorBorder: foreground,
+			actorTextColor: foreground,
+			actorLineColor: foreground,
+			signalColor: foreground,
+			signalTextColor: foreground,
+			labelBoxBkgColor: background,
+			labelBoxBorderColor: foreground,
+			loopTextColor: foreground,
+			activationBkgColor: background,
+			activationBorderColor: foreground,
+			sequenceNumberColor: background,
+			errorBkgColor: background,
+			errorTextColor: foreground,
+			// Pie, git and quadrant charts derive a ramp of their own.
+			cScale0: foreground,
+			cScale1: background,
+			cScale2: foreground,
+			cScale3: background,
+			cScale4: foreground,
+			cScale5: background,
+			cScale6: foreground,
+			cScale7: background
+		};
+	}
+
 	$effect(() => {
 		if (!containerEl || rendered) return;
 		const currentCode = code;
@@ -14,9 +72,15 @@
 		(async () => {
 			try {
 				const mermaid = (await import('mermaid')).default;
+				const mono = document.documentElement.classList.contains('mono');
 				mermaid.initialize({
 					startOnLoad: false,
-					theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
+					theme: mono
+						? 'base'
+						: document.documentElement.classList.contains('dark')
+							? 'dark'
+							: 'default',
+					themeVariables: mono ? monoThemeVariables() : undefined,
 					securityLevel: 'strict',
 					fontFamily: 'inherit'
 				});

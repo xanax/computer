@@ -181,6 +181,16 @@
 		color: #f87171;
 	}
 
+	/* Monochrome: every value type shares one ink; the tree still reads from
+	   its punctuation, indentation and the disclosure marks. */
+	:global(.mono) .key,
+	:global(.mono) .val-string,
+	:global(.mono) .val-number,
+	:global(.mono) .val-bool,
+	:global(.mono) .val-null {
+		color: var(--app-fg);
+	}
+
 	.val-null {
 		color: var(--color-gray-400);
 		font-style: italic;

@@ -162,6 +162,8 @@
 	"general.light": "淺色",
 	"general.dark": "深色",
 	"general.system": "跟隨系統",
+	"general.bw": "黑白",
+	"general.bwDark": "黑底白字",
 	"general.language": "語言",
 	"general.tools": "工具",
 	"general.autoApproveTools": "自動核准所有工具呼叫",

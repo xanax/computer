@@ -162,6 +162,8 @@
 	"general.light": "Hell",
 	"general.dark": "Dunkel",
 	"general.system": "Systemmodus",
+	"general.bw": "Schwarzweiß",
+	"general.bwDark": "Weiß auf Schwarz",
 	"general.language": "Sprache",
 	"general.tools": "Werkzeuge",
 	"general.autoApproveTools": "Alle Tool-Aufrufe automatisch genehmigen",

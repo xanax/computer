@@ -297,6 +297,12 @@
 		color: #ef4444;
 	}
 
+	/* Monochrome: an error keeps its weight, not a hue. */
+	:global(.mono) .error-msg {
+		color: var(--app-fg);
+		font-weight: 600;
+	}
+
 	.zoom-toolbar {
 		position: absolute;
 		bottom: 0.75rem;

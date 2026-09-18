@@ -208,6 +208,27 @@
 		markerColor: string;
 		label: string;
 	} {
+		const decoration = gitStatusColors(status);
+		// Monochrome has no colour to spend on status: the A/U/M/D letter and
+		// the label are the signal, so every decoration is the same ink.
+		if (document.documentElement.classList.contains('mono')) {
+			return {
+				...decoration,
+				nameColor: 'text-gray-700',
+				badgeColor: 'text-gray-500',
+				markerColor: 'bg-gray-400'
+			};
+		}
+		return decoration;
+	}
+
+	function gitStatusColors(status: string): {
+		char: string;
+		nameColor: string;
+		badgeColor: string;
+		markerColor: string;
+		label: string;
+	} {
 		switch (status) {
 			case 'added':
 				return {

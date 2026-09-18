@@ -874,6 +874,11 @@
 		return document.documentElement.classList.contains('dark');
 	}
 
+	/** Monochrome themes have exactly two colours to work with (see app.css). */
+	function isMonoMode(): boolean {
+		return document.documentElement.classList.contains('mono');
+	}
+
 	let themeObserver: MutationObserver | null = null;
 	let appliedSearchTarget = 0;
 
@@ -908,6 +913,7 @@
 		destroyEditor();
 
 		const dark = isDarkMode();
+		const mono = isMonoMode();
 
 		const extensions = [
 			lineNumbers(),
@@ -964,13 +970,19 @@
 					color: 'var(--app-fg-subtle)',
 					border: 'none'
 				},
-				'.cm-activeLineGutter': { backgroundColor: 'var(--app-hover)' },
-				'.cm-activeLine': { backgroundColor: 'var(--app-hover)' },
+				'.cm-activeLineGutter': { background: 'var(--app-hover)' },
+				'.cm-activeLine': { background: 'var(--app-hover)' },
+				// In monochrome the added/modified marks are the only two colours
+				// available, so they are told apart by width instead of hue.
 				'.cm-lineNumbers .cm-gutterElement.cm-git-line-added': {
-					boxShadow: `inset 0.125rem 0 0 ${dark ? 'rgba(52, 211, 153, 0.75)' : 'rgba(5, 150, 105, 0.65)'}`
+					boxShadow: `inset 0.125rem 0 0 ${
+						mono ? 'var(--app-fg)' : dark ? 'rgba(52, 211, 153, 0.75)' : 'rgba(5, 150, 105, 0.65)'
+					}`
 				},
 				'.cm-lineNumbers .cm-gutterElement.cm-git-line-modified': {
-					boxShadow: `inset 0.125rem 0 0 ${dark ? 'rgba(251, 191, 36, 0.7)' : 'rgba(217, 119, 6, 0.6)'}`
+					boxShadow: `inset ${mono ? '0.0625rem' : '0.125rem'} 0 0 ${
+						mono ? 'var(--app-fg)' : dark ? 'rgba(251, 191, 36, 0.7)' : 'rgba(217, 119, 6, 0.6)'
+					}`
 				},
 				'&.cm-focused': { outline: 'none' }
 			}),
@@ -1379,6 +1391,12 @@
 
 	.file-git-status {
 		color: var(--color-gray-500);
+	}
+
+	/* The +/- counts carry the meaning, so they only need the palette. */
+	:global(.mono) .file-git-additions,
+	:global(.mono) .file-git-deletions {
+		color: var(--app-fg);
 	}
 
 	:global(.dark) .file-git-additions {

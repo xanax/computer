@@ -356,6 +356,18 @@
 		white-space: pre-wrap;
 	}
 
+	/* Monochrome: an error is still an error, so it keeps the weight and the
+	   hatched panel instead of the colour. */
+	:global(.mono) .error-msg,
+	:global(.mono) .query-error {
+		color: var(--app-fg);
+		font-weight: 600;
+	}
+
+	:global(.mono) .query-error {
+		background: var(--app-hover);
+	}
+
 	/* ── Table ────────────────────────────────────── */
 
 	.table-scroll {
@@ -423,6 +435,10 @@
 
 	:global(.dark) .cell-number {
 		color: #fbbf24;
+	}
+
+	:global(.mono) .cell-number {
+		color: var(--app-fg);
 	}
 
 	/* ── Pagination ───────────────────────────────── */

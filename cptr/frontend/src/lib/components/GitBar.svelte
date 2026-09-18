@@ -1964,15 +1964,6 @@
 					{/if}
 
 					<button
-						class="flex items-center justify-center w-6 h-6 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors duration-75"
-						onclick={toggleMaximize}
-						use:tooltip={maximized ? $t('git.restore') : $t('git.maximize')}
-						aria-label={maximized ? $t('git.restore') : $t('git.maximize')}
-					>
-						<Icon name={maximized ? 'collapse' : 'expand'} size={12} />
-					</button>
-
-					<button
 						bind:this={diffSettingsBtnEl}
 						class="flex items-center justify-center w-6 h-6 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors duration-75"
 						onclick={() => (showDiffSettings = true)}
