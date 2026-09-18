@@ -7,11 +7,14 @@ for machine-stable output. All functions take a repo root path.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 from typing import Any
 
 from cptr.utils.identity import ExecutionIdentity, env_for, preexec_for
+
+logger = logging.getLogger(__name__)
 
 
 async def _run(
@@ -388,13 +391,43 @@ def _parse_diff(raw: str) -> dict[str, Any]:
     return {"files": files}
 
 
+# git emits this when a pathspec matches nothing in the worktree or the index.
+# It aborts the whole `git add` invocation when that happens for one path.
+_PATHSPEC_NO_MATCH = "did not match any file"
+
+
 async def stage(
     root: str, files: list[str], identity: ExecutionIdentity | None = None
 ) -> None:
-    """Stage files for commit."""
+    """Stage files for commit.
+
+    Paths whose deletion is already staged are still listed as staged by the UI
+    and get re-sent here. `git add` cannot match such a path against the
+    worktree (file gone) or the index (removal already staged) and aborts the
+    entire batch on the first one, which made the commit button fail with a 400
+    before `git commit` ever ran. Retry per path and treat those paths as a
+    no-op instead; any other failure still raises.
+    """
     if not files:
         return
-    await _run("add", "--", *files, cwd=root, identity=identity)
+    try:
+        await _run("add", "--", *files, cwd=root, identity=identity)
+        return
+    except GitError as exc:
+        if _PATHSPEC_NO_MATCH not in str(exc):
+            raise
+
+    skipped: list[str] = []
+    for path in files:
+        try:
+            await _run("add", "--", path, cwd=root, identity=identity)
+        except GitError as exc:
+            if _PATHSPEC_NO_MATCH in str(exc):
+                skipped.append(path)
+                continue
+            raise
+    if skipped:
+        logger.debug("stage: nothing to stage for %s", ", ".join(skipped))
 
 
 async def unstage(
