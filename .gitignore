@@ -31,3 +31,4 @@ cptr/frontend/package-lock.json
 
 # Local runtime artifacts (server launched from this checkout)
 cptr-pid.txt
+downloads/
