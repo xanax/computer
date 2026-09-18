@@ -243,3 +243,49 @@ instead of hanging.
 The deadline (not a fixed directory count) is what makes this work on both
 filesystems: on ext4 the whole tree is still walked exactly, because 5000
 directories only cost ~200ms there.
+
+## Data quality pass (schema 0006)
+
+First real look at the collected data (766 rows over 2.3h, 5 sessions) showed the
+pipe worked end to end but the *content* was thin in four ways. Fixed:
+
+**1. `ts` wasn't a clock.** The collector wrote `performance.now()` into `ts` —
+page-relative, so it reset on every reload (rows read `ts: 1609.8`, `ts:
+1108621.2`) and couldn't order events across sessions. The only usable clock was
+`created_at` (server, stamped *per batch*, so a whole 5s flush shared one
+timestamp). Now:
+
+- `ts` = `Date.now()`, a real epoch-ms timeline that survives reloads.
+- `perf_ms` (new column, migration `0006`) keeps `performance.now()` for precise
+  intra-page gaps that are immune to clock adjustments.
+
+Legacy rows keep page-relative `ts` and null `perf_ms`; don't mix them.
+
+**2. Ambient context on every sample.** `mount` carried no metadata at all (137
+rows) while `tab_switch` carried tab counts (16 rows) — the context lived in the
+one place the volume wasn't. The store now registers a `setPerfContext` provider
+and `record()` merges it into every event's `meta`:
+
+`total_tabs`, `groups`, `active_tab`, `hidden`, `focused`, `viewport`
+
+captured **at record time**, not flush time — which also fixes the 52 rows that
+shipped with `workspace: null` (they'd resolved context 5s later, or on unload,
+when the store had moved on). `workspace` is now per-event and the batch value is
+only a fallback.
+
+**3. Long tasks were 75% of the table and blamed nothing.** All 574 were
+`label: "self"` with just `{start}`. `record()` now remembers the last real
+interaction and the observer attaches `during` + `since_ms` when a long task
+begins within 1.5s of it, so a block can be attributed to the switch/nav that
+caused it. Sub-80ms entries are dropped as noise.
+
+**4. rAF measurement was silently corrupted by background tabs.** A hidden tab
+has its `requestAnimationFrame` callbacks throttled (or paused), so every
+`measureToPaint` event inflates. Samples now carry `started_hidden`, and
+`mount` carries `active` (was this tab the visible one?), so throttled readings
+can be discounted instead of read as slowness.
+
+Also: cache-served `dir_navigate` samples are flagged `cache: true` so a 0ms
+"instant hit" isn't averaged into navigation latency.
+
+`perfMount` changed shape: `use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}`.
