@@ -90,20 +90,27 @@
 	function reorderHomeTabs(groupId: string, oldIndex: number, newIndex: number) {
 		const group = $homeState.groups.find((item) => item.id === groupId);
 		if (!group) return;
-		const tabs = [...group.tabs];
-		const [tab] = tabs.splice(oldIndex, 1);
+		// Chat tabs are hidden from the bar, so reorder only the visible ones.
+		const visible = group.tabs.filter((tab) => tab.type !== 'chat');
+		if (oldIndex < 0 || oldIndex >= visible.length) return;
+		const [tab] = visible.splice(oldIndex, 1);
 		if (!tab) return;
-		tabs.splice(newIndex, 0, tab);
+		visible.splice(newIndex, 0, tab);
+		let visibleIndex = 0;
+		const tabs = group.tabs.map((item) => (item.type === 'chat' ? item : visible[visibleIndex++]));
 		updateHomeTabs(groupId, () => ({ tabs, activeTabId: group.activeTabId }));
 	}
 
 	function cycleHomeTab(direction: 1 | -1) {
 		const group = activeHomeGroup;
-		if (!group || group.tabs.length < 2) return;
-		const currentIndex = group.tabs.findIndex((tab) => tab.id === group.activeTabId);
+		if (!group) return;
+		// Chat tabs are hidden from the bar; cycle only the visible ones.
+		const visible = group.tabs.filter((tab) => tab.type !== 'chat');
+		if (visible.length < 2) return;
+		const currentIndex = visible.findIndex((tab) => tab.id === group.activeTabId);
 		if (currentIndex === -1) return;
-		const nextIndex = (currentIndex + direction + group.tabs.length) % group.tabs.length;
-		updateHomeTabs(group.id, (tabs) => ({ tabs, activeTabId: tabs[nextIndex].id }));
+		const nextIndex = (currentIndex + direction + visible.length) % visible.length;
+		updateHomeTabs(group.id, (tabs) => ({ tabs, activeTabId: visible[nextIndex].id }));
 	}
 
 	function toggleHomeSplit() {

@@ -12,6 +12,7 @@ import mimetypes
 import os
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, File as FastAPIFile, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -98,7 +99,24 @@ class ArchiveRequest(BaseModel):
     paths: list[str]
 
 
-async def send_file(request: Request, path: str, *, download: bool = False):
+def _safe_filename(name: str) -> str:
+    """Strip path separators, control chars and quotes from a caller-supplied filename."""
+    cleaned = "".join(c for c in (name or "").strip() if c.isprintable() and c not in '\\/"')
+    cleaned = cleaned.strip(". ")
+    return "" if cleaned in {"", ".", ".."} else cleaned
+
+
+def _content_disposition(name: str) -> str:
+    """RFC 5987 Content-Disposition value that survives non-ASCII filenames."""
+    encoded = quote(name)
+    if encoded != name:
+        return f"attachment; filename*=utf-8''{encoded}"
+    return f'attachment; filename="{name}"'
+
+
+async def send_file(
+    request: Request, path: str, *, download: bool = False, download_name: str = ""
+):
     try:
         identity = await identity_for_request(request)
     except IdentityUnavailable as exc:
@@ -113,7 +131,7 @@ async def send_file(request: Request, path: str, *, download: bool = False):
         media_type, _ = mimetypes.guess_type(str(target))
         return FileResponse(
             str(target),
-            filename=target.name if download else None,
+            filename=(_safe_filename(download_name) or target.name) if download else None,
             media_type="application/octet-stream" if download else media_type or "application/octet-stream",
         )
 
@@ -123,7 +141,9 @@ async def send_file(request: Request, path: str, *, download: bool = False):
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     headers = {"Content-Length": str(result["size"])}
     if download:
-        headers["Content-Disposition"] = f'attachment; filename="{result["name"]}"'
+        headers["Content-Disposition"] = _content_disposition(
+            _safe_filename(download_name) or result["name"]
+        )
     return StreamingResponse(
         result["body"],
         media_type="application/octet-stream" if download else result.get("media_type") or "application/octet-stream",
@@ -246,8 +266,9 @@ async def view_file(
 async def download_file(
     request: Request,
     path: str = Query(..., description="Absolute path to file"),
+    filename: str = Query("", description="Filename to save as (defaults to the file's name)"),
 ):
-    return await send_file(request, path, download=True)
+    return await send_file(request, path, download=True, download_name=filename)
 
 
 @router.post("/archive")

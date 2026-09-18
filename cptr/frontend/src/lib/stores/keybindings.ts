@@ -308,12 +308,15 @@ export function executeAction(
 				return true;
 			}
 			const g = get(activeGroup);
-			if (!g || g.tabs.length < 2) return true;
-			const currentIdx = g.tabs.findIndex((t) => t.id === g.activeTabId);
+			if (!g) return true;
+			// Chat tabs are hidden from the bar; cycle only the visible ones.
+			const visible = g.tabs.filter((t) => t.type !== 'chat');
+			if (visible.length < 2) return true;
+			const currentIdx = visible.findIndex((t) => t.id === g.activeTabId);
 			if (currentIdx === -1) return true;
 			const dir = action === 'nextTab' ? 1 : -1;
-			const nextIdx = (currentIdx + dir + g.tabs.length) % g.tabs.length;
-			setActiveTab(g.tabs[nextIdx].id, g.id);
+			const nextIdx = (currentIdx + dir + visible.length) % visible.length;
+			setActiveTab(visible[nextIdx].id, g.id);
 			return true;
 		}
 

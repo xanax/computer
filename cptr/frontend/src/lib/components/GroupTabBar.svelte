@@ -6,7 +6,6 @@
 		setActiveTab,
 		closeTab,
 		setActiveGroup,
-		reorderTabs,
 		openUntitledFileTab,
 		openTerminalTab,
 		openBrowserTab,
@@ -20,18 +19,11 @@
 		type EditorGroup,
 		type Tab
 	} from '$lib/stores';
-	import { openChatTab } from '$lib/stores';
-	import {
-		chatEnabled,
-		chatStatuses,
-		isChatUnread,
-		markChatUnread,
-		streamingChatTabs
-	} from '$lib/stores/chat';
+	import { openChatTab, reorderVisibleTabs } from '$lib/stores';
+	import { chatEnabled } from '$lib/stores/chat';
 	import { voiceMemosEnabled, showVoiceMemo } from '$lib/stores/audio';
 	import { keybindings, formatChord } from '$lib/stores/keybindings';
 	import Icon from './Icon.svelte';
-	import Spinner from './common/Spinner.svelte';
 	import DropdownMenu from './DropdownMenu.svelte';
 	import { tooltip } from '$lib/tooltip';
 	import { t } from '$lib/i18n';
@@ -99,7 +91,8 @@
 
 	type TabDragPayload = { tabId: string; groupId: string };
 
-	const displayTabs = $derived(group?.tabs ?? []);
+	// Chats are surfaced in the sidebar (under each workspace), not as tabs.
+	const displayTabs = $derived((group?.tabs ?? []).filter((tab) => tab.type !== 'chat'));
 
 	const isActiveGroup = $derived(home ? homeActive : $activeWorkspace?.activeGroupId === group?.id);
 
@@ -303,15 +296,6 @@
 			});
 		}
 
-		if (tab.type === 'chat' && tab.path) {
-			if (items.length > 0) items.push({ label: '', onclick: () => {}, divider: true });
-			items.push({
-				label: $t('chat.markUnread'),
-				icon: 'mail',
-				onclick: () => markChatUnread(tab.path!)
-			});
-		}
-
 		if (!tab.permanent) {
 			if (items.length > 0) items.push({ label: '', onclick: () => {}, divider: true });
 			items.push({
@@ -379,7 +363,7 @@
 				onEnd: (evt) => {
 					if (evt.oldIndex != null && evt.newIndex != null && evt.oldIndex !== evt.newIndex) {
 						if (home) onHomeReorder?.(evt.oldIndex, evt.newIndex);
-						else reorderTabs(evt.oldIndex, evt.newIndex, group.id);
+						else reorderVisibleTabs(evt.oldIndex, evt.newIndex, group.id);
 					}
 				}
 			});
@@ -420,8 +404,6 @@
 		<div bind:this={tabsEl} class="flex items-center gap-0.5 shrink-0">
 			{#each displayTabs as tab (tab.id)}
 				{@const isActive = tab.id === group.activeTabId}
-				{@const chatStatus =
-					tab.type === 'chat' && tab.path ? $chatStatuses.get(tab.path) : undefined}
 				<button
 					class="flex items-center gap-1.5 px-2.5 h-7 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-all duration-100
 						{isActive
@@ -432,17 +414,10 @@
 					onclick={() => handleTabClick(tab)}
 					oncontextmenu={(e) => handleContextMenu(e, tab)}
 				>
-					{#if tab.type === 'chat' && (chatStatus?.active || $streamingChatTabs.has(tab.id))}
-						<Spinner size={14} />
-					{:else}
-						<Icon name={tabIconName(tab)} size={14} />
-					{/if}
+					<Icon name={tabIconName(tab)} size={14} />
 					<span class="max-w-30 overflow-hidden text-ellipsis">
 						{tab.type === 'files' ? ($activeWorkspace?.name ?? $t('bar.files')) : tab.label}
 					</span>
-					{#if tab.type === 'chat' && !isActive && isChatUnread(chatStatus)}
-						<span class="size-1.5 shrink-0 rounded-full bg-sky-500" aria-hidden="true"></span>
-					{/if}
 					{#if tab.unsaved}<span class="w-1.5 h-1.5 rounded-full bg-gray-400 shrink-0"></span>{/if}
 					{#if !tab.permanent}
 						<!-- svelte-ignore a11y_no_static_element_interactions -->

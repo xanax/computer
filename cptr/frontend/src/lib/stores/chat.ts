@@ -76,12 +76,12 @@ export function setChatReadAt(chatId: string, lastReadAt = Date.now()) {
 }
 
 /**
- * Mark a chat unread again so its unread indicator shows in chat lists,
- * workspace badges, and tabs. The server echoes the change to every session.
+ * Close (conclude) a chat, or reopen it. A closed chat drops out of the
+ * workspace sidebar until new activity makes it unread again. The server
+ * echoes the change to every session.
  */
-export function markChatUnread(chatId: string) {
-	setChatReadAt(chatId, 0);
-	socketStore.getSocket()?.emit('chat:unread', { chat_id: chatId });
+export function setChatClosed(chatId: string, closed: boolean) {
+	socketStore.getSocket()?.emit('chat:closed', { chat_id: chatId, closed });
 }
 
 export function isChatUnread(status: ChatStatus | undefined): boolean {

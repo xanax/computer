@@ -21,6 +21,7 @@ import time
 import uuid
 from pathlib import Path, PureWindowsPath
 from typing import Any, Literal, Optional, get_args, get_origin, get_type_hints
+from urllib.parse import urlencode
 
 from fastapi import Request
 from cptr.env import CHAT_TOOL_COMMAND_MAX_CHARS, CHAT_TOOL_MAX_CHARS, EXECUTE_TIMEOUT
@@ -241,6 +242,13 @@ def _is_dotenv(path: Path) -> bool:
 
 
 _DOTENV_ERROR = "Error: access to .env files is not allowed for security reasons."
+
+
+def _safe_download_name(name: str) -> str:
+    """Sanitize a caller-supplied download filename (no paths, no header breakers)."""
+    cleaned = "".join(c for c in (name or "").strip() if c.isprintable() and c not in '\\/"')
+    cleaned = cleaned.strip(". ")
+    return cleaned if cleaned not in {"", ".", ".."} else ""
 
 _SENSITIVE_READ_ERROR = "Error: access to credential files is not allowed for security reasons."
 
@@ -1131,6 +1139,66 @@ async def display_file(path: str, *, __context__: dict) -> str:
             "size": file_stat.get("size") or 0,
             "mime_type": mime_type,
             "kind": _file_kind(full, mime_type),
+        },
+        ensure_ascii=False,
+    )
+
+
+async def create_download_link(path: str, name: str = "", *, __context__: dict) -> str:
+    """Create a download link the user clicks to save a file to their own computer.
+    The file lives on this runtime; the link hands it to the browser's machine, not the
+    server. Use when the user asks to download, save, export, or send over a file. Single
+    files only: archive a directory (tar/zip) first and link the archive.
+    :param path: Path of the file to hand over (relative to workspace root, or absolute).
+    :param name: Optional filename to save as (defaults to the file's own name).
+    """
+    if not path:
+        return "Error: path is required."
+    workspace = __context__["workspace"]
+    request = __context__.get("request")
+    if request is None:
+        return "Error: request context unavailable"
+
+    try:
+        full = _resolve_path(path, workspace)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    if _is_dotenv(full):
+        return _DOTENV_ERROR
+
+    try:
+        file_stat = await Runtime.stat(request, str(full))
+    except FileError:
+        return f"Error: file not found: {path}"
+    if file_stat.get("type") == "directory":
+        return (
+            f"Error: {path} is a directory. Archive it first "
+            "(e.g. `tar -czf archive.tar.gz <dir>`, or python's zipfile), then link the archive."
+        )
+    if file_stat.get("type") != "file":
+        return f"Error: not a file: {path}"
+
+    display_name = _safe_download_name(name) or full.name
+    params = {"path": str(full)}
+    if display_name != full.name:
+        params["filename"] = display_name
+
+    ws = Path(workspace).resolve()
+    try:
+        display_path = str(full.relative_to(ws))
+    except ValueError:
+        display_path = str(full)
+    return json.dumps(
+        {
+            "type": "download",
+            "url": f"/api/workspace/files/download?{urlencode(params)}",
+            "name": display_name,
+            "path": display_path,
+            "full_path": str(full),
+            "workspace": str(ws),
+            "size": file_stat.get("size") or 0,
+            "mime_type": mimetypes.guess_type(display_name)[0] or "application/octet-stream",
         },
         ensure_ascii=False,
     )
@@ -2429,6 +2497,7 @@ TOOLS: dict[str, dict] = {
     "web_search": {"fn": web_search, "approval": "allow"},
     "read_url": {"fn": read_url, "approval": "allow"},
     "search_chats": {"fn": search_chats, "approval": "allow"},
+    "create_download_link": {"fn": create_download_link, "approval": "allow"},
     "list_automations": {"fn": list_automations, "approval": "allow"},
     "view_skill": {"fn": view_skill, "approval": "allow"},
     "update_tasks": {"fn": update_tasks, "approval": "allow"},
@@ -2857,6 +2926,7 @@ BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
         "search_files",
         "create_file",
         "display_file",
+        "create_download_link",
         "edit_file",
         "multi_edit_file",
         "write_file",

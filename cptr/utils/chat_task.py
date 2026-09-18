@@ -1387,6 +1387,27 @@ def build_artifact_item(tool_name: str, arguments: dict, result: str) -> dict | 
     }
 
 
+def build_tool_card_item(tool_name: str, result: str) -> dict | None:
+    """Build a rich output item (file preview, download link) from a tool result.
+
+    Returns None when the tool does not produce a card, or produced an error string.
+    """
+    expected = {
+        "display_file": "file",
+        "create_download_link": "download",
+    }.get(tool_name)
+    if not expected:
+        return None
+
+    try:
+        item = json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(item, dict) and item.get("type") == expected:
+        return item
+    return None
+
+
 def _default_base_url(provider: str) -> str:
     return {
         "anthropic": "https://api.anthropic.com/v1",
@@ -2143,15 +2164,11 @@ async def run_chat_task(
                     await emit(output=artifact_item)
                     _sync_state()
 
-                if name == "display_file":
-                    try:
-                        file_item = json.loads(result)
-                    except (json.JSONDecodeError, TypeError):
-                        file_item = None
-                    if isinstance(file_item, dict) and file_item.get("type") == "file":
-                        output_items.append(file_item)
-                        await emit(output=file_item)
-                        _sync_state()
+                card_item = build_tool_card_item(name, result)
+                if card_item:
+                    output_items.append(card_item)
+                    await emit(output=card_item)
+                    _sync_state()
 
                 await _save_message("tool call complete", content=content, output=output_items)
                 processed_any = True
@@ -2702,15 +2719,11 @@ async def run_chat_task(
                         await emit(output=artifact_item)
                         _sync_state()
 
-                    if tc["name"] == "display_file":
-                        try:
-                            file_item = json.loads(result)
-                        except (json.JSONDecodeError, TypeError):
-                            file_item = None
-                        if isinstance(file_item, dict) and file_item.get("type") == "file":
-                            output_items.append(file_item)
-                            await emit(output=file_item)
-                            _sync_state()
+                    card_item = build_tool_card_item(tc["name"], result)
+                    if card_item:
+                        output_items.append(card_item)
+                        await emit(output=card_item)
+                        _sync_state()
                 # Execute delegate_task calls concurrently, emit each as it completes
                 delegate_result_items: list[dict] = []
                 if delegate_indices:

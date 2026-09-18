@@ -76,6 +76,9 @@ class Chat(Base):
     created_at = Column(BigInteger, nullable=False)
     updated_at = Column(BigInteger, nullable=False)
     last_read_at = Column(BigInteger, nullable=True)
+    # When set, the user closed ("concluded") the chat: it drops out of the
+    # sidebar until it sees new activity again.
+    closed_at = Column(BigInteger, nullable=True)
 
     # ── Class methods ────────────────────────────────────────
 
@@ -272,6 +275,25 @@ class Chat(Base):
                 update(Chat)
                 .where(Chat.id == chat_id, Chat.user_id == user_id)
                 .values(last_read_at=last_read_at)
+            )
+            await db.commit()
+            return result.rowcount > 0
+
+    @staticmethod
+    async def set_closed_at(chat_id: str, user_id: str, closed_at: int | None) -> bool:
+        """Close a chat, or reopen it when `closed_at` is None.
+
+        Closing also advances the read watermark so a chat the user just closed
+        does not immediately reappear as unread.
+        """
+        values: dict[str, object] = {"closed_at": closed_at}
+        if closed_at is not None:
+            values["last_read_at"] = closed_at
+        async with await get_db() as db:
+            result = await db.execute(
+                update(Chat)
+                .where(Chat.id == chat_id, Chat.user_id == user_id)
+                .values(**values)
             )
             await db.commit()
             return result.rowcount > 0

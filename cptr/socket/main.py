@@ -101,29 +101,28 @@ async def on_chat_read(sid, data):
         await broadcast_chat_read_state(user_id, chat_id, last_read_at)
 
 
-@sio.on("chat:unread")
-async def on_chat_unread(sid, data):
-    """Flag a chat as unread again so its unread indicator reappears."""
+@sio.on("chat:closed")
+async def on_chat_closed(sid, data):
+    """Close ("conclude") a chat, or reopen it when `closed` is false."""
     session = await sio.get_session(sid)
     user_id = session.get("user_id")
     chat_id = data.get("chat_id") if isinstance(data, dict) else None
     if not user_id or not isinstance(chat_id, str):
         return
 
-    # A watermark of 0 is older than any activity timestamp, so the chat
-    # counts as unread again without touching updated_at.
-    last_read_at = 0
-    if await Chat.update_last_read_at(chat_id, user_id, last_read_at):
+    closed = bool(data.get("closed", True))
+    closed_at = now_ms() if closed else None
+    if await Chat.set_closed_at(chat_id, user_id, closed_at):
         from cptr.events import EVENTS, publish_event
 
         await publish_event(
-            EVENTS.CHAT_UNREAD,
+            EVENTS.CHAT_CLOSED if closed else EVENTS.CHAT_REOPENED,
             actor={"id": user_id},
             subject_id=chat_id,
             subject_type="chat",
             source="socket",
         )
-        await broadcast_chat_read_state(user_id, chat_id, last_read_at)
+        await broadcast_chat_closed_state(user_id, chat_id, closed_at)
 
 
 async def emit_to_user(user_id: str, data: dict):
@@ -146,6 +145,30 @@ async def broadcast_chat_read_state(user_id: str, chat_id: str, last_read_at: in
         {
             "chat_id": chat_id,
             "workspace": workspace,
+            "last_read_at": last_read_at,
+            "workspace_unread_count": unread_counts.get(workspace, 0),
+        },
+    )
+
+
+async def broadcast_chat_closed_state(
+    user_id: str, chat_id: str, closed_at: int | None
+) -> None:
+    """Echo a chat's closed state plus its workspace unread count."""
+    chat = await Chat.get_by_id(chat_id)
+    workspace = (chat.meta or {}).get("workspace", "") if chat else ""
+    last_read_at = chat.last_read_at if chat else None
+    from cptr.utils.chat_task import get_active_chat_ids
+
+    unread_counts = await Chat.unread_counts_by_workspace(
+        user_id, [workspace], get_active_chat_ids()
+    )
+    await emit_to_user(
+        user_id,
+        {
+            "chat_id": chat_id,
+            "workspace": workspace,
+            "closed_at": closed_at,
             "last_read_at": last_read_at,
             "workspace_unread_count": unread_counts.get(workspace, 0),
         },

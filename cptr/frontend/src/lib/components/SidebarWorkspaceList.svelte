@@ -8,7 +8,7 @@
 		activeTab,
 		currentWorkspace
 	} from '$lib/stores';
-	import { chatEnabled, markChatUnread, updateChatStatuses } from '$lib/stores/chat';
+	import { chatEnabled, setChatClosed, updateChatStatuses } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import {
 		deleteChat as apiDeleteChat,
@@ -37,7 +37,9 @@
 	let unbindSocketListener: (() => void) | null = null;
 	let workspacesExpanded = $state(true);
 
-	let expandedWorkspaces = $state<Set<string>>(new Set());
+	// Workspace folders start expanded (their chat list visible); we only
+	// remember the ones the user explicitly collapsed.
+	let collapsedWorkspaces = $state<Set<string>>(new Set());
 	let wsChatsCache = $state<Map<string, ChatInfo[]>>(new Map());
 	let wsChatsHasMore = $state<Map<string, boolean>>(new Map());
 	let wsChatsLoading = $state<Set<string>>(new Set());
@@ -45,15 +47,51 @@
 	let currentChatId = $derived($activeTab?.type === 'chat' ? $activeTab.path : null);
 	const WS_CHATS_PAGE_SIZE = 5;
 
+	function isWorkspaceExpanded(path: string): boolean {
+		return !collapsedWorkspaces.has(path);
+	}
+
 	function toggleWorkspaceExpand(path: string) {
-		const next = new Set(expandedWorkspaces);
+		const next = new Set(collapsedWorkspaces);
 		if (next.has(path)) {
 			next.delete(path);
 		} else {
 			next.add(path);
-			if (!wsChatsCache.has(path)) fetchWorkspaceChats(path);
 		}
-		expandedWorkspaces = next;
+		collapsedWorkspaces = next;
+	}
+
+	/**
+	 * A closed chat stays out of the sidebar until new activity makes it unread
+	 * again (mirrors the server's `include_closed=false` filter).
+	 */
+	function isHiddenClosedChat(chat: ChatInfo): boolean {
+		if (!chat.closed_at) return false;
+		if (chat.last_read_at === null || chat.last_read_at === undefined) return false;
+		return chat.updated_at <= chat.last_read_at;
+	}
+
+	function visibleChatsFor(path: string): ChatInfo[] {
+		return (wsChatsCache.get(path) ?? []).filter((chat) => !isHiddenClosedChat(chat));
+	}
+
+	/** Close (conclude) a chat: it leaves the sidebar until it sees new activity. */
+	function handleCloseChat(chatId: string, wsPath: string) {
+		const now = Date.now();
+		setChatClosed(chatId, true);
+		wsChatsCache = new Map([
+			...wsChatsCache,
+			[
+				wsPath,
+				(wsChatsCache.get(wsPath) ?? []).map((chat) =>
+					chat.id === chatId ? { ...chat, closed_at: now, last_read_at: now } : chat
+				)
+			]
+		]);
+		// Closing the chat you are looking at returns you to its landing page.
+		if (currentPath === wsPath && currentChatId === chatId) {
+			goto(`/?workspace=${encodeURIComponent(wsPath)}`);
+		}
 	}
 
 	async function fetchWorkspaceChats(path: string, append = false, limit = WS_CHATS_PAGE_SIZE) {
@@ -66,7 +104,8 @@
 				append ? WS_CHATS_PAGE_SIZE : limit,
 				append ? existing.length : 0,
 				'updated_at',
-				'desc'
+				'desc',
+				false
 			);
 			wsChatsCache = new Map([
 				...wsChatsCache,
@@ -114,6 +153,20 @@
 	}
 
 	function openChat(chatId: string, wsPath: string) {
+		// Clicking a closed chat (visible because it has new activity) reopens it.
+		const chat = (wsChatsCache.get(wsPath) ?? []).find((item) => item.id === chatId);
+		if (chat?.closed_at) {
+			setChatClosed(chatId, false);
+			wsChatsCache = new Map([
+				...wsChatsCache,
+				[
+					wsPath,
+					(wsChatsCache.get(wsPath) ?? []).map((item) =>
+						item.id === chatId ? { ...item, closed_at: null } : item
+					)
+				]
+			]);
+		}
 		goto(`/?workspace=${encodeURIComponent(wsPath)}&chatId=${encodeURIComponent(chatId)}`);
 		closeMobileSidebar();
 	}
@@ -178,13 +231,6 @@
 		]);
 	}
 
-	function handleMarkChatUnread() {
-		if (!chatMenu) return;
-		const { chatId } = chatMenu;
-		// The server echo refreshes this workspace's rows and ordering.
-		markChatUnread(chatId);
-	}
-
 	function copyChatPath() {
 		if (!chatMenu) return;
 		const { chatId, wsPath } = chatMenu;
@@ -205,13 +251,16 @@
 		active?: boolean;
 		updated_at?: number;
 		last_read_at?: number;
+		closed_at?: number | null;
 		workspace_unread_count?: number;
 	}) {
+		const hasClosedAt = 'closed_at' in data;
 		if (
 			!data.title &&
 			typeof data.active !== 'boolean' &&
 			typeof data.updated_at !== 'number' &&
 			typeof data.last_read_at !== 'number' &&
+			!hasClosedAt &&
 			typeof data.workspace_unread_count !== 'number'
 		) {
 			return;
@@ -243,6 +292,7 @@
 						...(data.title ? { title: data.title } : {}),
 						...(typeof data.updated_at === 'number' ? { updated_at: data.updated_at } : {}),
 						...(typeof data.last_read_at === 'number' ? { last_read_at: data.last_read_at } : {}),
+						...(hasClosedAt ? { closed_at: data.closed_at ?? null } : {}),
 						...(typeof data.active === 'boolean' ? { is_active: data.active } : {})
 					};
 				});
@@ -265,17 +315,28 @@
 
 		// A chat created in another session is not yet in this sidebar's page.
 		// Refresh only that expanded workspace; all known rows update in place.
-		if (!known && data.workspace && expandedWorkspaces.has(data.workspace)) {
+		if (!known && data.workspace && isWorkspaceExpanded(data.workspace)) {
 			void fetchWorkspaceChats(data.workspace);
 		} else if (
 			known &&
 			typeof data.last_read_at === 'number' &&
 			data.workspace &&
-			expandedWorkspaces.has(data.workspace)
+			isWorkspaceExpanded(data.workspace)
 		) {
 			reloadWorkspaceChats(data.workspace);
 		}
 	}
+
+	// Workspaces default to expanded, so load every visible workspace's chats
+	// as soon as the workspace list is known (and for any newly added one).
+	$effect(() => {
+		if (!$chatEnabled) return;
+		for (const ws of $workspaceList) {
+			if (!isWorkspaceExpanded(ws.path)) continue;
+			if (wsChatsCache.has(ws.path) || wsChatsLoading.has(ws.path)) continue;
+			void fetchWorkspaceChats(ws.path);
+		}
+	});
 
 	function isTouchDevice(): boolean {
 		return (
@@ -340,8 +401,9 @@
 	class:invisible={!workspacesExpanded}
 >
 	{#each $workspaceList as ws (ws.path)}
-		{@const isExpanded = expandedWorkspaces.has(ws.path)}
-		{@const chats = wsChatsCache.get(ws.path)}
+		{@const isExpanded = isWorkspaceExpanded(ws.path)}
+		{@const chats = visibleChatsFor(ws.path)}
+		{@const chatsLoaded = wsChatsCache.has(ws.path)}
 		{@const hasMoreChats = wsChatsHasMore.get(ws.path)}
 		{@const isLoading = wsChatsLoading.has(ws.path)}
 		<div class="ws-item">
@@ -416,19 +478,20 @@
 
 			{#if $chatEnabled && isExpanded}
 				<div class="ws-chats">
-					{#if isLoading && !chats}
+					{#if isLoading && !chatsLoaded}
 						<div class="ws-chat-loading">
 							<span class="ws-chat-loading-dot"></span>
 							<span class="ws-chat-loading-dot"></span>
 							<span class="ws-chat-loading-dot"></span>
 						</div>
-					{:else if chats && chats.length > 0}
+					{:else if chats.length > 0}
 						{#each chats as chat (chat.id)}
 							<ChatItem
 								{chat}
 								isSelected={chat.id === currentChatId}
 								onclick={() => openChat(chat.id, ws.path)}
 								onmenu={(e) => openChatMenu(e, chat.id, ws.path)}
+								onclose={() => handleCloseChat(chat.id, ws.path)}
 							/>
 						{/each}
 						{#if hasMoreChats}
@@ -481,11 +544,6 @@
 				label: $t('files.rename'),
 				icon: 'pencil',
 				onclick: handleRenameChat
-			},
-			{
-				label: $t('chat.markUnread'),
-				icon: 'mail',
-				onclick: handleMarkChatUnread
 			},
 			{
 				label: $t('chat.history.delete'),

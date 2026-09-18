@@ -15,8 +15,10 @@
 		onclick: () => void;
 		/** Optional menu button click handler */
 		onmenu?: (e: MouseEvent) => void;
+		/** Optional close (conclude) handler shown as an "x" next to the menu */
+		onclose?: () => void;
 	}
-	let { chat, isSelected = false, onclick, onmenu }: Props = $props();
+	let { chat, isSelected = false, onclick, onmenu, onclose }: Props = $props();
 	let status = $derived($chatStatuses.get(chat.id));
 	let active = $derived(status?.active ?? chat.is_active ?? false);
 	let unread = $derived(
@@ -81,6 +83,28 @@
 				<circle cx="3" cy="8" r="1.5" />
 				<circle cx="8" cy="8" r="1.5" />
 				<circle cx="13" cy="8" r="1.5" />
+			</svg>
+		</button>
+	{/if}
+	{#if onclose}
+		<button
+			class="flex items-center justify-center w-5 h-5 rounded shrink-0 text-gray-300 dark:text-gray-700 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/8 transition-all duration-75"
+			onclick={(e) => {
+				e.stopPropagation();
+				onclose?.();
+			}}
+			aria-label={$t('chat.close')}
+			title={$t('chat.close')}
+		>
+			<svg
+				class="h-[0.6875rem] w-[0.6875rem]"
+				viewBox="0 0 16 16"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.75"
+				stroke-linecap="round"
+			>
+				<path d="M4 4l8 8M12 4l-8 8" />
 			</svg>
 		</button>
 	{/if}

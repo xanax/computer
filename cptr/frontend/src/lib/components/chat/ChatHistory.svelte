@@ -11,7 +11,8 @@
 		ondelete: (id: string) => void;
 		onrename: (id: string) => void;
 		oncopy?: (id: string) => void;
-		onmarkunread?: (id: string) => void;
+		/** Optional close (conclude) handler, shown as an "x" next to the menu */
+		onclose?: (id: string) => void;
 		page?: number;
 		totalPages?: number;
 		perPage?: number;
@@ -26,7 +27,7 @@
 		ondelete,
 		onrename,
 		oncopy,
-		onmarkunread,
+		onclose,
 		page = 1,
 		totalPages = 1,
 		perPage = 10,
@@ -137,7 +138,12 @@
 		{/if}
 
 		{#each chats as chat (chat.id)}
-			<ChatItem {chat} onclick={() => onopen(chat.id)} onmenu={(e) => openMenu(e, chat.id)} />
+			<ChatItem
+				{chat}
+				onclick={() => onopen(chat.id)}
+				onmenu={(e) => openMenu(e, chat.id)}
+				onclose={onclose ? () => onclose(chat.id) : undefined}
+			/>
 		{/each}
 		{#if onpagechange}
 			<Pagination {page} {totalPages} {onpagechange} />
@@ -168,17 +174,6 @@
 					if (menuChatId) onrename(menuChatId);
 				}
 			},
-			...(onmarkunread
-				? [
-						{
-							label: $t('chat.markUnread'),
-							icon: 'mail',
-							onclick: () => {
-								if (menuChatId) onmarkunread(menuChatId);
-							}
-						}
-					]
-				: []),
 			{
 				label: $t('chat.history.delete'),
 				icon: 'trash',

@@ -31,10 +31,15 @@ class EventDefinitions:
         "The user explicitly marked a chat as read.",
         "Chat read",
     )
-    CHAT_UNREAD = EventDefinition(
-        "chat.unread",
-        "The user explicitly marked a chat as unread.",
-        "Chat unread",
+    CHAT_CLOSED = EventDefinition(
+        "chat.closed",
+        "The user closed (concluded) a chat.",
+        "Chat closed",
+    )
+    CHAT_REOPENED = EventDefinition(
+        "chat.reopened",
+        "The user reopened a previously closed chat.",
+        "Chat reopened",
     )
     CHAT_USER_MESSAGE = EventDefinition(
         "chat.user_message",

@@ -28,6 +28,19 @@ router = APIRouter(prefix="/api/chats", tags=["chats"])
 COOKIE_NAME = "cptr_session"
 
 
+def _is_hidden_closed_chat(chat: dict) -> bool:
+    """Whether a closed chat should stay out of the sidebar.
+
+    A closed chat reappears once activity makes it unread again, so closing is
+    not destructive: new messages pull the chat back into view.
+    """
+    if not chat.get("closed_at"):
+        return False
+    updated_at = chat.get("updated_at") if isinstance(chat.get("updated_at"), int) else 0
+    last_read_at = chat.get("last_read_at")
+    return last_read_at is not None and updated_at <= last_read_at
+
+
 def _get_user(request: Request) -> str:
     """Extract user_id from cookie, raise 401 if not authenticated."""
     token = request.cookies.get(COOKIE_NAME)
@@ -49,11 +62,17 @@ async def list_chats(
     offset: int = Query(0, ge=0, description="Number of chats to skip"),
     sort_by: str = Query("updated_at", description="Sort field: 'title' or 'updated_at'"),
     sort_dir: str = Query("desc", description="Sort direction: 'asc' or 'desc'"),
+    include_closed: bool = Query(
+        True,
+        description="Include closed chats; closed chats with no new activity are hidden otherwise",
+    ),
 ):
     """List chats by scanning the workspace or global chat directory.
 
     Returns chat metadata with relative folder paths for sidebar display.
     Supports pagination via limit/offset and sorting via sort_by/sort_dir.
+    With `include_closed=false`, closed chats stay hidden until new activity
+    makes them unread again.
     """
     user_id = _get_user(request)
 
@@ -187,9 +206,13 @@ async def list_chats(
                 "created_at": chat.created_at,
                 "updated_at": listing_updated_at,
                 "last_read_at": chat.last_read_at,
+                "closed_at": chat.closed_at,
                 "is_active": chat.id in active_ids,
             }
         )
+
+    if not include_closed:
+        visible_chats = [c for c in visible_chats if not _is_hidden_closed_chat(c)]
 
     # Sort by requested field
     sort_field = sort_by if sort_by in ("title", "updated_at") else "updated_at"
@@ -677,6 +700,7 @@ async def get_chat(
             "created_at": chat.created_at,
             "updated_at": chat.updated_at,
             "last_read_at": chat.last_read_at,
+            "closed_at": chat.closed_at,
             "is_active": chat_id in get_active_chat_ids(),
         },
         "messages": [_message_dict(m) for m in messages],

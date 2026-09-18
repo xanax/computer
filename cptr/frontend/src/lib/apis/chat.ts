@@ -26,6 +26,8 @@ export interface ChatInfo {
 	created_at: number;
 	updated_at: number;
 	last_read_at: number | null;
+	/** Set when the user closed ("concluded") the chat. */
+	closed_at?: number | null;
 	is_active?: boolean;
 }
 
@@ -120,10 +122,11 @@ export const getChats = (
 	limit = 50,
 	offset = 0,
 	sortBy: 'title' | 'updated_at' = 'updated_at',
-	sortDir: 'asc' | 'desc' = 'desc'
+	sortDir: 'asc' | 'desc' = 'desc',
+	includeClosed = true
 ) =>
 	fetchJSON<{ chats: ChatInfo[]; total: number; has_more: boolean }>(
-		`/api/chats?${workspace ? `workspace=${encodeURIComponent(workspace)}&` : ''}limit=${limit}&offset=${offset}&sort_by=${sortBy}&sort_dir=${sortDir}`
+		`/api/chats?${workspace ? `workspace=${encodeURIComponent(workspace)}&` : ''}limit=${limit}&offset=${offset}&sort_by=${sortBy}&sort_dir=${sortDir}&include_closed=${includeClosed ? 'true' : 'false'}`
 	);
 
 export const getChat = (chatId: string, modelId?: string) => {

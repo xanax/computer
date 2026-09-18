@@ -141,6 +141,15 @@
 		}
 	}
 
+	/** Human-readable file size for download cards */
+	function formatSize(bytes: number | null | undefined): string {
+		if (bytes === null || bytes === undefined || bytes < 0) return '';
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+		if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+		return `${(bytes / 1073741824).toFixed(1)} GB`;
+	}
+
 	/** Shorten a file path to just the basename for compact display */
 	function shortPath(p: string | undefined): string {
 		if (!p) return '?';
@@ -192,6 +201,8 @@
 				return _t('chat.tool.writeFile', { path: shortPath(args.path) });
 			case 'display_file':
 				return `Display ${shortPath(args.path)}`;
+			case 'create_download_link':
+				return `Prepare download: ${shortPath(args.path)}`;
 			case 'list_directory':
 				return args.recursive
 					? _t('chat.tool.listDirectoryRecursive', { path: shortPath(args.path) })
@@ -277,7 +288,12 @@
 		index: number;
 	}
 
-	type DisplayItem = ActivityGroup | MessageItem | ArtifactItem | ImageItem | FileItem;
+	interface DownloadItem {
+		type: 'download_item';
+		item: any;
+	}
+
+	type DisplayItem = ActivityGroup | MessageItem | ArtifactItem | ImageItem | FileItem | DownloadItem;
 
 	const outputText = $derived.by((): string => {
 		return (output || [])
@@ -383,6 +399,9 @@
 			} else if (item.type === 'file') {
 				flushGroup();
 				items.push({ type: 'file_item', item, index });
+			} else if (item.type === 'download') {
+				flushGroup();
+				items.push({ type: 'download_item', item });
 			}
 			// function_call_output items are handled via outputMap, skip standalone render
 		}
@@ -557,6 +576,43 @@
 							{#if !collapsed}
 								<ChatFilePreview {file} {filePath} />
 							{/if}
+						</div>
+					{:else if displayItem.type === 'download_item'}
+						{@const download = displayItem.item}
+						{@const downloadName = download.name || shortPath(download.path)}
+						<div
+							class="my-2 w-full max-w-2xl overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-white/8 dark:bg-gray-950/20"
+						>
+							<a
+								href={download.url}
+								download={downloadName}
+								class="flex h-12 items-center gap-2.5 px-2.5 transition-colors hover:bg-gray-50/50 dark:hover:bg-white/[0.03]"
+							>
+								<div
+									class="flex size-5 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400"
+								>
+									<Icon name="download" size={14} />
+								</div>
+								<div class="min-w-0 flex-1">
+									<div class="truncate text-xs font-medium text-gray-800 dark:text-gray-100">
+										{downloadName}
+									</div>
+									<div class="truncate text-[0.625rem] text-gray-400 dark:text-gray-500">
+										{[
+											formatSize(download.size),
+											shortPath(download.path),
+											download.mime_type
+										]
+											.filter((part) => part && part !== downloadName)
+											.join(' · ')}
+									</div>
+								</div>
+								<div
+									class="shrink-0 text-[0.6875rem] font-medium text-gray-500 dark:text-gray-400"
+								>
+									{$t('files.download')}
+								</div>
+							</a>
 						</div>
 					{:else if displayItem.type === 'activity_group'}
 						{#if displayItem.entries.length === 1}

@@ -1053,6 +1053,23 @@ export function reorderTabs(oldIndex: number, newIndex: number, groupId?: string
 	});
 }
 
+/**
+ * Reorder only the visible (non-chat) tabs in a group. Chat tabs are hidden
+ * from the tab bar but kept in the group's tab list, so drag indices from the
+ * rendered list must be remapped back onto the full list without moving chats.
+ */
+export function reorderVisibleTabs(oldIndex: number, newIndex: number, groupId?: string): void {
+	updateGroupTabs(groupId, (tabs) => {
+		const visible = tabs.filter((tab) => tab.type !== 'chat');
+		if (oldIndex < 0 || oldIndex >= visible.length) return { tabs };
+		const [moved] = visible.splice(oldIndex, 1);
+		visible.splice(newIndex, 0, moved);
+		let visibleIndex = 0;
+		const reordered = tabs.map((tab) => (tab.type === 'chat' ? tab : visible[visibleIndex++]));
+		return { tabs: reordered };
+	});
+}
+
 export function updateTabLabel(tabId: string, label: string): void {
 	const value = label.trim().slice(0, 120);
 	if (!value) return;

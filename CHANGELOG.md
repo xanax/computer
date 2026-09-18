@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- ⬇️ **Chats can hand you a file to download.** Ask a chat to download, save, or send you a file and it posts a download card: click it and the file saves to the computer you are browsing from, not the runtime.
+- 🧹 **Chats close when you are done with them.** A chat row grows an × next to its menu, and there is a close action at the end of the conversation. Closed chats step out of the sidebar and the workspace chat list; they come back on their own as soon as new activity makes them unread, and you can reopen any of them from the "What can I help you with?" page.
+
+### Changed
+
+- 📚 **Chats live under their workspace now.** The top tab bar keeps files, terminals, and browsers; chats appear under the workspace folder they belong to, and the new "all chats" view on the landing page keeps the full history.
+- 📂 **Workspace folders start expanded**, so their chats are visible without an extra click.
+
+### Removed
+
+- ✉️ **Mark as unread is gone.** Closing replaced it: the unread dot still clears when you read a chat, but there is no longer a way to force it back.
+
 ## [0.9.21] - 2026-08-04
 
 ### Added

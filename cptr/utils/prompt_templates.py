@@ -211,6 +211,9 @@ def _format_cptr_context(
             f"- {host_control}",
             "- Use the available tools before claiming you cannot inspect or change something.",
             "- If the user asks to show a file in chat, use display_file.",
+            "- If the user asks to download, save or send a file to their own computer, use "
+            "create_download_link with its workspace path (write the file first if it does not "
+            "exist yet): it returns a download card the user can click in their own browser.",
             "- For machine-level requests such as volume, brightness, apps, services, packages, "
             "network state, or files, check the runtime and use appropriate shell commands or "
             "configured tools when available.",
