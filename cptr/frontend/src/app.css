@@ -635,6 +635,21 @@
 	background: var(--app-scrim);
 }
 
+/* A veil overlay paints ink, so its own label has to be paper: the reconnecting
+   and connection-lost overlays of the browser preview carry their text colour on
+   the veil element itself. Scoped to the plain `bg-white/*` veil tokens (matched
+   by token, so `dark:bg-white/90` — a button surface, not a veil — is untouched),
+   which keeps dialog scrims out of it: their panels inherit ink for unstyled
+   text, exactly as before. */
+.mono :where(
+		[class~='bg-white/70'],
+		[class~='bg-white/75'],
+		[class~='bg-white/80'],
+		[class~='bg-white/90']
+	) {
+	color: var(--app-bg);
+}
+
 /* Hard-coded white/black utilities flip to whichever palette colour keeps the
    `bg-black text-white` pairs legible in both monochrome themes. */
 .mono :where([class~='bg-white']) {
@@ -648,6 +663,37 @@
 }
 .mono :where([class~='text-black']) {
 	color: var(--app-fg);
+}
+
+/* The veil wipe above matches on a *substring*, so it also catches the fill of
+   any element that merely mentions an alpha utility somewhere in the same class
+   list — which is most of them (`bg-gray-900 ... dark:bg-white/6`). A solid
+   utility is not a wash, though: the two ends of the collapsed ramp are real
+   surfaces, an ink button and a paper card. Re-assert them here, after the
+   wipe, where they win the tie on order alone (`:where()` keeps both rules at
+   the same specificity). Without this an ink primary loses its fill and its
+   paper label lands on paper — the button disappears. */
+.mono :where(
+		[class~='bg-black'],
+		[class~='bg-gray-300'],
+		[class~='bg-gray-400'],
+		[class~='bg-gray-500'],
+		[class~='bg-gray-600'],
+		[class~='bg-gray-700'],
+		[class~='bg-gray-800'],
+		[class~='bg-gray-850'],
+		[class~='bg-gray-900'],
+		[class~='bg-gray-950']
+	) {
+	background-color: var(--app-fg);
+}
+.mono :where(
+		[class~='bg-white'],
+		[class~='bg-gray-50'],
+		[class~='bg-gray-100'],
+		[class~='bg-gray-200']
+	) {
+	background-color: var(--app-bg);
 }
 
 /* Interactive state is a solid inversion. `--app-hover` / `--app-active` are

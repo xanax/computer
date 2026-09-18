@@ -40,7 +40,7 @@ from cptr.models import (
     is_pending_subagent_result_message,
     is_subagent_result_message,
 )
-from cptr.socket.main import emit_to_user
+from cptr.socket.main import emit_to_user, is_chat_visible
 from cptr.utils.ai import (
     ChatCompletionForm,
     generate_json,
@@ -78,6 +78,8 @@ logger = logging.getLogger(__name__)
 
 ASK_USER_NAME = "ask_user"
 DEFAULT_AUTO_RESOLUTION_MS = 120_000
+# Coalesce text deltas into socket frames at most every this many seconds.
+DELTA_FLUSH_INTERVAL_S = 0.05
 ASK_USER_SCHEMA = {
     "name": ASK_USER_NAME,
     "description": "Ask the user one to three material planning questions and wait for their answers.",
@@ -1418,15 +1420,31 @@ async def run_chat_task(
                 "[task %s] internal request creation failed", message_id[:8], exc_info=True
             )
 
-    async def emit(**data):
-        """Stream an output delta to the user."""
-        try:
-            await emit_to_user(user_id, {"chat_id": chat_id, "message_id": message_id, **data})
-        except Exception:
-            # Socket failure must not prevent the queue push below,
-            # otherwise the gateway SSE stream hangs forever.
-            logger.debug("[task %s] emit_to_user failed", message_id[:8], exc_info=True)
-        # Push to gateway queue if present
+    # Text deltas arrive one token per chunk; coalesce them so a long stream
+    # doesn't fan out into one socket frame per token. We flush on a short
+    # timer or immediately before any non-delta event (tool calls, done, ...).
+    delta_buffer = ""
+    delta_flush_task: asyncio.Task | None = None
+
+    async def _emit_payload(**data):
+        """Send a single payload to sockets (gated on chat visibility) and the gateway queue."""
+        # Heavy streaming payloads (deltas / output items) are only useful to a
+        # client that is actually looking at this chat. Hidden tabs/devices
+        # resync from the server via loadChat when they become visible.
+        # Status/done events (title, done, context_usage, approval, ...) are
+        # lightweight and always broadcast so notifications and the sidebar
+        # stay live.
+        heavy = "delta" in data or "output" in data
+        if not heavy or is_chat_visible(user_id, chat_id):
+            try:
+                await emit_to_user(
+                    user_id, {"chat_id": chat_id, "message_id": message_id, **data}
+                )
+            except Exception:
+                # Socket failure must not prevent the queue push below,
+                # otherwise the gateway SSE stream hangs forever.
+                logger.debug("[task %s] emit_to_user failed", message_id[:8], exc_info=True)
+        # The gateway SSE stream is an explicit subscription — always feed it.
         if output_queue is not None:
             if "delta" in data:
                 await output_queue.put({"type": "delta", "content": data["delta"]})
@@ -1437,6 +1455,28 @@ async def run_chat_task(
                     await output_queue.put({"type": "error", "message": data["error"]})
                 else:
                     await output_queue.put({"type": "done", "finish_reason": "stop"})
+
+    async def _drain_delta_buffer() -> None:
+        nonlocal delta_buffer
+        while delta_buffer:
+            chunk, delta_buffer = delta_buffer, ""
+            await _emit_payload(delta=chunk)
+
+    async def _flush_delta_after_delay() -> None:
+        await asyncio.sleep(DELTA_FLUSH_INTERVAL_S)
+        await _drain_delta_buffer()
+
+    async def emit(**data):
+        """Stream an output delta to the user, coalescing text deltas."""
+        nonlocal delta_buffer, delta_flush_task
+        if "delta" in data:
+            delta_buffer += data["delta"]
+            if delta_flush_task is None or delta_flush_task.done():
+                delta_flush_task = asyncio.create_task(_flush_delta_after_delay())
+            return
+        # Non-delta payload: flush pending text first to preserve ordering.
+        await _drain_delta_buffer()
+        await _emit_payload(**data)
 
     async def _emit_done():
         """Emit done=True enriched with chat title and content preview."""

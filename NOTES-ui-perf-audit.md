@@ -127,14 +127,119 @@ We could also expose a dev-only "UI Perf" panel later that reads it back.
 
 5. Optional: listen for `longtask` or use `PerformanceObserver` for paint/measure.
 
-## Next steps if we want to proceed
+## Status: implemented
 
-- Add a migration + simple `UiPerfEvent` model (or just use JSON for v1).
-- Add a small `perf.ts` / `uiMetrics.svelte.ts` collector in frontend.
-- Instrument the key paths (stores + the 4 big components).
-- Wire a flush path (can be fire-and-forget to an existing endpoint or new lightweight one).
-- (Later) a way to view/aggregate the data, or use it to auto-suggest "you have 12 terminals open, consider closing".
+### Storage — `ui_events` table (migration `0005`)
 
-We have almost none of the *data* today, but we have a very clean place to put it (SQLite) and a tab system whose costs are easy to understand once we start measuring.
+Append-only rows, one per sample: `id`, `user_id`, `workspace`, `session_id`,
+`kind`, `label`, `ts` (client `performance.now()`), `duration_ms`, `meta` (JSON),
+`created_at` (server epoch-ms). Indexes on `(kind, created_at)` and
+`(label, created_at)`.
 
-Want me to sketch the table + collector + a couple of instrumentation points?
+- `cptr/models/ui_events.py` — model + `bulk_create` / `recent` / `summary` /
+  `prune` / `clear`.
+- `cptr/migrations/versions/0005_add_ui_events.py`.
+- `cptr/routers/perf.py` — `POST /api/ui-events` (batch ingest, capped at 200
+  events), `GET /api/ui-events/summary`, `GET /api/ui-events/recent`,
+  `POST /api/ui-events/prune`, `DELETE /api/ui-events`.
+
+`summary` returns `count`/`p50`/`p95`/`max`/`mean` per `(kind, label)` — or per
+kind alone when called with a `kind` filter — sorted slowest p95 first, which is
+the order worth fixing things in.
+
+### Collector — `cptr/frontend/src/lib/utils/perf.ts`
+
+In-memory buffer → flush every 5 s or at 40 samples → `POST`. Final flush on
+`pagehide`/`visibilitychange` via `sendBeacon` so samples survive a tab close.
+Best-effort throughout: failures are swallowed and the buffer is capped, so a
+down backend can never slow down or crash the UI. Disable with
+`localStorage['cptr.perf.disabled'] = '1'`.
+
+API: `record`, `trace`, `traceAsync`, `measureToPaint`, `markSince`,
+`perfMount` (Svelte action), plus a `PerformanceObserver` on `longtask`
+(Chromium-only; silently skipped elsewhere).
+
+### Instrumented paths
+
+| kind | where | what it captures |
+| --- | --- | --- |
+| `tab_switch` | `stores.setActiveTab` | state change → paint, with `total_tabs` / `groups` / `tabs_in_group` |
+| `mount` | `use:perfMount={tab.type}` on every `.persisted-tab` (9 sites) | mount → paint per tab type |
+| `dir_list` | `DirectoryPicker.fetchDirectories` | full listDir round-trip + entry count, `network` vs `error` |
+| `dir_navigate` | same | `cache_fresh` vs `cache_stale` hits (no network) |
+| `dir_paint` | same | list arrival → paint |
+| `dir_prefetch` | `DirectoryPicker.prefetch` | hover-warmed cache fills |
+| `long_task` | `PerformanceObserver` | main-thread stalls ≥50 ms with start offset |
+
+Samples carry the active workspace path (`setPerfContext` in `stores.ts`), so a
+`/mnt/c` workspace can be told apart from a native one.
+
+### Reading the data
+
+```bash
+curl -s -b "cptr_session=$TOKEN" localhost:4200/api/ui-events/summary | jq
+curl -s -b "cptr_session=$TOKEN" 'localhost:4200/api/ui-events/summary?kind=tab_switch' | jq
+curl -s -b "cptr_session=$TOKEN" 'localhost:4200/api/ui-events/recent?limit=20' | jq
+```
+
+`meta.total_tabs` vs `p95` on `tab_switch` is the lazy-loading question: if p95
+climbs with tab count, tabs need to mount on first activation rather than all at
+once.
+
+### Still to do
+
+- A settings panel to read this back in-app (needs care for the bw/bw-dark
+  e-ink themes: solid inversion, no grey washes).
+- Retention: `POST /api/ui-events/prune` is manual today; call it on startup or
+  from an automation to keep the table small.
+
+## The WSL cost model behind all of this (measured)
+
+`/mnt/c` goes through the 9p bridge. Measured on this machine:
+
+| operation | ext4 | 9p (/mnt/c) |
+| --- | --- | --- |
+| readdir entry, already-open dir | ~1us | ~7us |
+| open + readdir + close a directory | ~0.04ms | **~5ms** |
+| `stat(2)` one path | ~0.005ms | **~1-5ms** |
+
+Two consequences worth remembering:
+
+1. **Directories, not entries, are the expensive unit.** Listing a 116-entry
+   folder is fine, but *descending* into subdirectories costs ~5ms each, so the
+   cost driver is the number of directories visited.
+2. **d_type is provided by 9p**, so `os.DirEntry.is_dir()/is_file()` are free.
+   Only size/mtime need a `stat`. A walk that classifies entries from the
+   dirent is 2-4x faster than one that stats each entry.
+
+`_list_directory` was fixed first (scandir + `dirs_only` + TTL cache). The same
+reasoning applied to the agent's file-tree tool:
+
+### `runtime._list_tree` (agent `list_directory` tool)
+
+The old non-recursive branch cost was `sum(1 for child in item.rglob("*") if
+child.is_file())` — one `stat(2)` per file just to decide whether it *was* a
+file, run for every subdirectory of the listing, and descending into
+`.git`/`node_modules` that the listing itself hides. On `/mnt/c` that is
+minutes, and it silently inflated every count.
+
+Now: `os.scandir` + dirent classification everywhere, `_TREE_IGNORE` pruned
+*inside* the count walk (counts now match what is displayed), symlinked
+directories are never descended into (no link cycles), and all of it runs under
+a shared `_ScanBudget` — ~1s wall clock plus ceilings on dirs/files/stats/lines.
+Anything not reached is marked `?` and any count that hit a ceiling is marked
+`+`, with a footer line explaining the markers, so an expensive tree degrades
+instead of hanging.
+
+| target | old | new |
+| --- | --- | --- |
+| `/home/brendan/computer` (non-recursive) | 269ms | 1.1ms |
+| `/home/brendan/computer/cptr` (non-recursive) | 861ms | 3.1ms |
+| `/mnt/c/Users/brend/scripts` (non-recursive) | 258ms | 78ms |
+| `/mnt/c/Users/brend` (non-recursive) | >60s | 1.0s (bounded) |
+| `/mnt/c/Users/brend/AppData` (non-recursive) | >60s | 1.0s (bounded) |
+| `/home/brendan` (recursive) | 4.7s / 46143 lines | 164ms / 2010 lines (capped) |
+
+The deadline (not a fixed directory count) is what makes this work on both
+filesystems: on ext4 the whole tree is still walked exactly, because 5000
+directories only cost ~200ms there.

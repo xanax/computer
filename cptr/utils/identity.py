@@ -147,6 +147,28 @@ async def internal_request_for_user(app, user_id: str | None) -> Request:
     return request
 
 
+def _path_for_identity(path: str, identity: ExecutionIdentity) -> str:
+    """Prepend the impersonated user's own bin directories to PATH.
+
+    The server inherits its PATH from whatever launched it, which is normally
+    not the impersonated user's login environment. Prepending their
+    ``~/.local/bin`` (where ripgrep and other user-installed tools live) keeps
+    terminal sessions and command execution consistent with a real login shell.
+    """
+    if IS_WINDOWS or not identity.home:
+        return path
+
+    entries = [entry for entry in path.split(os.pathsep) if entry]
+    home = Path(identity.home)
+    candidates = (home / ".local" / "bin", home / "bin")
+    missing = [str(candidate) for candidate in candidates if str(candidate) not in entries]
+    if not missing:
+        return path
+
+    fallback = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    return os.pathsep.join(missing + (entries or fallback))
+
+
 def env_for(
     identity: ExecutionIdentity,
     cwd: str | Path,
@@ -160,7 +182,10 @@ def env_for(
             "LOGNAME": identity.username,
             "SHELL": identity.shell,
             "PWD": str(cwd),
-            "PATH": env.get("PATH") or "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH": _path_for_identity(
+                env.get("PATH") or "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                identity,
+            ),
             "TERM": env.get("TERM") or "xterm-256color",
         }
     )

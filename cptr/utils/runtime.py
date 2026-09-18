@@ -10,6 +10,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -134,8 +135,10 @@ class Runtime:
         return await _file(await _request_identity(request), _stat, path)
 
     @staticmethod
-    async def list_directory(request: Request, path: str) -> dict[str, Any]:
-        return await _file(await _request_identity(request), _list_directory, path)
+    async def list_directory(
+        request: Request, path: str, dirs_only: bool = False
+    ) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _list_directory, path, dirs_only)
 
     @staticmethod
     async def list_tree(request: Request, path: str, recursive: bool = False) -> dict[str, Any]:
@@ -432,46 +435,100 @@ def _is_text_file(path: Path) -> bool:
         return False
 
 
-def _list_directory(path: str) -> dict[str, Any]:
+def _list_directory(path: str, dirs_only: bool = False) -> dict[str, Any]:
+    """List a directory.
+
+    Uses os.scandir so each entry costs at most one lstat(2). The previous
+    Path-based version issued three to four syscalls per entry (Path.stat,
+    is_symlink, is_dir) and never reused results.
+
+    That matters enormously on non-local filesystems: on WSL's 9p bridge to a
+    Windows drive (/mnt/c) a single stat costs ~1.1ms versus ~0.02ms on ext4,
+    so a 100-entry folder went from ~120ms of syscall time to ~1s. scandir
+    also reuses the readdir dirent type where the filesystem provides it,
+    avoiding the stat entirely.
+
+    dirs_only skips non-directories without stat'ing them, for directory
+    pickers that only ever show folders.
+    """
     target = _path(path)
     try:
-        if not target.exists():
-            raise _missing(path)
-        if not target.is_dir():
-            raise FileError(f"Not a directory: {path}")
-        items = list(target.iterdir())
-    except FileError:
-        raise
+        with os.scandir(target) as scan:
+            entries = []
+            for entry in scan:
+                try:
+                    if dirs_only:
+                        if entry.is_dir(follow_symlinks=False):
+                            st = entry.stat(follow_symlinks=False)
+                            entries.append(
+                                {
+                                    "name": entry.name,
+                                    "type": "directory",
+                                    "size": None,
+                                    "modified": datetime.fromtimestamp(
+                                        st.st_mtime, tz=timezone.utc
+                                    ).isoformat(),
+                                }
+                            )
+                        continue
+
+                    if entry.is_symlink():
+                        # Follow the link for mtime, matching the previous
+                        # behaviour. A broken link degraded to "file" before.
+                        try:
+                            st = entry.stat()
+                        except OSError:
+                            entries.append(
+                                {"name": entry.name, "type": "file", "size": None, "modified": None}
+                            )
+                            continue
+                        entries.append(
+                            {
+                                "name": entry.name,
+                                "type": "symlink",
+                                "size": None,
+                                "modified": datetime.fromtimestamp(
+                                    st.st_mtime, tz=timezone.utc
+                                ).isoformat(),
+                            }
+                        )
+                        continue
+
+                    st = entry.stat(follow_symlinks=False)
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    entries.append(
+                        {
+                            "name": entry.name,
+                            "type": "directory" if is_dir else "file",
+                            "size": None if is_dir else st.st_size,
+                            "modified": datetime.fromtimestamp(
+                                st.st_mtime, tz=timezone.utc
+                            ).isoformat(),
+                        }
+                    )
+                except OSError:
+                    entries.append(
+                        {"name": entry.name, "type": "file", "size": None, "modified": None}
+                    )
+    except FileNotFoundError as exc:
+        raise _missing(path) from exc
+    except NotADirectoryError as exc:
+        raise FileError(f"Not a directory: {path}") from exc
     except PermissionError as exc:
         raise FileError(f"Permission denied: {path}", 403) from exc
+    except OSError as exc:
+        raise FileError(str(exc), 400) from exc
 
-    entries = []
-    for item in items:
-        try:
-            st = item.stat()
-            kind = "symlink" if item.is_symlink() else "directory" if item.is_dir() else "file"
-            entries.append(
-                {
-                    "name": item.name,
-                    "type": kind,
-                    "size": st.st_size if kind == "file" else None,
-                    "modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
-                }
-            )
-        except OSError:
-            entries.append({"name": item.name, "type": "file", "size": None, "modified": None})
-
-    order = {"directory": 0, "symlink": 1, "file": 2}
-    entries.sort(key=lambda entry: (order.get(entry["type"], 2), entry["name"].lower()))
+    if dirs_only:
+        entries.sort(key=lambda entry: entry["name"].lower())
+    else:
+        order = {"directory": 0, "symlink": 1, "file": 2}
+        entries.sort(key=lambda entry: (order.get(entry["type"], 2), entry["name"].lower()))
     return {"path": str(target), "entries": entries}
 
 
-def _list_tree(path: str, recursive: bool = False) -> dict[str, Any]:
-    target = _path(path)
-    if not target.is_dir():
-        raise FileError(f"not a directory: {path}")
-
-    ignore = {
+_TREE_IGNORE = frozenset(
+    {
         ".git",
         "node_modules",
         "__pycache__",
@@ -483,35 +540,195 @@ def _list_tree(path: str, recursive: bool = False) -> dict[str, Any]:
         ".cptr",
         ".svelte-kit",
     }
-    lines = []
+)
+
+# Guard rails for a single listing. The wall-clock deadline is the important
+# one: on WSL's 9p bridge to /mnt/c opening and reading a directory costs
+# ~5ms against ~0.04ms on ext4, and a stat costs ~1-5ms against ~0.005ms, so
+# the same tree is two orders of magnitude more expensive there. The ceilings
+# bound pathological trees on fast local disks; the deadline bounds slow ones.
+_TREE_DEADLINE = 1.0
+_TREE_MAX_DIRS = 5_000
+_TREE_MAX_FILES = 50_000
+_TREE_MAX_STATS = 10_000
+_TREE_MAX_LINES = 2_000
+
+
+class _ScanBudget:
+    """Shared ceiling on how much of a tree one listing will walk."""
+
+    __slots__ = ("_deadline", "dirs", "files", "stats")
+
+    def __init__(
+        self,
+        *,
+        seconds: float = _TREE_DEADLINE,
+        dirs: int = _TREE_MAX_DIRS,
+        files: int = _TREE_MAX_FILES,
+        stats: int = _TREE_MAX_STATS,
+    ) -> None:
+        self._deadline = time.monotonic() + seconds
+        self.dirs = dirs
+        self.files = files
+        self.stats = stats
+
+    def _exhausted(self) -> bool:
+        return self.dirs <= 0 or self.files <= 0 or time.monotonic() > self._deadline
+
+    def claim_dir(self) -> bool:
+        """True if another directory may be opened."""
+        self.dirs -= 1
+        return not self._exhausted()
+
+    def claim_file(self) -> bool:
+        """True if another file may be counted."""
+        self.files -= 1
+        return not self._exhausted()
+
+    def claim_stat(self) -> bool:
+        """True if another size is worth a stat(2)."""
+        self.stats -= 1
+        return not self._exhausted()
+
+
+def _count_files(root: str, budget: _ScanBudget) -> tuple[int, bool]:
+    """Count regular files under root, skipping _TREE_IGNORE directories.
+
+    Returns (count, truncated). Classifies every entry from the readdir dirent
+    type instead of a stat(2) -- on 9p that is ~7us per entry versus ~1-5ms for
+    a stat, and it is exactly what Path.rglob("*") plus Path.is_file() failed
+    to do. Symlinked directories are not descended into, so link cycles cannot
+    trap the walk.
+    """
+    count = 0
+    stack = [root]
+    while stack:
+        if not budget.claim_dir():
+            return count, True
+        try:
+            with os.scandir(stack.pop()) as scan:
+                for entry in scan:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if entry.name not in _TREE_IGNORE:
+                                stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            count += 1
+                            if not budget.claim_file():
+                                return count, True
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return count, False
+
+
+def _list_tree(path: str, recursive: bool = False) -> dict[str, Any]:
+    """Render a directory tree as text.
+
+    Both modes classify entries from the readdir dirent type via os.scandir and
+    only stat(2) files whose size is displayed. That matters on non-local
+    filesystems: the previous version counted files with Path.rglob("*") plus
+    Path.is_file(), i.e. a stat per file just to decide whether it was a file,
+    and it ran that walk for every subdirectory of the listing while descending
+    into .git/node_modules. On WSL's 9p bridge to /mnt/c a single listing of a
+    small folder spent ~0.6s there, and listing a Windows profile directory
+    took minutes: 35 subdirectories alone cost ~390ms.
+
+    The output is bounded (~1s of walking, "?" for anything not reached, "+" for
+    counts that hit a ceiling) so an expensive tree degrades instead of hanging.
+    """
+    target = _path(path)
+    if not target.is_dir():
+        raise FileError(f"not a directory: {path}")
+
+    budget = _ScanBudget()
+    lines: list[str] = []
+    notes: list[str] = []
+    approximate = False
+
     if recursive:
-        for root, dirs, files in os.walk(target):
-            dirs[:] = sorted(d for d in dirs if d not in ignore)
-            rel = Path(root).relative_to(target)
-            for filename in sorted(files):
-                item = Path(root) / filename
-                try:
-                    size = item.stat().st_size
-                except OSError:
-                    size = 0
-                lines.append(f"{rel / filename}  ({_human_size(size)})")
-    else:
-        for item in sorted(target.iterdir()):
-            if item.name in ignore:
+        stack = [("", str(target))]
+        while stack:
+            if len(lines) >= _TREE_MAX_LINES or not budget.claim_dir():
+                notes.append("(truncated: listing limit reached, narrow the path)")
+                break
+            rel, current = stack.pop()
+            try:
+                with os.scandir(current) as scan:
+                    dirs: list[str] = []
+                    files: list[tuple[str, int | None]] = []
+                    for entry in scan:
+                        if entry.name in _TREE_IGNORE:
+                            continue
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                dirs.append(entry.name)
+                            elif budget.claim_stat():
+                                size = entry.stat(follow_symlinks=False).st_size
+                                files.append((entry.name, size))
+                            else:
+                                files.append((entry.name, None))
+                        except OSError:
+                            files.append((entry.name, None))
+            except OSError:
                 continue
-            if item.is_dir():
-                try:
-                    count = sum(1 for child in item.rglob("*") if child.is_file())
-                except (PermissionError, OSError):
-                    count = 0
-                lines.append(f"{item.name}/  ({count} files)")
-            else:
-                try:
-                    size = item.stat().st_size
-                except OSError:
-                    size = 0
-                lines.append(f"{item.name}  ({_human_size(size)})")
-    return {"text": "\n".join(lines) if lines else "(empty directory)"}
+
+            for name, size in sorted(files, key=lambda row: row[0].lower()):
+                child = f"{rel}/{name}" if rel else name
+                if size is None:
+                    approximate = True
+                lines.append(f"{child}  ({'?' if size is None else _human_size(size)})")
+            # Reversed because the stack is a DFS: pop() then walks alphabetically.
+            for name in sorted(dirs, key=str.lower, reverse=True):
+                child = f"{rel}/{name}" if rel else name
+                stack.append((child, os.path.join(current, name)))
+    else:
+        dirs = []
+        files = []
+        try:
+            with os.scandir(target) as scan:
+                for entry in scan:
+                    if entry.name in _TREE_IGNORE:
+                        continue
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            dirs.append(entry.name)
+                        elif budget.claim_stat():
+                            size = entry.stat(follow_symlinks=False).st_size
+                            files.append((entry.name, size))
+                        else:
+                            files.append((entry.name, None))
+                    except OSError:
+                        files.append((entry.name, None))
+        except FileNotFoundError as exc:
+            raise _missing(path) from exc
+        except NotADirectoryError as exc:
+            raise FileError(f"Not a directory: {path}") from exc
+        except PermissionError as exc:
+            raise FileError(f"Permission denied: {path}", 403) from exc
+        except OSError as exc:
+            raise FileError(str(exc), 400) from exc
+
+        for name in sorted(dirs, key=str.lower):
+            if not budget.claim_dir():
+                lines.append(f"{name}/  (?)")
+                approximate = True
+                continue
+            count, capped = _count_files(os.path.join(str(target), name), budget)
+            approximate = approximate or capped
+            suffix = "+ files" if capped else " files"
+            lines.append(f"{name}/  ({count}{suffix})")
+        for name, size in sorted(files, key=lambda row: row[0].lower()):
+            if size is None:
+                approximate = True
+            lines.append(f"{name}  ({'?' if size is None else _human_size(size)})")
+
+    if approximate:
+        notes.append("(+ is a lower bound; ? was not scanned within the listing limit)")
+    if not lines:
+        lines.append("(empty directory)")
+    return {"text": "\n".join(lines + notes)}
 
 
 def _stat(path: str) -> dict[str, Any]:

@@ -21,6 +21,37 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def ensure_user_bin_on_path() -> str:
+    """Prepend per-user bin directories to this process's PATH.
+
+    cptr is usually started without a login shell (systemd, nohup, an IDE task,
+    or a supervisor), so PATH misses ``~/.local/bin`` and ``~/bin``. Tools
+    installed there -- ripgrep, gh, anything from ``pip install --user`` or
+    ``uv tool install`` -- are then invisible to terminals, run_command, and
+    search_files, which silently degrades file search to the slow pure-Python
+    fallback.
+
+    Mutating os.environ here covers every exec path at once: env_for() inherits
+    the result, and so do the ``os.environ.copy()`` paths used in password mode.
+    """
+    if os.name == "nt":
+        return os.environ.get("PATH", "")
+
+    entries = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
+    home = Path.home()
+    candidates = (home / ".local" / "bin", home / "bin")
+    missing = [str(path) for path in candidates if str(path) not in entries]
+    if not missing:
+        return os.pathsep.join(entries)
+
+    fallback = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    os.environ["PATH"] = os.pathsep.join(missing + (entries or fallback))
+    return os.environ["PATH"]
+
+
+ensure_user_bin_on_path()
+
+
 # ── Data directory ──────────────────────────────────────────
 # Where cptr stores its database, config, and user data.
 # Default: ~/.cptr

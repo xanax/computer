@@ -620,6 +620,11 @@
 
 		if (data.chat_id !== chatId) return;
 
+		// Hidden tabs don't render streaming updates — the server doesn't send
+		// them heavy payloads (deltas/output items) while the chat isn't visible.
+		// We resync from the server when this tab becomes active again.
+		if (!active) return;
+
 		if (data.type === 'chat:tasks') {
 			setChatTasks(data.tasks ?? []);
 			return;
@@ -867,6 +872,22 @@
 				.getSocket()
 				?.emit('chat:view', { chat_id: chatId, view_id: tabId, visible: false });
 		};
+	});
+
+	// ── Resync when the tab becomes visible again ────────────────
+	// While hidden, streaming payloads are skipped (server-side and here), so
+	// reload from the server to pick up whatever was produced in the meantime.
+	// svelte-ignore state_referenced_locally -- prev-value transition tracking
+	let prevActive = active;
+	$effect(() => {
+		if (active && !prevActive) {
+			if (chatId) {
+				loadChat(chatId);
+			} else {
+				loadPreviousChats(chatPage);
+			}
+		}
+		prevActive = active;
 	});
 
 	// ── Auto-scroll ─────────────────────────────────────────────

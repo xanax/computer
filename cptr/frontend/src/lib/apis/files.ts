@@ -3,8 +3,30 @@
  */
 import { fetchHandler, fetchJSON, jsonBody } from '$lib/apis';
 
-export const listDir = (path: string) =>
-	fetchJSON<{ entries: unknown[] }>(`/api/workspace/files?path=${encodeURIComponent(path)}`);
+export interface FileEntry {
+	name: string;
+	type: 'directory' | 'file' | 'symlink';
+	size: number | null;
+	modified: string | null;
+}
+
+export interface DirectoryListing {
+	path: string;
+	entries: FileEntry[];
+}
+
+/**
+ * List a directory.
+ *
+ * `dirsOnly` tells the backend to skip non-directories without stat'ing them,
+ * which removes one syscall per file. That is negligible on a local disk but
+ * dominates on WSL's 9p bridge to a Windows drive (/mnt/c), where a single
+ * stat costs ~1ms.
+ */
+export const listDir = (path: string, dirsOnly = false) =>
+	fetchJSON<DirectoryListing>(
+		`/api/workspace/files?path=${encodeURIComponent(path)}${dirsOnly ? '&dirs_only=true' : ''}`
+	);
 
 export const readFile = (path: string) =>
 	fetchHandler(`/api/workspace/files/read?path=${encodeURIComponent(path)}`);

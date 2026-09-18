@@ -135,9 +135,10 @@ async def send_file(request: Request, path: str, *, download: bool = False):
 async def list_directory(
     request: Request,
     path: str = Query(..., description="Absolute path to list"),
+    dirs_only: bool = Query(False, description="Return directories only (skip stat on files)"),
 ):
     try:
-        return DirectoryListing(**await Runtime.list_directory(request, path))
+        return DirectoryListing(**await Runtime.list_directory(request, path, dirs_only))
     except FileError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 

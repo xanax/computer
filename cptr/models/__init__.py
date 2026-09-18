@@ -14,6 +14,7 @@ from cptr.models.chats import (
     is_subagent_result_message,
 )
 from cptr.models.automations import Automation, AutomationRun
+from cptr.models.ui_events import UiEvent
 
 __all__ = [
     "Base",
@@ -31,4 +32,5 @@ __all__ = [
     "is_subagent_result_message",
     "Automation",
     "AutomationRun",
+    "UiEvent",
 ]

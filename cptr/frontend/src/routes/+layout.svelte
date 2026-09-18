@@ -51,6 +51,7 @@
 	} from '$lib/stores/chat';
 	import { refreshAudioState } from '$lib/stores/audio';
 	import SetupWizard from '$lib/components/SetupWizard.svelte';
+	import { initPerf } from '$lib/utils/perf';
 
 	let { children } = $props();
 	let showSettings = $state(false);
@@ -88,6 +89,10 @@
 	};
 
 	onMount(() => {
+		// Start collecting UI perf samples (tab switches, folder nav, mounts,
+		// long tasks). No-op if disabled via localStorage.
+		initPerf();
+
 		const vk = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboardLike }).virtualKeyboard;
 		if (vk) vk.overlaysContent = true;
 

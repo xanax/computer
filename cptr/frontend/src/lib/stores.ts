@@ -28,6 +28,7 @@ import {
 import { listSessions, createSession, deleteSession } from '$lib/apis/terminal';
 import { createBrowserSession, deleteBrowserSession, listBrowserSessions } from '$lib/apis/browser';
 import { changeLocale, i18next } from '$lib/i18n';
+import { measureToPaint, setPerfContext } from '$lib/utils/perf';
 import { requestConfirm } from '$lib/stores/confirm';
 import { streamingChatTabs } from '$lib/stores/chat';
 import { keybindings, loadKeybindings } from '$lib/stores/keybindings';
@@ -295,6 +296,10 @@ function normalizeLayout(
 
 /** The workspace currently displayed in THIS browser tab. Null = welcome page. */
 export const currentWorkspace = writable<WorkspaceState | null>(null);
+
+// Tag UI perf samples with the workspace so slow interactions can be traced
+// back to the directory they happened in (e.g. a /mnt/c workspace).
+setPerfContext(() => ({ workspace: get(currentWorkspace)?.path ?? null }));
 export const homeState = writable<HomeState>({
 	groups: [
 		{
@@ -1385,6 +1390,7 @@ export async function closeTab(
 }
 
 export function setActiveTab(tabId: string, groupId?: string): void {
+	const before = get(currentWorkspace);
 	currentWorkspace.update((ws) => {
 		if (!ws) return ws;
 		const gid = groupId ?? ws.activeGroupId;
@@ -1402,6 +1408,24 @@ export function setActiveTab(tabId: string, groupId?: string): void {
 			})
 		};
 	});
+
+	// Measure the cost of revealing a different tab. With the persisted-tab
+	// layout every tab stays mounted, so a switch is pure layout/paint — which
+	// is exactly what gets expensive once many tabs are open.
+	if (before) {
+		const gid = groupId ?? before.activeGroupId;
+		const group = before.groups.find((g) => g.id === gid);
+		if (group && group.activeTabId !== tabId) {
+			const tab = group.tabs.find((t) => t.id === tabId);
+			let totalTabs = 0;
+			for (const g of before.groups) totalTabs += g.tabs.length;
+			measureToPaint('tab_switch', tab?.type ?? 'unknown', {
+				tabs_in_group: group.tabs.length,
+				groups: before.groups.length,
+				total_tabs: totalTabs
+			});
+		}
+	}
 }
 
 export function setActiveGroup(groupId: string): void {

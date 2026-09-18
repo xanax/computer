@@ -52,6 +52,7 @@
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { TAB_DRAG_MIME } from '$lib/constants';
 	import { isSupportedWorkspacePath } from '$lib/utils/paths';
+	import { perfMount } from '$lib/utils/perf';
 
 	let showPicker = $state(false);
 	let pendingIntent = $state<LaunchIntent | null>(null);
@@ -1036,7 +1037,7 @@
 			/>
 			<div class="pane-content">
 				{#each homePane.tabs.filter((tab) => tab.type === 'chat') as tab (tab.id)}
-					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId}>
+					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId} use:perfMount={tab.type}>
 						<ChatPanel
 							chatId={tab.path?.startsWith('new-') || tab.path?.startsWith('pending-')
 								? undefined
@@ -1050,7 +1051,7 @@
 					</div>
 				{/each}
 				{#each homePane.tabs.filter((tab) => tab.type === 'file' && tab.filePath) as tab (tab.id)}
-					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId}>
+					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId} use:perfMount={tab.type}>
 						<FileEditor
 							filePath={tab.filePath!}
 							tabId={tab.id}
@@ -1060,12 +1061,12 @@
 					</div>
 				{/each}
 				{#each homePane.tabs.filter((tab) => tab.type === 'terminal' && tab.sessionId) as tab (tab.id)}
-					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId}>
+					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId} use:perfMount={tab.type}>
 						<Terminal sessionId={tab.sessionId!} />
 					</div>
 				{/each}
 				{#each homePane.tabs.filter((tab) => tab.type === 'browser' && tab.browserSessionId) as tab (tab.id)}
-					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId}>
+					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId} use:perfMount={tab.type}>
 						<BrowserPreview
 							sessionId={tab.browserSessionId!}
 							groupId={homePane.id}
@@ -1407,12 +1408,12 @@
 		/>
 		<div class="pane-content">
 			{#each group.tabs.filter((tab) => tab.type === 'files') as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId}>
+				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={tab.type}>
 					<FileBrowser />
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'file' && tab.filePath) as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId}>
+				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={tab.type}>
 					<FileEditor
 						filePath={tab.filePath!}
 						tabId={tab.id}
@@ -1422,7 +1423,7 @@
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'chat') as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId}>
+				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={tab.type}>
 					<ChatPanel
 						workspace={$currentWorkspace!.path}
 						chatId={tab.path?.startsWith('new-') || tab.path?.startsWith('pending-')
@@ -1435,12 +1436,12 @@
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'terminal' && tab.sessionId) as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId}>
+				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={tab.type}>
 					<Terminal sessionId={tab.sessionId!} />
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'browser' && tab.browserSessionId) as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId}>
+				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={tab.type}>
 					<BrowserPreview
 						sessionId={tab.browserSessionId!}
 						groupId={group.id}

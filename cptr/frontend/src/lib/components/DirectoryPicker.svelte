@@ -9,6 +9,7 @@
 	import { t } from '$lib/i18n';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { tooltip } from '$lib/tooltip';
+	import { measureToPaint, record } from '$lib/utils/perf';
 
 	interface Props {
 		onclose: () => void;
@@ -35,6 +36,14 @@
 	let history = $state<string[]>([]);
 	let creatingFolder = $state(false);
 	let folderName = $state('');
+
+	// Module-level so it survives modal open/close. Revalidating a listing is
+	// cheap, but the round trip is not — on WSL's 9p bridge to a Windows drive
+	// (/mnt/c) a single listing can cost hundreds of ms, so serve cached
+	// entries instantly and refresh in the background.
+	const LIST_TTL_MS = 10_000;
+	const _dirCache = new Map<string, { at: number; entries: DirEntry[] }>();
+	let _reqSeq = 0;
 
 	// ── Editable path bar ───────────────────────────────────────
 	let editingPath = $state(false);
@@ -85,19 +94,63 @@
 		}
 	});
 
-	async function fetchDirectories(path: string) {
-		loading = true;
+	async function fetchDirectories(path: string, opts: { force?: boolean } = {}) {
+		const t0 = performance.now();
+		const cached = _dirCache.get(path);
+		const fresh = !!cached && Date.now() - cached.at < LIST_TTL_MS;
+		if (cached && (fresh || !opts.force)) {
+			directories = cached.entries;
+			currentPath = path;
+			error = null;
+			loading = false;
+			record('dir_navigate', fresh ? 'cache_fresh' : 'cache_stale', performance.now() - t0, {
+				entries: cached.entries.length
+			});
+			if (fresh) return;
+		}
+
+		const seq = ++_reqSeq;
+		// Only blank the list when we have nothing to show; otherwise keep the
+		// current entries visible (dimmed) so navigation doesn't flash.
+		if (!cached) loading = true;
 		error = null;
 		try {
-			const data = await listDir(path);
-			directories = data.entries.filter((e: DirEntry) => e.type === 'directory');
+			const data = await listDir(path, true);
+			const entries = data.entries.filter((e: DirEntry) => e.type === 'directory');
+			_dirCache.set(path, { at: Date.now(), entries });
+			_dirCache.set(data.path, { at: Date.now(), entries });
+			if (seq !== _reqSeq) return;
+			directories = entries;
 			currentPath = data.path;
+			record('dir_list', 'network', performance.now() - t0, {
+				path,
+				entries: entries.length
+			});
+			measureToPaint('dir_paint', 'network', { path, entries: entries.length });
 		} catch (e: any) {
+			if (seq !== _reqSeq) return;
 			error = e.message || $t('files.failedToLoad');
-			directories = [];
+			if (!cached) directories = [];
+			record('dir_list', 'error', performance.now() - t0, { path });
 		} finally {
-			loading = false;
+			if (seq === _reqSeq) loading = false;
 		}
+	}
+
+	/** Warm the cache for a child dir so the next click is instant. */
+	function prefetch(name: string) {
+		const p = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`;
+		const cached = _dirCache.get(p);
+		if (cached && Date.now() - cached.at < LIST_TTL_MS) return;
+		const t0 = performance.now();
+		listDir(p, true)
+			.then((d) => {
+				const entries = d.entries.filter((e: DirEntry) => e.type === 'directory');
+				_dirCache.set(p, { at: Date.now(), entries });
+				_dirCache.set(d.path, { at: Date.now(), entries });
+				record('dir_prefetch', 'network', performance.now() - t0, { entries: entries.length });
+			})
+			.catch(() => record('dir_prefetch', 'error', performance.now() - t0));
 	}
 
 	function navigateTo(dirName: string) {
@@ -298,7 +351,8 @@
 		const path = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`;
 		try {
 			await createEntry(path, 'directory');
-			await fetchDirectories(currentPath);
+			_dirCache.delete(currentPath);
+			await fetchDirectories(currentPath, { force: true });
 		} catch (e: any) {
 			error = e.message || $t('files.failedToLoad');
 		} finally {
@@ -452,7 +506,7 @@
 			</div>
 		{/if}
 
-		{#if loading}
+		{#if loading && directories.length === 0}
 			<div class="flex items-center justify-center py-8">
 				<Spinner size={16} />
 			</div>
@@ -469,30 +523,44 @@
 				<p class="text-xs text-gray-400 dark:text-gray-600">{$t('directory.noSubdirectories')}</p>
 			</div>
 		{:else}
-			{#each filteredDirs as dir, i (dir.name)}
-				<button
-					data-index={i}
-					class="flex items-center gap-2 w-full h-7 px-2 rounded-xl text-left transition-colors duration-75
+			{#if loading}
+				<!-- Solid ink rule, no animation: a pulsing/partial-opacity bar would
+				     dither into a grey on e-ink and ghost the panel. -->
+				<div class="h-0.5 mx-2 mb-1 rounded-full bg-gray-400 dark:bg-gray-500"></div>
+			{/if}
+			<div class={loading ? 'opacity-50 transition-opacity duration-100' : ''}>
+				{#each filteredDirs as dir, i (dir.name)}
+					<button
+						data-index={i}
+						class="flex items-center gap-2 w-full h-7 px-2 rounded-xl text-left transition-colors duration-75
 							{i === selectedIndex
-						? 'bg-gray-200/50 text-gray-900 dark:bg-white/6 dark:text-white'
-						: 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/4'}"
-					onclick={() => navigateTo(dir.name)}
-					ondblclick={(e) => {
-						e.stopPropagation();
-						const fullPath = currentPath === '/' ? `/${dir.name}` : `${currentPath}/${dir.name}`;
-						addWorkspace(fullPath);
-						goto(`/?workspace=${encodeURIComponent(fullPath)}`);
-						onclose();
-					}}
-					onmouseenter={() => {
-						selectedIndex = i;
-					}}
-				>
-					<Icon name="folder" size={14} class="shrink-0 text-gray-400" />
-					<span class="flex-1 truncate text-xs">{dir.name}</span>
-					<Icon name="chevron-right" size={12} class="shrink-0 text-gray-300 dark:text-gray-700" />
-				</button>
-			{/each}
+							? 'bg-gray-200/50 text-gray-900 dark:bg-white/6 dark:text-white'
+							: 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/4'}"
+						onclick={() => navigateTo(dir.name)}
+						ondblclick={(e) => {
+							e.stopPropagation();
+							const fullPath =
+								currentPath === '/' ? `/${dir.name}` : `${currentPath}/${dir.name}`;
+							addWorkspace(fullPath);
+							goto(`/?workspace=${encodeURIComponent(fullPath)}`);
+							onclose();
+						}}
+						onmouseenter={() => {
+							selectedIndex = i;
+							prefetch(dir.name);
+						}}
+						onfocus={() => prefetch(dir.name)}
+					>
+						<Icon name="folder" size={14} class="shrink-0 text-gray-400" />
+						<span class="flex-1 truncate text-xs">{dir.name}</span>
+						<Icon
+							name="chevron-right"
+							size={12}
+							class="shrink-0 text-gray-300 dark:text-gray-700"
+						/>
+					</button>
+				{/each}
+			</div>
 		{/if}
 	</div>
 
