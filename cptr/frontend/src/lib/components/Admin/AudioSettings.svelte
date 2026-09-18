@@ -20,6 +20,7 @@
 	let hasExistingKey = $state(false);
 	let ttsBaseUrl = $state('https://api.openai.com/v1');
 	let ttsEnabled = $state(false);
+	let ttsProvider = $state<'native' | 'api'>('native');
 	let ttsApiKey = $state('');
 	let ttsModel = $state('tts-1');
 	let ttsVoice = $state('alloy');
@@ -45,6 +46,7 @@
 			hasExistingKey = !!config['audio.stt_api_key'];
 			ttsBaseUrl = (config['audio.tts_base_url'] as string) || 'https://api.openai.com/v1';
 			ttsEnabled = config['audio.tts_enabled'] === true;
+			ttsProvider = config['audio.tts_provider'] === 'native' ? 'native' : 'api';
 			ttsModel = (config['audio.tts_model'] as string) || 'tts-1';
 			ttsVoice = (config['audio.tts_voice'] as string) || 'alloy';
 			ttsFormat = (config['audio.tts_format'] as string) || 'mp3';
@@ -69,6 +71,7 @@
 				'audio.stt_base_url': sttBaseUrl,
 				'audio.stt_model': sttModel,
 				'audio.tts_enabled': ttsEnabled,
+				'audio.tts_provider': ttsProvider,
 				'audio.tts_base_url': ttsBaseUrl,
 				'audio.tts_model': ttsModel,
 				'audio.tts_voice': ttsVoice,
@@ -226,6 +229,23 @@
 				<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
 					{$t('admin.audio.ttsEnabledHint')}
 				</p>
+				<div class="flex items-center justify-between">
+					<span class="text-xs text-gray-600 dark:text-gray-400"
+						>{$t('admin.audio.ttsProvider')}</span
+					>
+					<select
+						bind:value={ttsProvider}
+						class="bg-transparent text-xs text-gray-600 dark:text-gray-400 outline-none cursor-pointer"
+					>
+						<option value="native">{$t('admin.audio.ttsProviderNative')}</option>
+						<option value="api">{$t('admin.audio.ttsProviderApi')}</option>
+					</select>
+				</div>
+				<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+					{ttsProvider === 'native'
+						? $t('admin.audio.ttsProviderNativeHint')
+						: $t('admin.audio.ttsProviderApiHint')}
+				</p>
 				<label class="flex items-center justify-between cursor-pointer">
 					<span class="text-xs text-gray-600 dark:text-gray-400"
 						>{$t('admin.audio.ttsAutoStream')}</span
@@ -240,42 +260,44 @@
 				<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
 					{$t('admin.audio.ttsAutoStreamHint')}
 				</p>
-				<div>
-					<label class="text-xs text-gray-600 dark:text-gray-400" for="tts-base-url"
-						>{$t('connections.baseUrl')}</label
-					>
-					<input
-						id="tts-base-url"
-						type="text"
-						bind:value={ttsBaseUrl}
-						placeholder="https://api.openai.com/v1"
-						class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
-					/>
-				</div>
-				<div>
-					<label class="text-xs text-gray-600 dark:text-gray-400" for="tts-api-key"
-						>{$t('connections.apiKey')}</label
-					>
-					<input
-						id="tts-api-key"
-						type="password"
-						bind:value={ttsApiKey}
-						placeholder={hasExistingTtsKey ? '••••••••' : $t('admin.audio.ttsKeyPlaceholder')}
-						class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
-					/>
-				</div>
-				<div>
-					<label class="text-xs text-gray-600 dark:text-gray-400" for="tts-model"
-						>{$t('automations.model')}</label
-					>
-					<input
-						id="tts-model"
-						type="text"
-						bind:value={ttsModel}
-						placeholder="tts-1"
-						class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
-					/>
-				</div>
+				{#if ttsProvider === 'api'}
+					<div>
+						<label class="text-xs text-gray-600 dark:text-gray-400" for="tts-base-url"
+							>{$t('connections.baseUrl')}</label
+						>
+						<input
+							id="tts-base-url"
+							type="text"
+							bind:value={ttsBaseUrl}
+							placeholder="https://api.openai.com/v1"
+							class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+						/>
+					</div>
+					<div>
+						<label class="text-xs text-gray-600 dark:text-gray-400" for="tts-api-key"
+							>{$t('connections.apiKey')}</label
+						>
+						<input
+							id="tts-api-key"
+							type="password"
+							bind:value={ttsApiKey}
+							placeholder={hasExistingTtsKey ? '••••••••' : $t('admin.audio.ttsKeyPlaceholder')}
+							class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+						/>
+					</div>
+					<div>
+						<label class="text-xs text-gray-600 dark:text-gray-400" for="tts-model"
+							>{$t('automations.model')}</label
+						>
+						<input
+							id="tts-model"
+							type="text"
+							bind:value={ttsModel}
+							placeholder="tts-1"
+							class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+						/>
+					</div>
+				{/if}
 				<div>
 					<label class="text-xs text-gray-600 dark:text-gray-400" for="tts-voice"
 						>{$t('admin.audio.ttsVoice')}</label
@@ -284,25 +306,35 @@
 						id="tts-voice"
 						type="text"
 						bind:value={ttsVoice}
-						placeholder="alloy"
+						placeholder={ttsProvider === 'native'
+							? $t('admin.audio.ttsNativeVoicePlaceholder')
+							: 'alloy'}
 						class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
 					/>
+					<p class="mt-1 text-[0.6875rem] text-gray-400 dark:text-gray-600">
+						{ttsProvider === 'native'
+							? $t('admin.audio.ttsVoiceHintNative')
+							: $t('admin.audio.ttsVoiceHintApi')}
+					</p>
 				</div>
-				<div class="flex items-center justify-between">
-					<span class="text-xs text-gray-600 dark:text-gray-400">{$t('admin.audio.ttsFormat')}</span
-					>
-					<select
-						bind:value={ttsFormat}
-						class="bg-transparent text-xs text-gray-600 dark:text-gray-400 outline-none cursor-pointer"
-					>
-						<option value="mp3">MP3</option>
-						<option value="opus">Opus</option>
-						<option value="aac">AAC</option>
-						<option value="flac">FLAC</option>
-						<option value="wav">WAV</option>
-						<option value="pcm">PCM</option>
-					</select>
-				</div>
+				{#if ttsProvider === 'api'}
+					<div class="flex items-center justify-between">
+						<span class="text-xs text-gray-600 dark:text-gray-400"
+							>{$t('admin.audio.ttsFormat')}</span
+						>
+						<select
+							bind:value={ttsFormat}
+							class="bg-transparent text-xs text-gray-600 dark:text-gray-400 outline-none cursor-pointer"
+						>
+							<option value="mp3">MP3</option>
+							<option value="opus">Opus</option>
+							<option value="aac">AAC</option>
+							<option value="flac">FLAC</option>
+							<option value="wav">WAV</option>
+							<option value="pcm">PCM</option>
+						</select>
+					</div>
+				{/if}
 				<div class="flex items-center justify-between gap-3">
 					<label class="text-xs text-gray-600 dark:text-gray-400" for="tts-playback-speed">
 						{$t('admin.audio.ttsPlaybackSpeed')}

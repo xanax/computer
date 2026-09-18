@@ -1,7 +1,10 @@
-"""Audio router: STT transcription via Whisper-compatible API.
+"""Audio router: STT transcription plus TTS playback.
 
-Supports optional pydub/ffmpeg for compressing and splitting long recordings.
-If pydub is not installed, raw audio is sent directly (works for < 25MB files).
+STT uses a Whisper-compatible API, with optional pydub/ffmpeg for compressing
+and splitting long recordings (raw audio is sent directly when pydub is
+missing, which works for files under 25MB). TTS either posts to an
+OpenAI-compatible ``/audio/speech`` endpoint or synthesizes locally with the
+machine's own voices (see cptr/utils/native_tts.py).
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ from pydantic import BaseModel
 from cptr.models import Config
 from cptr.utils.config import _get_jwt_secret, check_access
 from cptr.utils.crypto import decrypt_key
+from cptr.utils.native_tts import NativeTtsError, is_available as native_tts_available
+from cptr.utils.native_tts import synthesize as native_synthesize
 from cptr.utils.runtime import Runtime, FileError
 
 logger = logging.getLogger(__name__)
@@ -57,6 +62,17 @@ class AudioStateResponse(BaseModel):
     tts_playback_speed: float
     tts_auto_stream_enabled: bool
     voice_mode_stt_mode: str
+    tts_provider: str
+
+
+# "api" uses an OpenAI-compatible /audio/speech endpoint, "native" speaks with the
+# voices already installed on the machine that runs the server.
+TTS_PROVIDERS = ("api", "native")
+
+
+async def _tts_provider() -> str:
+    provider = str(await Config.get("audio.tts_provider") or "api").lower()
+    return provider if provider in TTS_PROVIDERS else "api"
 
 
 def _get_user(request: Request) -> str:
@@ -192,6 +208,9 @@ async def audio_state(request: Request):
 
     tts_key = await Config.get("audio.tts_api_key")
     stt_key = await Config.get("audio.stt_api_key")
+    provider = await _tts_provider()
+    # Native speech needs no credential, only a voice installed on this machine.
+    native_ready = provider == "native" and native_tts_available()
     quality = await Config.get("audio.recording_quality")
     if quality not in ("high", "medium", "low"):
         quality = "high"
@@ -208,12 +227,13 @@ async def audio_state(request: Request):
         stt_configured=bool(stt_key),
         recording_quality=str(quality),
         tts_enabled=await Config.get("audio.tts_enabled") is True,
-        tts_configured=bool(tts_key or stt_key),
+        tts_configured=bool(tts_key or stt_key) or native_ready,
         tts_voice=str((await Config.get("audio.tts_voice")) or "alloy"),
-        tts_format=str((await Config.get("audio.tts_format")) or "mp3"),
+        tts_format="wav" if native_ready else str((await Config.get("audio.tts_format")) or "mp3"),
         tts_playback_speed=playback_speed,
         tts_auto_stream_enabled=await Config.get("audio.tts_auto_stream_enabled") is True,
         voice_mode_stt_mode=str((await Config.get("audio.voice_mode_stt_mode")) or "browser"),
+        tts_provider=provider,
     )
 
 
@@ -461,7 +481,12 @@ def _audio_media_type(fmt: str) -> str:
 
 @router.post("/speech")
 async def speech(request: Request, body: SpeechRequest):
-    """Generate speech audio using an OpenAI-compatible TTS API."""
+    """Generate speech audio with the configured TTS provider.
+
+    ``api`` posts to an OpenAI-compatible ``/audio/speech`` endpoint; ``native``
+    renders WAV with the speech voices already installed on this machine, so TTS
+    works without a provider account.
+    """
     _get_user(request)
 
     text = body.text.strip()
@@ -471,22 +496,41 @@ async def speech(request: Request, body: SpeechRequest):
     if await Config.get("audio.tts_enabled") is not True:
         raise HTTPException(400, "Text-to-speech is disabled in Settings → Audio.")
 
-    api_key_encrypted = await Config.get("audio.tts_api_key")
-    if not api_key_encrypted:
-        api_key_encrypted = await Config.get("audio.stt_api_key")
-    if not api_key_encrypted:
-        raise HTTPException(
-            400,
-            "Text-to-speech not configured. Set up a TTS or STT API key in Settings → Audio.",
-        )
-
-    api_key = decrypt_key(api_key_encrypted, _get_jwt_secret())
-    base_url = ((await Config.get("audio.tts_base_url")) or "https://api.openai.com/v1").rstrip("/")
-    model = (await Config.get("audio.tts_model")) or "tts-1"
+    provider = await _tts_provider()
     voice = body.voice or (await Config.get("audio.tts_voice")) or "alloy"
-    fmt = str((await Config.get("audio.tts_format")) or "mp3").lower()
+
+    api_key = ""
+    base_url = ""
+    model = ""
+    if provider == "native":
+        # The machine's own voices replace the provider call entirely, so there is
+        # nothing to authenticate and no format to choose: SAPI emits WAV.
+        if not native_tts_available():
+            raise HTTPException(
+                400,
+                "This machine has no built-in voices. Switch the TTS provider in "
+                "Settings → Audio to an API provider, or install a system voice.",
+            )
+        model = "native"
+        fmt = "wav"
+    else:
+        api_key_encrypted = await Config.get("audio.tts_api_key")
+        if not api_key_encrypted:
+            api_key_encrypted = await Config.get("audio.stt_api_key")
+        if not api_key_encrypted:
+            raise HTTPException(
+                400,
+                "Text-to-speech not configured. Set up a TTS or STT API key in Settings → Audio.",
+            )
+        api_key = decrypt_key(api_key_encrypted, _get_jwt_secret())
+        base_url = ((await Config.get("audio.tts_base_url")) or "https://api.openai.com/v1").rstrip(
+            "/"
+        )
+        model = (await Config.get("audio.tts_model")) or "tts-1"
+        fmt = str((await Config.get("audio.tts_format")) or "mp3").lower()
 
     payload = {
+        "provider": provider,
         "model": model,
         "input": text,
         "voice": voice,
@@ -503,6 +547,7 @@ async def speech(request: Request, body: SpeechRequest):
         key = _cache_key(
             {
                 "type": "tts",
+                "provider": provider,
                 "base_url": base_url,
                 "model": model,
                 "voice": voice,
@@ -525,30 +570,38 @@ async def speech(request: Request, body: SpeechRequest):
         except FileError:
             pass
 
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as client:
-            resp = await client.post(
-                f"{base_url}/audio/speech",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
+    if provider == "native":
+        try:
+            audio_bytes = await native_synthesize(text, voice)
+        except NativeTtsError as exc:
+            logger.warning("[speech] native TTS error: %s", exc)
+            raise HTTPException(502, f"Native speech error: {exc}")
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as client:
+                resp = await client.post(
+                    f"{base_url}/audio/speech",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=payload,
+                )
+                resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "[speech] TTS API error %s: %s",
+                exc.response.status_code,
+                exc.response.text[:500],
             )
-            resp.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "[speech] TTS API error %s: %s",
-            exc.response.status_code,
-            exc.response.text[:500],
-        )
-        raise HTTPException(502, f"TTS API error: {exc.response.status_code}")
-    except httpx.ConnectError:
-        raise HTTPException(502, "Could not connect to TTS API")
+            raise HTTPException(502, f"TTS API error: {exc.response.status_code}")
+        except httpx.ConnectError:
+            raise HTTPException(502, "Could not connect to TTS API")
+        audio_bytes = resp.content
 
-    if not resp.content:
-        raise HTTPException(502, "TTS API returned empty audio.")
+    if not audio_bytes:
+        raise HTTPException(502, "Text-to-speech returned empty audio.")
 
     cache_state = "disabled"
     if cache_audio_path and cache_json_path:
-        await Runtime.write_file(request, str(cache_audio_path), resp.content)
+        await Runtime.write_file(request, str(cache_audio_path), audio_bytes)
         await Runtime.write_file(
             request,
             str(cache_json_path),
@@ -557,6 +610,7 @@ async def speech(request: Request, body: SpeechRequest):
                     "type": "tts",
                     "text": text,
                     "audio_file": cache_audio_path.name,
+                    "provider": provider,
                     "base_url": base_url,
                     "model": model,
                     "voice": voice,
@@ -568,7 +622,7 @@ async def speech(request: Request, body: SpeechRequest):
         cache_state = "write"
 
     return Response(
-        content=resp.content,
+        content=audio_bytes,
         media_type=_audio_media_type(str(fmt)),
         headers={"X-CPTR-Audio-Cache": cache_state},
     )
