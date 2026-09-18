@@ -103,7 +103,10 @@
 			currentPath = path;
 			error = null;
 			loading = false;
+			// Served from cache: no network at all. Flagged so a 0ms sample is
+			// read as "instant hit", not as a measurement of nothing.
 			record('dir_navigate', fresh ? 'cache_fresh' : 'cache_stale', performance.now() - t0, {
+				cache: true,
 				entries: cached.entries.length
 			});
 			if (fresh) return;

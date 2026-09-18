@@ -31,8 +31,14 @@ DEFAULT_WINDOW_HOURS = 24
 class UiEventIn(BaseModel):
     kind: str
     label: Optional[str] = None
+    # Wall-clock epoch ms (real timeline). Legacy clients sent perf.now().
     ts: float = 0.0
+    # Monotonic page-relative ms, for intra-page gap analysis.
+    perf_ms: Optional[float] = None
     duration_ms: float = 0.0
+    # Per-event workspace: captured at record time, so navigating workspaces
+    # mid-batch can't mislabel a sample. Falls back to the batch value.
+    workspace: Optional[str] = None
     meta: Optional[dict[str, Any]] = None
 
 
@@ -65,11 +71,12 @@ async def ingest(request: Request, batch: UiEventBatch):
     rows = [
         {
             "user_id": user_id,
-            "workspace": batch.workspace,
+            "workspace": event.workspace or batch.workspace,
             "session_id": batch.session_id,
             "kind": event.kind,
             "label": event.label,
             "ts": event.ts,
+            "perf_ms": event.perf_ms,
             "duration_ms": event.duration_ms,
             "meta": event.meta,
         }
@@ -105,6 +112,8 @@ async def recent(
             {
                 "id": row.id,
                 "created_at": row.created_at,
+                "ts": row.ts,
+                "perf_ms": row.perf_ms,
                 "kind": row.kind,
                 "label": row.label,
                 "duration_ms": row.duration_ms,

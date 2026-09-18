@@ -6,6 +6,17 @@
  * browser's own long-task entries, and ships them to the backend in small
  * batches where they land in the `ui_events` table for offline analysis.
  *
+ * Every sample carries two clocks:
+ *   - `ts`      wall clock (Date.now) — a real epoch-ms timeline that survives
+ *               reloads and lets events be ordered across sessions.
+ *   - `perf_ms` `performance.now()`, monotonic per page load, for precise
+ *               intra-page gap analysis free of NTP jumps.
+ *
+ * Every sample also carries *ambient context* — how much UI was open at the
+ * moment it was recorded (`total_tabs`, `groups`, `active_tab`) and whether
+ * the document was hidden/focused. Context is captured at record time, not at
+ * flush time, so it reflects the state the user was actually in.
+ *
  * Design constraints:
  *   - Never blocks the interaction it measures. Reporting happens on an idle
  *     timer (and on unload), never in the hot path.
@@ -21,18 +32,37 @@ const FLUSH_INTERVAL_MS = 5000;
 const MAX_BUFFER = 40;
 /** Guard against a runaway buffer if the backend is down. */
 const HARD_BUFFER_CAP = 400;
+/** Long tasks below this are noise; the platform reports everything >= 50ms. */
+const LONG_TASK_MIN_MS = 80;
+/** A long task is attributed to an interaction that started within this window. */
+const ATTRIBUTION_WINDOW_MS = 1500;
 
 export interface PerfEvent {
+	/** Wall-clock epoch ms — survives reloads, orderable across sessions. */
 	ts: number;
+	/** Monotonic ms since page load — precise intra-page ordering. */
+	perf_ms: number;
 	duration_ms: number;
 	kind: string;
 	label?: string;
+	/** Captured at record time, so navigating workspaces can't mislabel it. */
+	workspace?: string | null;
 	meta?: Record<string, unknown>;
 }
 
-interface PerfContext {
+/**
+ * Ambient state, sampled whenever an event is recorded. `workspace` is lifted
+ * to its own column; every other field is merged into `meta` automatically so
+ * call sites don't have to think about it.
+ */
+export interface PerfContext {
 	workspace?: string | null;
-	userId?: string | null;
+	total_tabs?: number;
+	groups?: number;
+	active_tab?: string | null;
+	hidden?: boolean;
+	focused?: boolean;
+	viewport?: string;
 }
 
 const SESSION_ID = (() => {
@@ -51,6 +81,9 @@ let buffer: PerfEvent[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 
+/** Last interaction seen, used to attribute the long task it caused. */
+let lastActivity: { kind: string; label?: string; at: number } | null = null;
+
 function isEnabled(): boolean {
 	if (typeof window === 'undefined' || typeof performance === 'undefined') return false;
 	try {
@@ -63,13 +96,32 @@ function isEnabled(): boolean {
 
 function safeContext(): PerfContext {
 	try {
-		return contextGetter() ?? {};
+		const ctx = contextGetter() ?? {};
+		// Cheap ambient flags the call sites must never have to remember.
+		if (typeof document !== 'undefined') {
+			ctx.hidden = document.visibilityState === 'hidden';
+			ctx.focused = typeof document.hasFocus === 'function' ? document.hasFocus() : undefined;
+		}
+		if (typeof window !== 'undefined') {
+			ctx.viewport = `${window.innerWidth}x${window.innerHeight}`;
+		}
+		return ctx;
 	} catch {
 		return {};
 	}
 }
 
-/** Register a callback that supplies the current workspace/user for tagging. */
+/** Everything in the context except `workspace`, which gets its own column. */
+function contextMeta(ctx: PerfContext): Record<string, unknown> {
+	const { workspace: _workspace, ...rest } = ctx;
+	const meta: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(rest)) {
+		if (value !== undefined && value !== null) meta[key] = value;
+	}
+	return meta;
+}
+
+/** Register a callback that supplies ambient context for every sample. */
 export function setPerfContext(fn: () => PerfContext): void {
 	contextGetter = fn;
 }
@@ -87,13 +139,22 @@ export function record(
 	meta?: Record<string, unknown>
 ): void {
 	if (!isEnabled()) return;
+	const ctx = safeContext();
+	const perfMs = Math.round(nowMs() * 10) / 10;
 	buffer.push({
-		ts: Math.round(nowMs() * 10) / 10,
+		ts: Date.now(),
+		perf_ms: perfMs,
 		duration_ms: Math.round(durationMs * 10) / 10,
 		kind,
 		label,
-		meta
+		workspace: ctx.workspace ?? null,
+		meta: { ...contextMeta(ctx), ...(meta ?? {}) }
 	});
+	// Remember what the user just did so the next long task can be blamed on it.
+	// Long tasks themselves must not become the "activity" or they chain.
+	if (kind !== 'long_task') {
+		lastActivity = { kind, label, at: perfMs };
+	}
 	if (buffer.length >= MAX_BUFFER) {
 		flush();
 		return;
@@ -115,10 +176,10 @@ function scheduleFlush(): void {
 }
 
 function payload(events: PerfEvent[]): string {
-	const ctx = safeContext();
 	return JSON.stringify({
 		session_id: SESSION_ID,
-		workspace: ctx.workspace ?? null,
+		// Fallback for any event that couldn't resolve a workspace itself.
+		workspace: safeContext().workspace ?? null,
 		events
 	});
 }
@@ -211,6 +272,10 @@ export async function traceAsync<T>(
  * Two rAFs is the standard proxy for "the change is on screen": the first
  * callback runs before the paint that includes the DOM update, the second
  * after it. Good enough to attribute perceived latency to a state change.
+ *
+ * A background tab has its rAFs throttled (or paused entirely), which would
+ * otherwise show up as a huge "duration". We stamp whether the document was
+ * hidden when measurement began so such samples can be discounted.
  */
 export function measureToPaint(
 	kind: string,
@@ -218,9 +283,10 @@ export function measureToPaint(
 	meta?: Record<string, unknown>
 ): void {
 	const t0 = nowMs();
+	const startedHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
 	requestAnimationFrame(() => {
 		requestAnimationFrame(() => {
-			record(kind, label, nowMs() - t0, meta);
+			record(kind, label, nowMs() - t0, { started_hidden: startedHidden, ...meta });
 		});
 	});
 }
@@ -241,10 +307,19 @@ function startLongTaskObserver(): void {
 	if (typeof PerformanceObserver === 'undefined') return;
 	try {
 		const observer = new PerformanceObserver((list) => {
+			const activity = lastActivity;
 			for (const entry of list.getEntries()) {
-				record('long_task', entry.name || 'task', entry.duration, {
-					start: Math.round(entry.startTime)
-				});
+				if (entry.duration < LONG_TASK_MIN_MS) continue;
+				const meta: Record<string, unknown> = { start: Math.round(entry.startTime) };
+				// Blame the interaction that most likely caused the block.
+				if (activity) {
+					const since = entry.startTime - activity.at;
+					if (since >= -50 && since <= ATTRIBUTION_WINDOW_MS) {
+						meta.during = activity.label ? `${activity.kind}:${activity.label}` : activity.kind;
+						meta.since_ms = Math.round(since);
+					}
+				}
+				record('long_task', 'self', entry.duration, meta);
 			}
 		});
 		observer.observe({ entryTypes: ['longtask'] });
@@ -271,16 +346,24 @@ export function bufferedCount(): number {
 
 // ── Svelte action ───────────────────────────────────────────────
 
+export interface MountParams {
+	label: string;
+	/** Whether this tab was the visible one when it mounted. */
+	active?: boolean;
+}
+
 /**
  * Svelte action: measure mount → next paint for an element.
  *
  * Applied to each persisted-tab wrapper so mounting a tab (loading a workspace
  * with many tabs, opening a new one) reports how long it took until that
- * subtree was on screen — for every tab type from a single call site.
+ * subtree was on screen — for every tab type from a single call site. Combined
+ * with the ambient context this answers "does mounting cost grow with the
+ * number of open tabs, and does the active tab pay more than a background one?"
  *
- *   <div use:perfMount={tab.type}> … </div>
+ *   <div use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}> … </div>
  */
-export function perfMount(_node: HTMLElement, label: string | undefined) {
-	measureToPaint('mount', label ?? 'unknown');
+export function perfMount(_node: HTMLElement, params: MountParams) {
+	measureToPaint('mount', params?.label ?? 'unknown', { active: params?.active });
 	return {};
 }

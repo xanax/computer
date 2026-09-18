@@ -49,8 +49,13 @@ class UiEvent(Base):
     kind = Column(Text, nullable=False)
     # Short label for the thing measured (tab type, component name, path, ...).
     label = Column(Text, nullable=True)
-    # performance.now() on the client: monotonic, only comparable within a session.
+    # Client wall-clock ms since epoch — a real timeline that survives reloads
+    # and lets events be ordered across sessions. (Legacy rows written before
+    # 0006 hold page-relative performance.now() values here instead.)
     ts = Column(Float, nullable=False)
+    # performance.now() at record time: monotonic per page load, used for precise
+    # intra-page gaps that are immune to clock adjustments. Null on legacy rows.
+    perf_ms = Column(Float, nullable=True)
     duration_ms = Column(Float, nullable=False)
     # Free-form context: tab counts, entry counts, cache hit/miss, ...
     meta = Column(JSON, nullable=True)
@@ -77,6 +82,7 @@ class UiEvent(Base):
                 kind=row.get("kind") or "unknown",
                 label=row.get("label"),
                 ts=float(row.get("ts") or 0.0),
+                perf_ms=(float(row["perf_ms"]) if row.get("perf_ms") is not None else None),
                 duration_ms=float(row.get("duration_ms") or 0.0),
                 meta=row.get("meta"),
                 created_at=created_at,

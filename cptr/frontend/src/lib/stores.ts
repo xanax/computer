@@ -297,9 +297,6 @@ function normalizeLayout(
 /** The workspace currently displayed in THIS browser tab. Null = welcome page. */
 export const currentWorkspace = writable<WorkspaceState | null>(null);
 
-// Tag UI perf samples with the workspace so slow interactions can be traced
-// back to the directory they happened in (e.g. a /mnt/c workspace).
-setPerfContext(() => ({ workspace: get(currentWorkspace)?.path ?? null }));
 export const homeState = writable<HomeState>({
 	groups: [
 		{
@@ -311,6 +308,27 @@ export const homeState = writable<HomeState>({
 	activeGroupId: 'home',
 	layout: { type: 'group', groupId: 'home' },
 	splitDirection: 'horizontal'
+});
+
+// Ambient context stamped onto EVERY perf sample: which workspace, how much UI
+// was open, and which tab the user was looking at. Captured at record time, so
+// a sample taken mid-navigation is labelled with the state it happened in.
+// This is what lets us answer "does cost grow with tabs open?" for *any* event,
+// not just the ones we remembered to instrument.
+setPerfContext(() => {
+	const ws = get(currentWorkspace);
+	const groups = ws ? ws.groups : get(homeState).groups;
+	const activeGroupId = ws ? ws.activeGroupId : get(homeState).activeGroupId;
+	let totalTabs = 0;
+	for (const g of groups) totalTabs += g.tabs.length;
+	const group = groups.find((g) => g.id === activeGroupId) ?? groups[0];
+	const active = group ? group.tabs.find((t) => t.id === group.activeTabId) : undefined;
+	return {
+		workspace: ws?.path ?? null,
+		total_tabs: totalTabs,
+		groups: groups.length,
+		active_tab: active?.type ?? null
+	};
 });
 
 /** List of all workspace summaries for the sidebar. */
@@ -1417,12 +1435,13 @@ export function setActiveTab(tabId: string, groupId?: string): void {
 		const group = before.groups.find((g) => g.id === gid);
 		if (group && group.activeTabId !== tabId) {
 			const tab = group.tabs.find((t) => t.id === tabId);
-			let totalTabs = 0;
-			for (const g of before.groups) totalTabs += g.tabs.length;
+			const from = group.tabs.find((t) => t.id === group.activeTabId);
+			// total_tabs/groups come from the ambient context; these two are
+			// specific to the switch itself — the size of the group you're in
+			// and which tab you came from.
 			measureToPaint('tab_switch', tab?.type ?? 'unknown', {
 				tabs_in_group: group.tabs.length,
-				groups: before.groups.length,
-				total_tabs: totalTabs
+				from: from?.type ?? null
 			});
 		}
 	}
