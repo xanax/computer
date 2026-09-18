@@ -170,6 +170,8 @@ export async function refreshAudioState() {
 			recording_quality: string;
 			tts_enabled: boolean;
 			tts_configured: boolean;
+			// 'native' speaks with this machine's own voices, 'api' calls a provider.
+			tts_provider?: string;
 			tts_voice: string;
 			tts_format: string;
 			tts_playback_speed?: number;
