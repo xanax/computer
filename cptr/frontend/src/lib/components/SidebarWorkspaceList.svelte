@@ -408,10 +408,8 @@
 		{@const isLoading = wsChatsLoading.has(ws.path)}
 		<div class="ws-item">
 			<div
-				class="group flex items-center gap-1 w-full h-7 px-2 rounded-lg text-xs font-medium transition-colors duration-100
-				{ws.path === currentPath
-					? 'bg-gray-200/50 text-gray-900 dark:bg-white/8 dark:text-white'
-					: 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}"
+				class="ws-heading group flex items-center gap-1 w-full h-7 px-2 rounded-lg text-xs font-medium transition-colors duration-100"
+				class:ws-heading-current={ws.path === currentPath}
 			>
 				<a
 					href="/?workspace={encodeURIComponent(ws.path)}"
@@ -444,7 +442,7 @@
 					<span class="min-w-0 truncate text-left">{ws.name}</span>
 					{#if ws.unread_count > 0}
 						<span
-							class="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-md bg-sky-500/10 px-1 text-[0.625rem] font-semibold text-sky-600 dark:bg-sky-400/10 dark:text-sky-300"
+							class="ws-unread inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-md bg-sky-500/10 px-1 text-[0.625rem] font-semibold text-sky-600 dark:bg-sky-400/10 dark:text-sky-300"
 						>
 							{new Intl.NumberFormat(undefined, {
 								notation: 'compact',
@@ -454,7 +452,7 @@
 					{/if}
 				</a>
 				<span
-					class="flex items-center justify-center w-4 h-4 shrink-0 text-gray-400 opacity-0 group-hover:opacity-100 hover:text-gray-600 dark:hover:text-gray-300 transition-all duration-75"
+					class="ws-heading-action flex items-center justify-center w-4 h-4 shrink-0 text-gray-400 opacity-0 group-hover:opacity-100 hover:text-gray-600 dark:hover:text-gray-300 transition-all duration-75"
 					role="button"
 					tabindex="-1"
 					onclick={(e) => openWsMenu(e, ws.path)}
@@ -464,7 +462,7 @@
 				</span>
 				{#if $chatEnabled}
 					<span
-						class="flex items-center justify-center w-4 h-4 shrink-0 text-gray-400 opacity-0 group-hover:opacity-100 hover:text-gray-600 dark:hover:text-gray-300 transition-all duration-75"
+						class="ws-heading-action flex items-center justify-center w-4 h-4 shrink-0 text-gray-400 opacity-0 group-hover:opacity-100 hover:text-gray-600 dark:hover:text-gray-300 transition-all duration-75"
 						role="button"
 						tabindex="-1"
 						onclick={() => newChat(ws.path)}
@@ -560,6 +558,36 @@
 
 	.ws-item {
 		margin-bottom: 0.125rem;
+	}
+
+	/* The workspace name heads its group of chats, so it is drawn as an inverted
+	   plate: ink surface, paper text and icons. That is the mono palette's own
+	   "solid inversion" rule, and it also gives the default themes a solid bar
+	   where weight and size alone are not enough. The open workspace keeps its
+	   plate and gains a paper hairline frame — the only "selected" mark that
+	   survives a pure ink/paper palette. */
+	.ws-heading {
+		background: var(--app-fg);
+		color: var(--app-bg);
+		border: 1px solid transparent;
+		margin-bottom: 0.125rem;
+	}
+
+	.ws-heading-current {
+		border-color: var(--app-bg);
+	}
+
+	/* Everything inside the plate has to be paper: the sidebar's greys (and the
+	   mono ramp, where grey collapses to ink) would otherwise paint ink on ink. */
+	.ws-heading .ws-icon-toggle .ws-icon-chevron,
+	.ws-heading .ws-heading-action {
+		color: var(--app-bg);
+	}
+
+	/* The unread count is a paper chip cut into the ink plate. */
+	.ws-heading .ws-unread {
+		background: var(--app-bg);
+		color: var(--app-fg);
 	}
 
 	.ws-icon-toggle {
