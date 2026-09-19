@@ -2,13 +2,19 @@
 #
 # Tab-separated: id <TAB> kind <TAB> path <TAB> pattern <TAB> note
 #
+# ids: B-* are the bug/fix ledger ids from BUGS.md (one row per ledger entry).
+#      P-* are probe-only rows for fork features/files with no ledger entry.
+#
 # kind:
 #   fix   pattern is our fix's signature.  found in upstream = merged upstream,
 #         our patch is now redundant (delete it at the next sync).
 #         not found = still fork-only, patch still needed.
 #   bug   pattern is the *buggy* code.  found in upstream = bug still present
 #         upstream (candidate for an upstream issue).  not found = gone.
-#   file  whole-file check: does upstream have this fork-only file at all?
+#   file  existence check: does upstream have something at this fork-only path?
+#         rows carry NO pattern column (`id<TAB>file<TAB>path<TAB>note`) because a
+#         tab is IFS whitespace and `read` collapses runs of it, so an empty
+#         field cannot be expressed; answered with `git cat-file -e`.
 #   feature  pattern is a fork feature's signature.  found in upstream = they
 #         shipped the same thing (expect conflicts); not found = still ours.
 #
@@ -20,9 +26,12 @@ B-001	fix	cptr/utils/git.py	_PATHSPEC_NO_MATCH	staging a path that matches nothi
 B-002	fix	cptr/frontend/src/lib/components/Terminal.svelte	geometrychange	on-screen keyboard resize / visualViewport handling
 B-003	bug	cptr/frontend/src/lib/components/chat/SendButton.svelte	text-white bg-gray-200	idle send arrow: white on gray-200, 1.24:1 (measured)
 B-004	bug	cptr/utils/runtime.py	rglob	tree listing stats every entry and descends .git/node_modules (coarse probe)
-B-005	feature	cptr/frontend/src/app.css	.mono	paper/ink (e-ink) palettes and the mono utility layer
-B-006	file	cptr/models/ui_events.py		UI perf telemetry table
-B-007	file	cptr/routers/perf.py		ui-events ingest + summary/recent/prune endpoints
-B-008	file	cptr/frontend/src/lib/utils/perf.ts	client-side perf collector
-B-009	file	cptr/utils/native_tts.py	on-device (SAPI / say / espeak) TTS provider
-B-010	file	cptr/frontend/src/lib/components/SidebarWorkspaceList.svelte	workspace heading plates (file exists upstream, we changed it)
+P-001	feature	cptr/frontend/src/app.css	.mono	paper/ink (e-ink) palettes and the mono utility layer
+P-002	file	cptr/models/ui_events.py		UI perf telemetry table
+P-003	file	cptr/routers/perf.py		ui-events ingest + summary/recent/prune endpoints
+P-004	file	cptr/frontend/src/lib/utils/perf.ts		client-side perf collector
+P-005	file	cptr/utils/native_tts.py		on-device (SAPI / say / espeak) TTS provider
+P-006	file	cptr/frontend/src/lib/components/SidebarWorkspaceList.svelte		workspace heading plates (file exists upstream, we changed it)
+B-009	fix	cptr/frontend/src/lib/components/chat/ChatPanel.svelte	function startCommandSessionsPolling() {	command-session polling gated on tab/document visibility
+B-010	bug	cptr/utils/chat_task.py	existing_summary = m.chat_summary	compaction replays from the *oldest* checkpoint on a branch, not the newest
+B-011	file	scripts/fork-status.sh	probe runner: pattern test + file-kind existence check (fork-only tooling)

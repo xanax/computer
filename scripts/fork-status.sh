@@ -45,7 +45,25 @@ while IFS=$'\t' read -r id kind path pattern note; do
 	case "$id" in ''|'#'*) continue ;; esac
 	kind=$(printf '%s' "$kind" | tr -d ' ')
 	found=0
-	if git show "$UPSTREAM_REF:$path" 2>/dev/null | grep -Fq -- "$pattern"; then
+	# A tab is IFS *whitespace*, so `read` collapses runs of it: `a<TAB><TAB>b`
+	# yields two fields, not three. An empty pattern field is therefore
+	# unrepresentable, and a `file` row (`id<TAB>file<TAB>path<TAB>note`, no
+	# pattern) arrives with its note in $pattern. Treat that as the note, and
+	# answer `file` rows by existence rather than by content — which is what the
+	# kind always meant: "does upstream have something at this fork-only path?"
+	if [ "$kind" = file ] && [ -n "$pattern" ]; then
+		note=$pattern
+		pattern=
+	fi
+	if [ "$kind" = file ]; then
+		git cat-file -e "$UPSTREAM_REF:$path" 2>/dev/null && found=1
+	# `grep -c`, not `grep -q`: -q exits at the first match, which can kill
+	# `git show` with SIGPIPE while it is still writing out a file larger than
+	# the pipe buffer, and `pipefail` then reports the *pipeline* as failed — so a
+	# pattern that is plainly present reads as absent. Measured on a 119 KB file:
+	# 9/40 false negatives, non-deterministically. -c drains the input, so the
+	# writer always finishes.
+	elif git show "$UPSTREAM_REF:$path" 2>/dev/null | grep -Fc -- "$pattern" >/dev/null; then
 		found=1
 	fi
 	case "$kind" in
