@@ -21,6 +21,7 @@ Based on upstream `f9d1d8c` (2026-08-16).
 - **Chats close rather than being marked unread,** with an × on the chat row and a close action at the end of a conversation. Closed chats return automatically when new activity makes them unread.
 - **e-ink themes `bw` and `bw-dark`:** pure ink-on-paper, no greyscales and no dithering. Mid-tones are solid inversions (ink surface with paper text) or an ink border; code and diagram surfaces stay paper.
 - Workspace headings render as inverted ink plates in every theme — ink background, paper label/icons, unread as a paper chip.
+- **Compaction is visible in the transcript.** A checkpoint now draws a labelled rule above the message it was stamped on ("Earlier messages summarized"), so a chat that silently lost its middle is legible. `_message_dict()` reports `summary_chars` per message (the length only — the text stays in the system prompt), and a mid-turn `chat:compacted` socket event stamps the marker without waiting for a reload. Previously compaction was invisible: the transcript just got shorter.
 
 ### Changed
 

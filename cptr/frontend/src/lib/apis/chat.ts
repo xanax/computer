@@ -14,6 +14,9 @@ export interface ChatMessageRow {
 	usage: Record<string, number> | null;
 	meta: Record<string, any> | null;
 	created_at: number;
+	/** Non-zero when this message is a compaction checkpoint: everything *above*
+	 *  it has been replaced by a rolling summary (whose length this is). */
+	summary_chars?: number;
 }
 
 export interface ChatInfo {

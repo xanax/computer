@@ -33,6 +33,8 @@ def _msg(mid: str, parent_id: str | None, role: str, summary: str | None = None)
         output=None,
         meta=None,
         usage=None,
+        model=None,
+        created_at=0,
     )
 
 
@@ -113,6 +115,24 @@ def test_checkpoint_on_a_sibling_branch_is_ignored(history):
 
     assert [m["id"] for m in messages] == ["a1", "u2b", "a2b"]
     assert summary == "summarises u1"
+
+
+def test_message_payload_marks_a_checkpoint_without_sending_the_summary():
+    """The transcript draws its divider from `summary_chars`, not from the text.
+
+    The summary itself is ~3 KB and is replayed through the system prompt, so it
+    must stay out of the per-message payload that loadChat returns.
+    """
+    from cptr.routers.chat import _message_dict
+
+    checkpoint = _msg("u6", "a5", "user", summary="x" * 3000)
+    plain = _msg("a6", "u6", "assistant")
+
+    marked = _message_dict(checkpoint)
+    assert marked["summary_chars"] == 3000
+    assert "chat_summary" not in marked
+
+    assert _message_dict(plain)["summary_chars"] == 0
 
 
 def test_checkpoint_id_is_the_user_turn_that_starts_the_keep_zone():

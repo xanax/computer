@@ -666,6 +666,17 @@
 			return;
 		}
 
+		// Compaction ran mid-turn: stamp the checkpoint so the divider appears now
+		// instead of on the next reload (which rebuilds the same field server-side).
+		if (data.type === 'chat:compacted') {
+			const checkpoint = allMessages.find((m) => m.id === data.checkpoint_message_id);
+			if (checkpoint) {
+				checkpoint.summary_chars = data.summary_chars ?? 1;
+				allMessages = [...allMessages];
+			}
+			return;
+		}
+
 		// Title updates also keep open chat tabs in sync.
 		if (data.title && tabId) {
 			chatTitle = data.title;
@@ -1940,6 +1951,18 @@
 						<div bind:this={loadSentinelEl} class="h-1 w-full" aria-hidden="true"></div>
 					{/if}
 					{#each visiblePath as { msg, siblingIds, siblingIndex } (msg.id)}
+						<!-- Compaction checkpoint: everything above this line has been
+						     folded into a rolling summary (kept in the system prompt). -->
+						{#if msg.summary_chars}
+							<div
+								class="flex items-center gap-3 px-1 py-2 text-[0.625rem] text-gray-400 dark:text-gray-600 select-none"
+								title={$t('chat.compactedDividerTitle')}
+							>
+								<span class="h-px flex-1 bg-gray-300 dark:bg-gray-700"></span>
+								<span class="shrink-0">{$t('chat.compactedDivider')}</span>
+								<span class="h-px flex-1 bg-gray-300 dark:bg-gray-700"></span>
+							</div>
+						{/if}
 						{#if msg.role === 'user'}
 							<UserMessage
 								content={msg.content}

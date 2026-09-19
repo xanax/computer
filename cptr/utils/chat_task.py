@@ -2254,6 +2254,16 @@ async def run_chat_task(
                 await ChatMessage.update(checkpoint_message_id, chat_summary=summary)
                 loaded_summary = summary
 
+                # Tell any open tab where the checkpoint landed, so it can show the
+                # "earlier messages summarized" divider without waiting for a reload.
+                # Not a heavy payload, so _emit_payload broadcasts it even when the
+                # chat is not the visible one (the sidebar marker stays honest).
+                await _emit_payload(
+                    type="chat:compacted",
+                    checkpoint_message_id=checkpoint_message_id,
+                    summary_chars=len(summary),
+                )
+
                 # Append summary to system prompt (works for all providers)
                 memory_message, memory_files = _memory_recall_inputs(keep_zone, regeneration_prompt)
                 system = await _load_system_prompt(

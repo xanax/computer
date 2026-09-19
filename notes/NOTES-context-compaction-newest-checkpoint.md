@@ -103,6 +103,46 @@ Every chat in the set differs, which is the expected shape: a chat is only in
 the set if the newest checkpoint is not the first, i.e. exactly the cases where
 the two rules disagree by construction.
 
+## Seeing it happen: the checkpoint marker
+
+Compaction used to be silent: the transcript just got shorter and the checkpoint
+was a row attribute nothing read. Two signals now carry it to the UI, and they
+have to agree, since one is live and one is the reload path.
+
+- **Persisted** — `_message_dict()` (the per-message payload of `GET /api/chat`)
+  reports `summary_chars`, the length of that row's summary, `0` when there is
+  none. Not the summary *text*: that is ~2–3 KB, reaches the model through the
+  system prompt, and would otherwise ride along in every `loadChat` response.
+  Measured over this install's DB: 373 messages serialised, 108 flagged, all
+  lengths matching the stored summary, no text leaked.
+- **Live** — the compaction branch of `run_chat_task` emits
+  `chat:compacted {checkpoint_message_id, summary_chars}` right after
+  `ChatMessage.update(...)` writes the checkpoint, so the divider appears
+  *during* the turn rather than at the next reload. The payload has no `delta` /
+  `output` key, so the visibility gate broadcasts it to every tab.
+
+`ChatPanel.svelte` renders the marker as a hairline rule with a small label
+(`chat.compactedDivider`, "Earlier messages summarized") above the checkpoint
+message — the first message the model still sees in full, everything above it
+having been folded into the summary. It is drawn from `visiblePath`, so it
+appears only once the checkpoint is scrolled into view, same as any other row.
+
+**Manual compaction** (`/compact` → `POST /api/chat/compact`) needs no event: it
+answers with `context_usage` and the client reloads the chat, which rebuilds
+`summary_chars` from the new row.
+
+### Checking it
+
+- `notes/_scratch/compaction-marker-check.py` — asserts the emit sits inside
+  `run_chat_task` (by `ast`, so a refactor that moves it out of scope fails),
+  after the checkpoint write, with exactly those three kwargs; then serialises
+  every checkpoint-carrying chat in a DB *copy* and checks the payload contract
+  above.
+- The server log already timestamped each compaction before this change —
+  `[task <id>] compacted: checkpoint=<id> dropped N msgs, kept M, summary=K chars`
+  (`cptr-start.log`), which is the other way to answer "did it run?".
+- Unit test `test_message_payload_marks_a_checkpoint_without_sending_the_summary`.
+
 ## Note on the tests' shape
 
 The regression test asserts on the *replayed set* (`["u3", "a3"]`), not on an

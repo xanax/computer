@@ -724,6 +724,11 @@ def _message_dict(m) -> dict:
         "usage": m.usage,
         "meta": m.meta,
         "created_at": m.created_at,
+        # 0 when this message carries no compaction checkpoint. The frontend only
+        # needs to know *that* a checkpoint is here (and how big the summary is);
+        # the summary text itself travels in the system prompt instead, which keeps
+        # ~3 KB per checkpoint out of every loadChat response.
+        "summary_chars": len(m.chat_summary or ""),
     }
     live = get_live_state(m.id)
     if live:

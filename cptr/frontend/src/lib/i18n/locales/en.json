@@ -787,6 +787,8 @@
 	"chat.compactSkipped": "Nothing to compact yet",
 	"chat.compactFailed": "Failed to compact context",
 	"chat.compactNoChat": "Start a chat before compacting",
+	"chat.compactedDivider": "Earlier messages summarized",
+	"chat.compactedDividerTitle": "Compacted context — the turns above this line were replaced by a rolling summary.",
 	"chat.forking": "Forking chat...",
 	"chat.forkDone": "Chat forked",
 	"chat.forkFailed": "Failed to fork chat",
