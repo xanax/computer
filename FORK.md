@@ -56,6 +56,7 @@ The same `ui_events` pipeline is deliberately best-effort: it buffers, flushes e
 - **Directory download as zip** in the file browser.
 - **Tabs and sidebar:** workspace folders start expanded, chats close rather than being force-marked unread, active/muted font colours corrected.
 - **Terminal shortcut bar** (Tab/Esc/Ctrl row) can be switched off in Settings → Appearance, for when you are typing on a real keyboard.
+- **`.github/` deleted.** Upstream's `Docker (GHCR)`, `Publish to PyPI`, and `Release` workflows, plus `FUNDING.yml`, assumed this repository publishes images and packages. It does not, so the only thing they did here was fire a GHCR build on every push to `main`. This is a deliberate divergence: `git merge upstream/main` will keep trying to restore them, and `git diff upstream/main` will always show the deletion. Bring them back if this fork ever needs to publish.
 
 ### Themes for e-ink displays
 
