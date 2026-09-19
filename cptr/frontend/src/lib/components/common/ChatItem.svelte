@@ -46,8 +46,9 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-	class="flex items-center gap-1.5 w-full h-7 px-2 rounded-lg cursor-pointer transition-colors duration-75
+	class="chat-item flex items-center gap-1.5 w-full h-7 px-2 rounded-lg cursor-pointer transition-colors duration-75
 		hover:bg-gray-50/50 dark:hover:bg-white/[0.02]"
+	class:chat-item-selected={isSelected}
 	role="button"
 	tabindex="0"
 	{onclick}
@@ -109,3 +110,18 @@
 		</button>
 	{/if}
 </div>
+
+<style>
+	/* The open chat is marked with a hairline frame rather than a fill, so the
+	   same rule reads on every palette. The frame is always reserved (as a
+	   transparent border) so selecting a row does not shift its contents. */
+	.chat-item {
+		border: 1px solid transparent;
+	}
+
+	/* --app-fg-muted is the theme's mid ink in the tinted palettes and solid ink
+	   in the monochrome (e-ink) ones, so the frame never lands on a grey. */
+	.chat-item-selected {
+		border-color: var(--app-fg-muted);
+	}
+</style>

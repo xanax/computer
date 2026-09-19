@@ -536,15 +536,6 @@
 		if (tabId) updateTab(tabId, id, chat?.title || $t('chat.fallbackTitle'));
 	}
 
-	/**
-	 * Close ("conclude") the current chat: it drops out of the sidebar and we
-	 * return to the landing page, where it stays available to reopen.
-	 */
-	function closeCurrentChat() {
-		if (chatId) setChatClosed(chatId, true);
-		if (onopenchat) onopenchat();
-	}
-
 	function handleCloseFromHistory(id: string) {
 		setChatClosed(id, true);
 		previousChats = previousChats.map((c) =>
@@ -2059,22 +2050,6 @@
 					onqueueedit={handleQueueEdit}
 					onqueuedelete={handleQueueDelete}
 				/>
-				{#if chatId && hasChatContent && !sending && !streaming}
-					<div
-						class="{$widescreenMode ? 'max-w-full' : 'max-w-2xl'} mx-auto w-full pt-2 flex justify-center"
-					>
-						<button
-							type="button"
-							class="app-interactive flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[0.6875rem] text-gray-500 dark:text-gray-400 transition-colors"
-							style="border-color: var(--app-border);"
-							onclick={closeCurrentChat}
-							use:tooltip={$t('chat.closeHint')}
-						>
-							<Icon name="xmark" size={11} />
-							{$t('chat.close')}
-						</button>
-					</div>
-				{/if}
 			</div>
 		</div>
 	{/if}
