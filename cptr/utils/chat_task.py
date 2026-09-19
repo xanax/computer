@@ -985,6 +985,10 @@ async def _load_message_history(chat_id: str, message_id: str) -> tuple[list[dic
 
     If any message in the chain has a chat_summary, everything before it
     is skipped and the summary is returned separately for the system prompt.
+    When a branch carries several checkpoints, the most recent one wins: each
+    new summary absorbs the previous one, so the latest is the tightest, and
+    superseded checkpoints are left in place (they may be the active summary
+    for a sibling branch that diverged before the newest one).
 
     Returns (messages, chat_summary_or_None).
     """
@@ -999,13 +1003,19 @@ async def _load_message_history(chat_id: str, message_id: str) -> tuple[list[dic
         cur = msg_map.get(cur.parent_id) if cur.parent_id else None
     chain.reverse()  # root → leaf
 
-    # Find the most recent message with a chat_summary
+    # Find the most recent message with a chat_summary. Scan to the end rather
+    # than stopping at the first hit: a repeatedly compacted branch stacks
+    # checkpoints, and breaking early would resume from the *oldest* one,
+    # re-sending history that later summaries already cover (and re-summarizing
+    # it on the next compaction).
     existing_summary = None
+    checkpoint_index = -1
     for i, m in enumerate(chain):
         if m.chat_summary:
-            chain = chain[i:]  # keep this message and everything after
-            existing_summary = m.chat_summary
-            break
+            checkpoint_index = i
+    if checkpoint_index >= 0:
+        existing_summary = chain[checkpoint_index].chat_summary
+        chain = chain[checkpoint_index:]  # keep this message and everything after
 
     result = []
     for m in chain:
