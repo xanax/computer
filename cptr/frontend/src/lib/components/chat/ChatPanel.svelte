@@ -164,6 +164,29 @@
 	const TTS_MAX_PREFETCH = 2;
 	let unbindSocketListeners: (() => void) | null = null;
 	let commandSessionsTimer: ReturnType<typeof setInterval> | null = null;
+	// Poll command sessions only while THIS chat tab is visible. A workspace can
+	// have many chat tabs mounted at once; polling from every one of them (even
+	// the hidden ones) was the single biggest source of background traffic
+	// (thousands of /api/terminal/sessions hits per hour).
+	let docVisible = $state(
+		typeof document !== 'undefined' ? document.visibilityState === 'visible' : true
+	);
+
+	function handleVisibilityChange() {
+		docVisible = document.visibilityState === 'visible';
+	}
+
+	function startCommandSessionsPolling() {
+		if (commandSessionsTimer) return;
+		refreshCommandSessions();
+		commandSessionsTimer = setInterval(refreshCommandSessions, 5000);
+	}
+
+	function stopCommandSessionsPolling() {
+		if (!commandSessionsTimer) return;
+		clearInterval(commandSessionsTimer);
+		commandSessionsTimer = null;
+	}
 
 	onMount(() => {
 		if (initialChatId || typeof sessionStorage === 'undefined') return;
@@ -790,9 +813,8 @@
 		} else {
 			loadPreviousChats();
 		}
-		refreshCommandSessions();
-		commandSessionsTimer = setInterval(refreshCommandSessions, 5000);
 		window.addEventListener('computer:inspectCommandSession', handleInspectCommandSession);
+		document.addEventListener('visibilitychange', handleVisibilityChange);
 
 		const offChat = socketStore.on('events:chat', handleSocketEvent);
 		const offConnect = socketStore.on('connect', handleReconnect);
@@ -809,6 +831,7 @@
 		if (commandSessionsTimer) clearInterval(commandSessionsTimer);
 		commandSessionsTimer = null;
 		window.removeEventListener('computer:inspectCommandSession', handleInspectCommandSession);
+		document.removeEventListener('visibilitychange', handleVisibilityChange);
 		if (landingRefreshTimer) clearTimeout(landingRefreshTimer);
 		if (taskClearTimer) clearTimeout(taskClearTimer);
 		// Don't clear streamingChatTabs here -- the global listener in
@@ -901,6 +924,18 @@
 			}
 		}
 		prevActive = active;
+	});
+
+	// ── Command-session polling gate ────────────────────────────
+	// Only poll while this tab is the visible one AND the document is visible.
+	// Hidden chat tabs stay mounted (persisted-tab layout) but must not keep
+	// hammering the server every 5s.
+	$effect(() => {
+		if (active && docVisible && chatId) {
+			startCommandSessionsPolling();
+		} else {
+			stopCommandSessionsPolling();
+		}
 	});
 
 	// ── Auto-scroll ─────────────────────────────────────────────
