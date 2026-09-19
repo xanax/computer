@@ -10,7 +10,7 @@ not when it was created:
 
 | Host | Port | Build | Keyboard fix |
 |---|---|---|---|
-| `cptr.aijly.com` | 4200 | your `main` (`8e539fd`): all local changes | **yes** |
+| `cptr.aijly.com` | 4200 | your `main` (`ba7f8e8`): all local changes | **yes** |
 | `cptr-fixes.aijly.com` | 4202 | `upstream/main` + the fix **only** — the PR commit | **yes** |
 | `cptr-upstream.aijly.com` | 4201 | `upstream/main` (`f9d1d8c`), unpatched | no |
 
@@ -24,7 +24,7 @@ is involved. `cptr-upstream` is the control.
 Bundle each lane actually serves (`geometrychange` is the fix's marker):
 
 ```
-cptr           :4200 -> _app/immutable/nodes/0.CK5WlHHM.js   kb-fix: 1
+cptr           :4200 -> _app/immutable/nodes/0.2nInZDpm.js   kb-fix: 1
 cptr-fixes     :4202 -> _app/immutable/nodes/0.BHg5zzqw.js   kb-fix: 1
 cptr-upstream  :4201 -> _app/immutable/nodes/0.BUI4_8yP.js   kb-fix: 0
 ```
@@ -42,9 +42,28 @@ Directories (all durable, nothing on `/tmp`):
 `3445131` = `f9d1d8c` (upstream/main) + the fix, three files, +67/-36:
 `+layout.svelte`, `Terminal.svelte`, `markdown/EditorToolbar.svelte`.
 
-Still on `/tmp`: `/tmp/cptr-pr-kb` holds the `fix/onscreen-keyboard-resize` branch
-checkout. Only that worktree is volatile, and the branch ref itself lives in the
-main repo, so nothing is lost if `/tmp` goes — just re-add a worktree for it.
+`/tmp/cptr-pr-kb` held a second checkout of the `fix/onscreen-keyboard-resize`
+branch. Its directory is gone and the stale registration has been pruned
+(`git worktree prune`), leaving `/home/brendan/cptr-pr` as the only worktree for
+that branch. The branch ref itself always lived in the main repo, so nothing was
+lost — re-add a worktree if you want a second checkout.
+
+## Reboot
+
+The box **rebooted on 2026-09-18 at 20:20**. Nothing auto-starts: the live
+`:4200` server came back, but both test lanes were silently down until
+2026-09-19 01:1x. After any reboot, bring them back one at a time:
+
+```bash
+/home/brendan/cptr-lanes.sh restart cptr-fixes
+/home/brendan/cptr-lanes.sh restart cptr-upstream
+```
+
+Never restart `cptr` that way if you are working inside it — `:4200` parents the
+agent shells; use `/home/brendan/computer/_restart_server.sh`.
+
+Also note the login payload field is `username`, not `email` (an `email` key is
+rejected with `{"error":"username required"}`).
 
 ## Status / control
 
@@ -53,13 +72,16 @@ main repo, so nothing is lost if `/tmp` goes — just re-add a worktree for it.
 /home/brendan/cptr-lanes.sh restart cptr-fixes # restart one lane
 ```
 
+Lane logs live in `/home/brendan/lane-logs/<lane>.log` — deliberately *outside*
+the checkouts, so writing them never shows up in that repo's `git status`.
+
 ## Starting a lane by hand
 
 ```bash
 cd <source dir>
 CPTR_DATA_DIR=/home/brendan/.cptr-<lane> setsid nohup \
   /home/brendan/computer/.venv/bin/python -m cptr.cli run \
-  --host 0.0.0.0 --port <420x> --headless >> <source dir>/lane-server.log 2>&1 &
+  --host 0.0.0.0 --port <420x> --headless >> /home/brendan/lane-logs/<lane>.log 2>&1 &
 ```
 
 Two traps:
