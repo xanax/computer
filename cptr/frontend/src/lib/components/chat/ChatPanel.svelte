@@ -834,6 +834,8 @@
 		commandSessionsTimer = null;
 		window.removeEventListener('computer:inspectCommandSession', handleInspectCommandSession);
 		document.removeEventListener('visibilitychange', handleVisibilityChange);
+		if (questionMeasureRaf !== null) cancelAnimationFrame(questionMeasureRaf);
+		questionMeasureRaf = null;
 		if (landingRefreshTimer) clearTimeout(landingRefreshTimer);
 		if (taskClearTimer) clearTimeout(taskClearTimer);
 		// Don't clear streamingChatTabs here -- the global listener in
@@ -968,6 +970,7 @@
 		}
 
 		lastScrollTop = scrollTop;
+		queueScrolledQuestionMeasure();
 	}
 
 	$effect(() => {
@@ -976,6 +979,116 @@
 				scrollToBottom();
 			});
 		}
+	});
+
+	// ── Scrolled-past question line ─────────────────────────────
+	// The first line of the question whose answer currently fills the top of
+	// the transcript, shown under the title. It appears only once that question
+	// has scrolled out from under the header, so it never just repeats text
+	// already on screen.
+
+	// The two file-mention forms a user message can carry: `[label](file://path)`
+	// and TipTap's `[@ id="path" label="name"]`.
+	const FILE_LINK_INLINE_RE = /\[([^\]]*)\]\(file:\/\/[^)]*\)/g;
+	const TIPTAP_MENTION_INLINE_RE = /\[@\s+id="[^"]*"\s+label="([^"]*)"\]/g;
+
+	/** A user message as one plain line: its first non-empty line, with list
+	    markers and link syntax reduced to the words that were typed. */
+	function questionLine(raw: string): string {
+		const plain = raw.replace(TIPTAP_MENTION_INLINE_RE, '$1').replace(FILE_LINK_INLINE_RE, '$1');
+		for (const rawLine of plain.split('\n')) {
+			const line = rawLine.replace(/^\s{0,3}(?:#{1,6}|>|[-*+]|\d{1,3}[.)])\s+/, '').trim();
+			if (line) return line;
+		}
+		return '';
+	}
+
+	/** A row's label for the line: the one-line form of a question, or nothing
+	    for rows that are not questions (internal timer and subagent notes) or
+	    that have no text to show (an attachment-only message). Unlabelled rows
+	    carry no marker at all, so the walk below reads straight past them. */
+	function questionLabel(msg: ChatMessageRow): string | undefined {
+		if (msg.meta?.internal) return undefined;
+		return questionLine(msg.content) || undefined;
+	}
+
+	// The bar's scrim paints over the transcript: a fade in the normal themes, a
+	// solid plate in mono (a fade would dither to grey). Its bottom edge is
+	// therefore the top of the readable transcript, and reading it off the element
+	// keeps the bar height, its negative margin and the transcript's own padding
+	// out of this file's arithmetic. One rect read per measure, which is
+	// rAF-coalesced anyway.
+	let headerVeilEl: HTMLDivElement | undefined = $state();
+
+	function readableTop(): number {
+		const veil = headerVeilEl?.getBoundingClientRect().bottom;
+		// Before the ref lands there is nothing to measure against, so the top of
+		// the scroll box is the only honest guess.
+		if (veil === undefined) return messagesEl?.getBoundingClientRect().top ?? 0;
+		return veil;
+	}
+
+	let scrolledQuestion = $state('');
+	// The row the line names, kept so a click knows where to travel to.
+	let scrolledQuestionEl: HTMLElement | null = null;
+	let questionMeasureRaf: number | null = null;
+
+	function measureScrolledQuestion() {
+		if (!messagesEl) {
+			scrolledQuestion = '';
+			scrolledQuestionEl = null;
+			return;
+		}
+		const topEdge = readableTop();
+		let current = '';
+		let currentEl: HTMLElement | null = null;
+		for (const el of messagesEl.querySelectorAll<HTMLElement>('[data-question]')) {
+			// Elements are in visual order: the first one still on screen ends
+			// the search, since every question below it is even further down.
+			if (el.getBoundingClientRect().bottom > topEdge) break;
+			current = el.dataset.question ?? '';
+			currentEl = el;
+		}
+		scrolledQuestion = current;
+		scrolledQuestionEl = currentEl;
+	}
+
+	function queueScrolledQuestionMeasure() {
+		if (questionMeasureRaf !== null) return;
+		questionMeasureRaf = requestAnimationFrame(() => {
+			questionMeasureRaf = null;
+			measureScrolledQuestion();
+		});
+	}
+
+	// How far below the readable top a jumped-to question lands, so that it is
+	// plainly in view rather than balanced on the header's edge.
+	const QUESTION_LANDING_PAD = 8;
+
+	// Clicking the line walks one question further back. The jump lands that
+	// question just under the header, which puts it in view and — because the line
+	// only ever names a question that has already scrolled past — leaves the line
+	// itself pointing at the question before it. Clicking again keeps going up;
+	// above the first question there is nothing, so the line disappears.
+	function goToShownQuestion() {
+		const el = scrolledQuestionEl;
+		if (!el || !messagesEl) return;
+		// Instant rather than smooth: this is a navigation jump, and an e-ink panel
+		// repaints a smooth scroll as a smear.
+		messagesEl.scrollTop +=
+			el.getBoundingClientRect().top - (readableTop() + QUESTION_LANDING_PAD);
+		// Scrolling upward disengages auto-scroll (see handleMessagesScroll), so the
+		// transcript stays where the jump put it. The scroll event re-measures too;
+		// this covers the case where it does not fire.
+		queueScrolledQuestionMeasure();
+	}
+
+	// Re-measure when the rendered transcript changes underneath us: a branch
+	// switch, a reload, a compaction, another page of history loaded.
+	$effect(() => {
+		visiblePath;
+		active;
+		queueScrolledQuestionMeasure();
 	});
 
 	// ── Actions ─────────────────────────────────────────────────
@@ -1831,6 +1944,7 @@
 		>
 			<div
 				aria-hidden="true"
+				bind:this={headerVeilEl}
 				class="pointer-events-none absolute inset-0 -bottom-10 -z-10"
 				style="background: var(--app-bar-scrim, linear-gradient(to bottom, var(--app-bg), color-mix(in oklab, var(--app-bg) 95%, transparent) 40%, transparent 97%));"
 			></div>
@@ -1839,6 +1953,22 @@
 			>
 				{displayChatTitle}
 			</div>
+			<!-- The question the visible answer belongs to, once its own text has
+			     scrolled in under the header. Clicking walks to that question and
+			     shows the one before it, so repeated clicks climb back up the chat. -->
+			{#if scrolledQuestion}
+				<button
+					type="button"
+					class="absolute left-2 right-2 top-full flex items-center gap-1 rounded-md px-1 py-0.5 text-left text-[0.6875rem] leading-4 text-gray-600 transition-colors duration-75 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+					title={scrolledQuestion}
+					aria-label={$t('chat.previousQuestion', { question: scrolledQuestion })}
+					use:tooltip={scrolledQuestion}
+					onclick={goToShownQuestion}
+				>
+					<span class="min-w-0 flex-1 truncate">{scrolledQuestion}</span>
+					<Icon name="chevron-up" size={11} class="shrink-0" />
+				</button>
+			{/if}
 			<div class="flex shrink-0 items-center gap-0.5">
 				<button
 					type="button"
@@ -1955,15 +2085,20 @@
 							</div>
 						{/if}
 						{#if msg.role === 'user'}
-							<UserMessage
-								content={msg.content}
-								meta={msg.meta}
-								createdAt={msg.created_at}
-								{siblingIndex}
-								siblingTotal={siblingIds.length}
-								onnavigate={(dir) => handleNavigate(msg.id, dir)}
-								onedit={(c, submit) => handleEditMessage(msg.id, c, null, submit)}
-							/>
+							<!-- data-question feeds the header line: its value is the
+							     one-line form of this question, absent for rows that
+							     are not questions or have no text to show. -->
+							<div class="min-w-0" data-question={questionLabel(msg)}>
+								<UserMessage
+									content={msg.content}
+									meta={msg.meta}
+									createdAt={msg.created_at}
+									{siblingIndex}
+									siblingTotal={siblingIds.length}
+									onnavigate={(dir) => handleNavigate(msg.id, dir)}
+									onedit={(c, submit) => handleEditMessage(msg.id, c, null, submit)}
+								/>
+							</div>
 						{:else}
 							<AssistantMessage
 								content={msg.content}

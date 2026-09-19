@@ -765,6 +765,7 @@
 	"chat.usageInfo": "Usage info",
 	"chat.toggleToolCalls": "Toggle tool calls",
 	"chat.scrollToBottom": "Scroll to bottom",
+	"chat.previousQuestion": "Jump to this question (show the one before it): {{question}}",
 	"chat.removeUpload": "Remove upload",
 	"chat.sendNow": "Send now",
 	"chat.commandCompact": "Compact",
