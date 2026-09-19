@@ -78,6 +78,8 @@ After a sync, run `scripts/fork-status.sh` and look for `MERGED-UPSTREAM` rows: 
 
 Fork work lands on `feat/*`/`fix/*` branches and is merged to `main`, so `git log upstream/main..main` is effectively the changelog.
 
+Upstream is not the only source of ideas: 80-odd forks of the same base exist, and some are further ahead of upstream than this one is. `scripts/fork-scan.sh` lists the siblings that carry commits upstream does not, with their commit subjects, so a fix or feature can be borrowed rather than re-invented. It is read-only — see [`notes/NOTES-fork-scan.md`](notes/NOTES-fork-scan.md).
+
 ## Bugs
 
 [`BUGS.md`](BUGS.md) is the ledger: every bug found, whether it is in upstream, and whether it was reported. Two columns are machine-maintained — see [`scripts/fork-probes.tsv`](scripts/fork-probes.tsv). Every entry is checked against real upstream *code* and recorded with the commit and date it was checked at, because "present upstream" is a fact about a commit, not a permanent truth.
