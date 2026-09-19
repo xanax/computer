@@ -24,9 +24,9 @@ _Refreshed automatically by `scripts/fork-status.sh --update`; do not hand-edit.
 | | |
 | --- | --- |
 | Upstream base | `open-webui/computer` @ `f9d1d8c` (2026-08-16) — "refac" |
-| Fork commits ahead | 27 |
+| Fork commits ahead | 34 |
 | Upstream commits we lack | 0 |
-| Diff vs upstream | 144 files changed, 9032 insertions(+), 1714 deletions(-) |
+| Diff vs upstream | 157 files changed, 9990 insertions(+), 1720 deletions(-) |
 | Probes last run | 2026-09-19 |
 <!-- fork-status:end -->
 
