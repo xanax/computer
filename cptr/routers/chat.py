@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from cptr.models import Chat, ChatMessage, Config, is_internal_chat
+from cptr.models import Chat, ChatMessage, Config, MessageHeader, is_internal_chat
 from cptr.utils.config import check_access, now_ms, _get_jwt_secret
 from cptr.utils.crypto import decrypt_key
 from cptr.utils.db import get_db
@@ -741,8 +741,7 @@ def _message_dict(m) -> dict:
 async def _get_context_leaf_message_id(chat) -> str | None:
     if chat.current_message_id:
         return chat.current_message_id
-    messages = await ChatMessage.get_all_by_chat(chat.id)
-    return messages[-1].id if messages else None
+    return await ChatMessage.get_last_message_id(chat.id)
 
 
 async def _get_chat_context_usage(
@@ -761,14 +760,14 @@ async def _get_chat_context_usage(
         usage_context_tokens,
     )
 
-    messages, existing_summary = await _load_message_history(chat.id, message_id)
-    workspace = (chat.meta or {}).get("workspace", "")
     model = model_id or await _infer_chat_model(chat.id)
     compact_token_threshold = await load_compact_token_threshold(model)
-    system = await _load_system_prompt(request, workspace, model or "", user_id=chat.user_id)
-    if existing_summary:
-        system += f"\n\n[CONVERSATION SUMMARY]\n{existing_summary}"
 
+    # Real provider usage, if the branch has any, beats an estimate — and it
+    # costs one header-only query. Take that path before reconstructing the
+    # history: `_load_message_history` re-reads and re-decodes every message's
+    # output (megabytes in a long chat) purely to feed the estimate below, and
+    # the system prompt is only needed for that estimate too.
     usage_checkpoint = await _get_latest_usage_checkpoint(chat.id, message_id)
     if usage_checkpoint:
         trailing_messages, usage = usage_checkpoint
@@ -780,29 +779,36 @@ async def _get_chat_context_usage(
                 )
             return build_context_usage(tokens, threshold=compact_token_threshold)
 
+    messages, existing_summary = await _load_message_history(chat.id, message_id)
+    workspace = (chat.meta or {}).get("workspace", "")
+    system = await _load_system_prompt(request, workspace, model or "", user_id=chat.user_id)
+    if existing_summary:
+        system += f"\n\n[CONVERSATION SUMMARY]\n{existing_summary}"
+
     return estimate_context_usage(messages, system, threshold=compact_token_threshold)
 
 
 async def _infer_chat_model(chat_id: str) -> str:
-    messages = await ChatMessage.get_all_by_chat(chat_id)
-    for message in reversed(messages):
-        if message.model:
-            return message.model
-    return await Config.get("chat.default_model") or ""
+    return await ChatMessage.get_last_model(chat_id) or await Config.get("chat.default_model") or ""
 
 
 async def _get_latest_usage_checkpoint(
     chat_id: str, message_id: str
-) -> tuple[list[ChatMessage], dict] | None:
+) -> tuple[list[MessageHeader], dict] | None:
+    """The newest provider usage report on the active branch, plus what follows it.
+
+    Works from headers (no ``output``) because the walk only needs parent links,
+    roles and usage — and because it runs on every chat load.
+    """
     from cptr.utils.context import normalize_usage, usage_context_tokens
 
-    all_msgs = await ChatMessage.get_all_by_chat(chat_id)
-    msg_map = {m.id: m for m in all_msgs}
-    chain = []
-    cur = msg_map.get(message_id)
+    headers = await ChatMessage.get_headers_by_chat(chat_id)
+    by_id = {header.id: header for header in headers}
+    chain: list[MessageHeader] = []
+    cur = by_id.get(message_id)
     while cur:
         chain.append(cur)
-        cur = msg_map.get(cur.parent_id) if cur.parent_id else None
+        cur = by_id.get(cur.parent_id) if cur.parent_id else None
     chain.reverse()
 
     for index in range(len(chain) - 1, -1, -1):

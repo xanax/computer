@@ -8,6 +8,7 @@ from cptr.models.files import File
 from cptr.models.chats import (
     Chat,
     ChatMessage,
+    MessageHeader,
     internal_status,
     is_internal_chat,
     is_pending_subagent_result_message,

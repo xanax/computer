@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 import uuid
 
@@ -551,6 +552,26 @@ def _extract_snippet(
     return snippet
 
 
+@dataclass(slots=True)
+class MessageHeader:
+    """A chat message minus its ``output`` payload.
+
+    ``output`` is where all the bulk lives (tool results and reasoning run to
+    tens of megabytes in a long chat), but the bookkeeping that walks a chat —
+    finding the active branch, the newest usage checkpoint, the compaction
+    boundary — needs only these few columns. Reading the full ORM rows for that
+    work means SQLite reads and JSON-decodes every megabyte of output again, so
+    those paths take this instead.
+    """
+
+    id: str
+    parent_id: str | None
+    role: str
+    content: str
+    chat_summary: str | None
+    usage: dict | None
+
+
 class ChatMessage(Base):
     """A single message in a chat conversation."""
 
@@ -589,6 +610,62 @@ class ChatMessage(Base):
                 .order_by(ChatMessage.created_at)
             )
             return list(result.scalars().all())
+
+    @staticmethod
+    async def get_headers_by_chat(chat_id: str) -> list[MessageHeader]:
+        """Every message in a chat, without the ``output`` payload.
+
+        Same order as ``get_all_by_chat`` and cheap enough to call per request:
+        ``output`` is ~95% of the table's bytes and is never selected here.
+        """
+        async with await get_db() as db:
+            result = await db.execute(
+                select(
+                    ChatMessage.id,
+                    ChatMessage.parent_id,
+                    ChatMessage.role,
+                    ChatMessage.content,
+                    ChatMessage.chat_summary,
+                    ChatMessage.usage,
+                )
+                .where(ChatMessage.chat_id == chat_id)
+                .order_by(ChatMessage.created_at)
+            )
+            return [
+                MessageHeader(
+                    id=row[0],
+                    parent_id=row[1],
+                    role=row[2],
+                    content=row[3] or "",
+                    chat_summary=row[4],
+                    usage=row[5],
+                )
+                for row in result.all()
+            ]
+
+    @staticmethod
+    async def get_last_message_id(chat_id: str) -> str | None:
+        """Newest message id in a chat, without loading any rows."""
+        async with await get_db() as db:
+            result = await db.execute(
+                select(ChatMessage.id)
+                .where(ChatMessage.chat_id == chat_id)
+                .order_by(ChatMessage.created_at.desc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_last_model(chat_id: str) -> str | None:
+        """Most recent non-null model recorded in a chat."""
+        async with await get_db() as db:
+            result = await db.execute(
+                select(ChatMessage.model)
+                .where(ChatMessage.chat_id == chat_id, ChatMessage.model.is_not(None))
+                .order_by(ChatMessage.created_at.desc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
 
     @staticmethod
     async def get_children(parent_id: str) -> list[ChatMessage]:
