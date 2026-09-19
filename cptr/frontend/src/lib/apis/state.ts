@@ -39,6 +39,24 @@ export const saveWorkspaceState = (path: string, data: Record<string, unknown>) 
 export const deleteWorkspace = (path: string) =>
 	fetchHandler(`/api/state/workspace?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
 
+export interface WorkspaceToolServer {
+	id: string;
+	name: string;
+	description: string;
+	type: string;
+	scope: 'global' | 'workspace' | string;
+	enabled: boolean;
+}
+
+export const listWorkspaceToolServers = () =>
+	fetchJSON<{ servers: WorkspaceToolServer[] }>('/api/state/tool-servers');
+
+export const saveWorkspaceToolServers = (path: string, toolServers: string[]) =>
+	fetchJSON<{ status: string; path: string; toolServers: string[] }>(
+		`/api/state/workspace/tool-servers?path=${encodeURIComponent(path)}`,
+		{ ...jsonBody({ toolServers }), method: 'PUT' }
+	);
+
 // ── Welcome page ────────────────────────────────────────────────
 
 export const getWelcome = () => fetchJSON<Record<string, unknown>>('/api/state/welcome');

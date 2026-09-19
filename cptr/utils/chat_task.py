@@ -1987,7 +1987,9 @@ async def run_chat_task(
             system += f"\n\n[CONVERSATION SUMMARY]\n{loaded_summary}"
         if regeneration_prompt:
             messages.append({"role": "user", "content": regeneration_prompt})
-        tools = await get_tool_list(builtin_tools=builtin_tools, workspace=workspace)
+        tools = await get_tool_list(
+            builtin_tools=builtin_tools, workspace=workspace, user_id=user_id
+        )
         if not skill_authoring_allowed:
             tools = [t for t in tools if t["name"] != "manage_skill"]
 

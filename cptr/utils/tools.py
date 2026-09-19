@@ -2690,6 +2690,135 @@ async def notify(message: str, target: str = "", title: str = "", *, __context__
         return f"Error: failed to send notification: {exc}"
 
 
+async def ui_metrics(
+    metric: str = "dwell",
+    window_hours: int = 24,
+    cap_s: int = 120,
+    kind: Optional[str] = None,
+    limit: int = 15,
+    *,
+    __context__: dict | None = None,
+) -> str:
+    """Summarise the client UI performance samples cptr has collected.
+
+    Reads the `ui_events` table for THIS instance's database, so the numbers
+    always describe the lane you are actually running in. Read-only.
+
+    metric:
+      - "dwell": active time per workspace. Uses measured `dwell` samples when
+        the frontend reports them, otherwise falls back to attributing gaps
+        between interaction samples (an estimate — see the caveat it prints).
+      - "slow": slowest interactions as p50/p95/max per (kind, label).
+      - "inventory": how much data exists — kinds, sessions, coverage.
+
+    Args:
+        metric: One of "dwell", "slow", "inventory".
+        window_hours: How far back to look, by event time.
+        cap_s: For the "dwell" fallback, the longest gap still counted as time
+            spent (guards against idle periods inflating a workspace).
+        kind: Restrict "slow" to a single event kind, e.g. "mount".
+        limit: Maximum rows to list.
+    """
+    from collections import defaultdict
+    import datetime as dt
+
+    from cptr.models.ui_events import UiEvent, _percentile
+    from cptr.utils.config import now_ms
+
+    try:
+        window_hours = max(1, min(int(window_hours or 24), 24 * 90))
+        limit = max(1, min(int(limit or 15), 100))
+    except (TypeError, ValueError):
+        return "Error: window_hours and limit must be integers."
+
+    since = now_ms() - window_hours * 3600 * 1000
+    rows = await UiEvent.scan(since)
+    if not rows:
+        return (
+            f"No UI performance samples in the last {window_hours}h. The collector "
+            "posts to /api/ui-events; check it isn't switched off."
+        )
+
+    def stamp(ms: float) -> str:
+        return dt.datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
+
+    if metric == "inventory":
+        counts: dict[str, int] = defaultdict(int)
+        for row in rows:
+            counts[row["kind"]] += 1
+        sessions = {row["session_id"] for row in rows if row["session_id"]}
+        lines = [
+            f"ui_events — last {window_hours}h",
+            f"  {len(rows)} samples across {len(sessions)} browser session(s)",
+            f"  span: {stamp(rows[0]['ts'])} -> {stamp(rows[-1]['ts'])}",
+            "",
+            "  samples by kind:",
+        ]
+        for name, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+            lines.append(f"    {count:7d}  {name}")
+        return "\n".join(lines)
+
+    if metric == "slow":
+        groups: dict[tuple[str, str | None], list[float]] = defaultdict(list)
+        for row in rows:
+            if kind and row["kind"] != kind:
+                continue
+            groups[(row["kind"], row["label"])].append(float(row["duration_ms"] or 0.0))
+        if not groups:
+            return f"No samples for kind={kind!r} in the last {window_hours}h."
+        for durations in groups.values():
+            durations.sort()
+        ranked = sorted(groups.items(), key=lambda kv: -_percentile(kv[1], 95))
+        lines = [
+            f"Slowest UI interactions — last {window_hours}h (ms, slowest p95 first)",
+            "",
+            f"  {'p95':>8} {'p50':>8} {'max':>9} {'n':>6}  kind / label",
+        ]
+        for (group_kind, label), durations in ranked[:limit]:
+            lines.append(
+                f"  {_percentile(durations, 95):8.1f} {_percentile(durations, 50):8.1f} "
+                f"{durations[-1]:9.1f} {len(durations):6d}  {group_kind} / {label or '-'}"
+            )
+        return "\n".join(lines)
+
+    if metric != "dwell":
+        return f"Unknown metric {metric!r}. Use one of: dwell, slow, inventory."
+
+    per_workspace: dict[str, float] = defaultdict(float)
+    measured = [row for row in rows if row["kind"] == "dwell" and (row["duration_ms"] or 0) > 0]
+    if measured:
+        for row in measured:
+            per_workspace[row["workspace"] or "(unknown)"] += float(row["duration_ms"]) / 1000.0
+        method = f"measured ({len(measured)} dwell samples)"
+        caveat = "  Counts only while the tab is visible; " \
+                 "in-flight time in the current workspace is not yet flushed."
+    else:
+        cap = max(10, min(int(cap_s or 120), 3600))
+        for earlier, later in zip(rows, rows[1:]):
+            gap = (later["ts"] - earlier["ts"]) / 1000.0
+            if 0 < gap <= cap:
+                per_workspace[earlier["workspace"] or "(unknown)"] += gap
+        method = f"ESTIMATED from inter-event gaps (cap {cap}s) — no dwell samples yet"
+        caveat = (
+            "  Estimate: each gap is attributed to the earlier event's workspace, so time\n"
+            "  after switching away is misattributed. Compare workspaces, don't trust the\n"
+            "  absolute minutes — and treat long gaps as unattributable."
+        )
+
+    total = sum(per_workspace.values())
+    if total <= 0:
+        return f"No attributable time in the last {window_hours}h."
+
+    lines = [f"Time per workspace — last {window_hours}h, {method}", ""]
+    for workspace, seconds in sorted(per_workspace.items(), key=lambda kv: -kv[1])[:limit]:
+        share = 100.0 * seconds / total
+        lines.append(f"  {share:5.1f}%  {seconds / 60:8.1f} min  {workspace}")
+    lines.append("")
+    lines.append(f"  total tracked: {total / 60:.0f} min across {len(per_workspace)} workspace(s)")
+    lines.append(caveat)
+    return "\n".join(lines)
+
+
 # ── Registry ────────────────────────────────────────────────
 
 ToolApprovalPolicy = Literal["allow", "review"]
@@ -2735,6 +2864,8 @@ TOOLS: dict[str, dict] = {
     "image_generate": {"fn": image_generate},
     "manage_skill": {"fn": manage_skill},
     "update_memory": {"fn": update_memory, "approval": "allow"},
+    # Read-only introspection of our own telemetry; needs no workspace.
+    "ui_metrics": {"fn": ui_metrics, "approval": "allow"},
 }
 
 # Browser tools — conditionally included in schemas based on browser.enabled
@@ -3173,6 +3304,7 @@ BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
     "images": ("image_generate",),
     "subagents": ("delegate_task",),
     "notifications": ("notify",),
+    "telemetry": ("ui_metrics",),
 }
 
 GLOBAL_CHAT_DISABLED_TOOLS = {
@@ -3204,6 +3336,24 @@ def is_builtin_tool_enabled(name: str, builtin_tools: dict | None) -> bool:
 # ── External tool servers ───────────────────────────────────
 
 _tool_server_cache: dict | None = None  # {"servers": [...], "tools": {name: {server, spec}}}
+
+
+def server_allowed_in_workspace(server: dict, attached: list[str] | None) -> bool:
+    """Whether a registered tool server is visible in a workspace.
+
+    ``scope=global`` (default, including servers created before this field
+    existed) is available in every workspace. ``scope=workspace`` is only
+    available when the workspace's ``toolServers`` list contains its id.
+    ``attached`` is None when the workspace has never set that list.
+    """
+    if not server.get("enabled", True):
+        return False
+    scope = str(server.get("scope") or "global").strip().lower()
+    if scope != "workspace":
+        return True
+    if not attached:
+        return False
+    return server.get("id") in attached
 
 
 async def _load_tool_servers() -> dict:
@@ -3503,7 +3653,26 @@ def _without_background_param(schema: dict) -> dict:
     return schema
 
 
-async def get_tool_list(builtin_tools: dict | None = None, workspace: str = "") -> list[dict]:
+async def _workspace_attached_servers(user_id: str, workspace: str) -> list[str] | None:
+    if not user_id or not workspace:
+        return None
+    from cptr.models import Workspace
+
+    ws = await Workspace.get_by_path(user_id, workspace)
+    if not ws:
+        return None
+    data = ws.data or {}
+    if "toolServers" not in data:
+        return None
+    raw = data.get("toolServers")
+    if not isinstance(raw, list):
+        return None
+    return [str(item) for item in raw if item]
+
+
+async def get_tool_list(
+    builtin_tools: dict | None = None, workspace: str = "", user_id: str = ""
+) -> list[dict]:
     """Return tool schemas for the LLM.
 
     Automatically includes browser tools when browser.enabled is true,
@@ -3559,10 +3728,13 @@ async def get_tool_list(builtin_tools: dict | None = None, workspace: str = "") 
     if not background_subagents_enabled:
         schemas = [_without_background_param(s) for s in schemas]
 
-    # Add external tool server schemas
+    # Add external tool server schemas (filtered per workspace)
     try:
         cache = await _load_tool_servers()
+        attached = await _workspace_attached_servers(user_id, workspace)
         for tool_info in cache["tools"].values():
+            if not server_allowed_in_workspace(tool_info.get("server") or {}, attached):
+                continue
             schemas.append(tool_info["spec"])
     except Exception:
         pass
@@ -3594,6 +3766,12 @@ async def execute_tool(name: str, args: dict, __context__: dict) -> str:
     # Check external tool servers
     cache = await _load_tool_servers()
     if name in cache["tools"]:
+        attached = await _workspace_attached_servers(
+            str(__context__.get("user_id") or ""),
+            str(__context__.get("workspace") or ""),
+        )
+        if not server_allowed_in_workspace(cache["tools"][name].get("server") or {}, attached):
+            return f"Error: tool '{name}' is not attached to this workspace"
         return await _execute_external_tool(name, args)
 
     return f"Error: unknown tool: {name}"

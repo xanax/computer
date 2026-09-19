@@ -119,6 +119,8 @@ export interface WorkspaceState {
 	splitDirection: SplitDirection;
 	splitRatio: number; // 0-1, fraction for the first group
 	fileBrowserCwd: string;
+	/** Workspace-scoped tool server ids. Global-scope servers are always on. */
+	toolServers?: string[];
 }
 
 export interface HomeState {
@@ -811,7 +813,8 @@ export async function loadWorkspace(path: string): Promise<void> {
 				),
 				splitDirection: ws.splitDirection ?? 'horizontal',
 				splitRatio: ws.splitRatio ?? 0.5,
-				fileBrowserCwd: ws.fileBrowserCwd ?? canonicalWorkspacePath
+				fileBrowserCwd: ws.fileBrowserCwd ?? canonicalWorkspacePath,
+				toolServers: Array.isArray(ws.toolServers) ? ws.toolServers : undefined
 			});
 		} else {
 			// First time opening this workspace, create defaults

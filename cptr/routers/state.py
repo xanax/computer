@@ -12,6 +12,7 @@ import os
 from pathlib import Path, PureWindowsPath
 
 from fastapi import APIRouter, HTTPException, Request, Query
+from pydantic import BaseModel
 from cptr.env import DATA_DIR
 from cptr.models import Chat, UserStates, Workspace
 from cptr.utils.config import get_or_create_user
@@ -198,6 +199,11 @@ async def put_workspace(request: Request, path: str = Query(...)):
             else _workspace_display_name(workspace_path)
         )
     workspace_data.pop("path", None)
+    # Preserve tool-server attachments if the editor save omitted them.
+    if "toolServers" not in workspace_data and existing_workspace:
+        existing_data = existing_workspace.data or {}
+        if "toolServers" in existing_data:
+            workspace_data["toolServers"] = existing_data["toolServers"]
     # Everything else is workspace data (groups, tabs, etc.)
     await Workspace.upsert(user_id, workspace_path, name, workspace_data)
 
@@ -209,6 +215,53 @@ async def put_workspace(request: Request, path: str = Query(...)):
     await Workspace.delete_by_paths(user_id, old_paths)
 
     return {"status": "saved", "path": workspace_path}
+
+
+class WorkspaceToolServersBody(BaseModel):
+    toolServers: list[str] = []
+
+
+@router.get("/tool-servers")
+async def list_visible_tool_servers(request: Request):
+    """List registered tool servers without secrets, for workspace attachment."""
+    if not await _get_user_id(request):
+        return {"servers": []}
+    from cptr.models import Config
+
+    servers = await Config.get("tool_servers") or []
+    out = []
+    for server in servers:
+        if not isinstance(server, dict):
+            continue
+        out.append(
+            {
+                "id": server.get("id") or "",
+                "name": server.get("name") or server.get("id") or "",
+                "description": server.get("description") or "",
+                "type": server.get("type") or "openapi",
+                "scope": server.get("scope") or "global",
+                "enabled": server.get("enabled", True),
+            }
+        )
+    return {"servers": out}
+
+
+@router.put("/workspace/tool-servers")
+async def put_workspace_tool_servers(
+    request: Request, body: WorkspaceToolServersBody, path: str = Query(...)
+):
+    """Attach a subset of tool servers to one workspace without touching tabs."""
+    user_id = await _get_user_id(request)
+    if not user_id:
+        return {"status": "skipped"}
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    existing = _newest_workspace(await _workspaces_at_path(user_id, workspace_path))
+    data = dict(existing.data or {}) if existing else {}
+    ids = [s for s in body.toolServers if isinstance(s, str) and s.strip()]
+    data["toolServers"] = ids
+    name = existing.name if existing else _workspace_display_name(workspace_path)
+    await Workspace.upsert(user_id, workspace_path, name, data)
+    return {"status": "saved", "path": workspace_path, "toolServers": ids}
 
 
 @router.delete("/workspace")

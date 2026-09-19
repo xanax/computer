@@ -245,6 +245,7 @@ export interface ToolServer {
 	description: string;
 	headers: Record<string, string> | null;
 	enabled: boolean;
+	scope?: 'global' | 'workspace';
 	// Stdio MCP fields
 	command?: string;
 	args?: string[];

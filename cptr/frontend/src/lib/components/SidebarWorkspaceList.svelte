@@ -23,6 +23,7 @@
 	import ChatItem from './common/ChatItem.svelte';
 	import DropdownMenu from './DropdownMenu.svelte';
 	import Icon from './Icon.svelte';
+	import WorkspaceToolServersModal from './WorkspaceToolServersModal.svelte';
 
 	interface Props {
 		onaddworkspace: () => void;
@@ -36,6 +37,7 @@
 	let sortable: Sortable | null = null;
 	let unbindSocketListener: (() => void) | null = null;
 	let workspacesExpanded = $state(true);
+	let toolServersPath = $state<string | null>(null);
 
 	// Workspace folders start expanded (their chat list visible); we only
 	// remember the ones the user explicitly collapsed.
@@ -519,6 +521,13 @@
 		anchor={wsMenuAnchor}
 		items={[
 			{
+				label: $t('workspaceTools.title'),
+				icon: 'plug',
+				onclick: () => {
+					toolServersPath = wsMenuPath;
+				}
+			},
+			{
 				label: $t('sidebar.remove'),
 				icon: 'xmark',
 				onclick: () => handleRemoveWorkspace(wsMenuPath!)
@@ -526,6 +535,10 @@
 		]}
 		onclose={closeWsMenu}
 	/>
+{/if}
+
+{#if toolServersPath}
+	<WorkspaceToolServersModal path={toolServersPath} onclose={() => (toolServersPath = null)} />
 {/if}
 
 {#if chatMenu}

@@ -37,6 +37,7 @@
 	let formArgs = $state('');
 	let formCwd = $state('');
 	let formEnv = $state('');
+	let formScope = $state<'global' | 'workspace'>('workspace');
 
 	let saving = $state(false);
 	let verifying = $state(false);
@@ -109,6 +110,7 @@
 		formArgs = '';
 		formCwd = '';
 		formEnv = '';
+		formScope = 'workspace';
 
 		verifyResult = null;
 		showModal = true;
@@ -129,6 +131,7 @@
 		formArgs = joinArgs(s.args || []);
 		formCwd = s.cwd || '';
 		formEnv = s.env ? JSON.stringify(s.env, null, 2) : '';
+		formScope = s.scope === 'global' ? 'global' : 'workspace';
 
 		verifyResult = null;
 		showModal = true;
@@ -196,7 +199,8 @@
 				command: formCommand.trim(),
 				args: splitArgs(formArgs),
 				cwd: formCwd.trim() || null,
-				env: parsedEnv
+				env: parsedEnv,
+				scope: formScope
 			};
 			if (editServer) {
 				if (formKey.trim()) data.key = formKey.trim();
@@ -431,6 +435,18 @@
 					class="block w-full bg-transparent text-[0.8125rem] text-gray-700 dark:text-gray-300 placeholder:text-gray-300 dark:placeholder:text-gray-700 outline-none py-0.5 font-mono resize-none"
 				></textarea>
 			{/if}
+
+			<label class="text-[0.625rem] text-gray-400 dark:text-gray-600 mt-2"
+				>{$t('toolServers.scope')}</label
+			>
+			<select
+				bind:value={formScope}
+				class="block w-full bg-transparent text-[0.8125rem] text-gray-700 dark:text-gray-300 outline-none py-0.5 cursor-pointer"
+			>
+				<option value="workspace">{$t('toolServers.scopeWorkspace')}</option>
+				<option value="global">{$t('toolServers.scopeGlobal')}</option>
+			</select>
+			<p class="text-[0.625rem] text-gray-400 dark:text-gray-600">{$t('toolServers.scopeHint')}</p>
 
 			<!-- Spec path (OpenAPI only) -->
 			{#if formType === 'openapi'}

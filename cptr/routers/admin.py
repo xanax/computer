@@ -591,6 +591,7 @@ class CreateToolServerRequest(BaseModel):
     description: str = ""
     headers: Optional[dict] = None
     enabled: bool = True
+    scope: str = "workspace"  # "global" | "workspace"
     # Stdio MCP fields
     command: str = ""  # for mcp_stdio
     args: list[str] = []  # for mcp_stdio
@@ -623,6 +624,7 @@ async def create_tool_server(request: Request, body: CreateToolServerRequest):
         "description": body.description,
         "headers": body.headers,
         "enabled": body.enabled,
+        "scope": body.scope if body.scope in ("global", "workspace") else "workspace",
         "command": body.command,
         "args": body.args,
         "env": body.env,
@@ -643,6 +645,7 @@ class UpdateToolServerRequest(BaseModel):
     description: Optional[str] = None
     headers: Optional[dict] = None
     enabled: Optional[bool] = None
+    scope: Optional[str] = None
     # Stdio MCP fields
     command: Optional[str] = None
     args: Optional[list[str]] = None
@@ -659,7 +662,7 @@ async def update_tool_server(request: Request, server_id: str, body: UpdateToolS
     if not server:
         raise HTTPException(404, "tool server not found")
 
-    for field in ("type", "url", "path", "auth_type", "name", "description", "command", "cwd"):
+    for field in ("type", "url", "path", "auth_type", "name", "description", "command", "cwd", "scope"):
         val = getattr(body, field)
         if val is not None:
             server[field] = val
@@ -673,6 +676,10 @@ async def update_tool_server(request: Request, server_id: str, body: UpdateToolS
         server["args"] = body.args
     if body.env is not None:
         server["env"] = body.env
+    if body.scope is not None:
+        if body.scope not in ("global", "workspace"):
+            raise HTTPException(400, "scope must be 'global' or 'workspace'")
+        server["scope"] = body.scope
 
     await _save_tool_servers(servers)
     return {"ok": True}
