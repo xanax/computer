@@ -41,6 +41,7 @@
 	"auth.connectionFailed": "Connection failed",
 	"auth.accountPending": "Account created. Waiting for admin approval.",
 	"sidebar.workspaces": "Workspaces",
+	"sidebar.timeShareTooltip": "{{pct}}% of your tracked UI time (last 7 days, tab visible only)",
 	"sidebar.addWorkspace": "Add workspace",
 	"sidebar.collapse": "Collapse",
 	"sidebar.noWorkspaces": "No workspaces yet",

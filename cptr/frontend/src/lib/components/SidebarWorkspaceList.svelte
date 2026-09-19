@@ -16,6 +16,7 @@
 		updateChatTitle,
 		type ChatInfo
 	} from '$lib/apis/chat';
+	import { getWorkspaceDwell } from '$lib/apis/perf';
 	import { t } from '$lib/i18n';
 	import { tooltip } from '$lib/tooltip';
 	import Sortable from 'sortablejs';
@@ -38,6 +39,10 @@
 	let unbindSocketListener: (() => void) | null = null;
 	let workspacesExpanded = $state(true);
 	let toolServersPath = $state<string | null>(null);
+	// Active-time share per workspace (path → %), from the measured `dwell`
+	// samples. Read once on mount: it moves over days, not seconds, so polling
+	// it would be pure waste (see the cptr-frontend skill).
+	let dwellShare = $state<Map<string, number>>(new Map());
 
 	// Workspace folders start expanded (their chat list visible); we only
 	// remember the ones the user explicitly collapsed.
@@ -340,6 +345,21 @@
 		}
 	});
 
+	async function loadDwellShare() {
+		try {
+			const data = await getWorkspaceDwell();
+			if (data.total_seconds <= 0) return;
+			const next = new Map<string, number>();
+			for (const row of data.workspaces) {
+				// Anything under 0.5% would render as a meaningless "0%".
+				if (row.share_pct >= 0.5) next.set(row.workspace, row.share_pct);
+			}
+			dwellShare = next;
+		} catch {
+			/* Telemetry is best-effort: showing no badge is the right fallback. */
+		}
+	}
+
 	function isTouchDevice(): boolean {
 		return (
 			typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)
@@ -362,6 +382,9 @@
 		}
 
 		unbindSocketListener = socketStore.on('events:chat', handleChatEvent);
+
+		// Once, not on a timer — the share moves over days, not seconds.
+		loadDwellShare();
 	});
 
 	onDestroy(() => {
@@ -442,6 +465,16 @@
 						<Icon name="folder" size={14} />
 					{/if}
 					<span class="min-w-0 truncate text-left">{ws.name}</span>
+					{#if dwellShare.has(ws.path)}
+						<span
+							class="ws-dwell-share shrink-0"
+							use:tooltip={$t('sidebar.timeShareTooltip', {
+								pct: Math.round(dwellShare.get(ws.path) ?? 0)
+							})}
+						>
+							{Math.round(dwellShare.get(ws.path) ?? 0)}%
+						</span>
+					{/if}
 					{#if ws.unread_count > 0}
 						<span
 							class="ws-unread inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-md bg-sky-500/10 px-1 text-[0.625rem] font-semibold text-sky-600 dark:bg-sky-400/10 dark:text-sky-300"
@@ -601,6 +634,16 @@
 	.ws-heading .ws-unread {
 		background: var(--app-bg);
 		color: var(--app-fg);
+	}
+
+	/* Share of tracked time. Printed in paper ink like the rest of the heading —
+	   deliberately not a grey or an opacity blend, which in the mono palette
+	   would smear ink into paper and break the pure ink-on-paper rule. */
+	.ws-heading .ws-dwell-share {
+		color: var(--app-bg);
+		font-size: 0.625rem;
+		font-variant-numeric: tabular-nums;
+		letter-spacing: 0.01em;
 	}
 
 	.ws-icon-toggle {

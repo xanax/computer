@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import BigInteger, Column, Float, Index, Text, delete, select
+from sqlalchemy import BigInteger, Column, Float, Index, Text, delete, func, select
 from sqlalchemy.dialects.sqlite import JSON
 
 from cptr.models.base import Base
@@ -182,6 +182,33 @@ class UiEvent(Base):
                 }
                 for row in result.all()
             ]
+
+    @staticmethod
+    async def dwell_by_workspace(since_ms: int = 0) -> tuple[dict[str, float], float]:
+        """Active seconds per workspace, from client-reported ``dwell`` spans.
+
+        Returns ``(per_workspace_seconds, total_seconds)``.
+
+        Only measured dwell spans count. There is deliberately no
+        gap-attribution fallback here: this feeds a number displayed next to a
+        workspace name, and a displayed figure should be measured, not
+        estimated. With no samples the caller gets zeros and shows nothing.
+        """
+        async with await get_db() as db:
+            stmt = select(UiEvent.workspace, func.sum(UiEvent.duration_ms)).where(
+                UiEvent.kind == "dwell",
+                UiEvent.ts > 1e12,
+            )
+            if since_ms > 0:
+                stmt = stmt.where(UiEvent.ts >= since_ms)
+            result = await db.execute(stmt.group_by(UiEvent.workspace))
+            rows = result.all()
+
+        per_workspace: dict[str, float] = {}
+        for workspace, duration_ms in rows:
+            if duration_ms:
+                per_workspace[workspace or "(unknown)"] = float(duration_ms) / 1000.0
+        return per_workspace, sum(per_workspace.values())
 
     @staticmethod
     async def prune(before_ms: int) -> int:

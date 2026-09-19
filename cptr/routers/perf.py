@@ -126,6 +126,37 @@ async def recent(
     }
 
 
+@router.get("/dwell")
+async def dwell(
+    request: Request,
+    window_hours: int = Query(
+        7 * 24, ge=1, le=24 * 90, description="How far back to sum, by event time."
+    ),
+):
+    """Active time per workspace, as a share of total tracked time.
+
+    Powers the `%` shown next to each workspace in the sidebar. Measured
+    ``dwell`` samples only — see ``UiEvent.dwell_by_workspace``.
+    """
+    since_ms = now_ms() - window_hours * 60 * 60 * 1000
+    per_workspace, total_seconds = await UiEvent.dwell_by_workspace(since_ms)
+    ranked = sorted(per_workspace.items(), key=lambda item: -item[1])
+    return {
+        "since_ms": since_ms,
+        "window_hours": window_hours,
+        "total_seconds": round(total_seconds, 1),
+        "workspaces": [
+            {
+                "workspace": workspace,
+                "seconds": round(seconds, 1),
+                # Share of tracked time, so the numbers always read as a whole.
+                "share_pct": round(100.0 * seconds / total_seconds, 1) if total_seconds > 0 else 0.0,
+            }
+            for workspace, seconds in ranked
+        ],
+    }
+
+
 @router.post("/prune")
 async def prune(
     request: Request,

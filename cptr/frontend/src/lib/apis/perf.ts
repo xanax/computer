@@ -41,6 +41,29 @@ export const getUiEventSummary = (sinceMs?: number, kind?: string) => {
 	return fetchJSON<UiEventSummary>(`/api/ui-events/summary${qs ? `?${qs}` : ''}`);
 };
 
+export interface WorkspaceDwellRow {
+	workspace: string;
+	seconds: number;
+	/** Share of total tracked time in the window, 0–100. */
+	share_pct: number;
+}
+
+export interface WorkspaceDwell {
+	since_ms: number;
+	window_hours: number;
+	total_seconds: number;
+	workspaces: WorkspaceDwellRow[];
+}
+
+/**
+ * Active time per workspace as a share of total tracked time.
+ *
+ * Measured from client-reported `dwell` spans, so it only counts time the tab
+ * was actually visible. Empty until samples exist.
+ */
+export const getWorkspaceDwell = (windowHours = 7 * 24) =>
+	fetchJSON<WorkspaceDwell>(`/api/ui-events/dwell?window_hours=${windowHours}`);
+
 /** Raw samples, newest first. */
 export const getRecentUiEvents = (limit = 100, kind?: string) => {
 	const params = new URLSearchParams({ limit: String(limit) });
