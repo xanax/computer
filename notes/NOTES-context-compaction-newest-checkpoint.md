@@ -83,6 +83,26 @@ rounds expands to N+ messages, which is why a 6-row branch can read as 101.
 That expansion is the unit the context budget is spent in, so it is the honest
 number — but it means `replayed` is not comparable to `chain=`.
 
+### The same check against the real function
+
+That harness *reimplements* the slicing rule, so it can drift from the code it
+is supposed to be testing — it is a model of the fix, not the fix. The
+authoritative check is `notes/_scratch/compaction-realfn-check.py`, which loads
+the pre-fix module (`git show d66bd9d:cptr/utils/chat_task.py`) and the working
+tree side by side under two module names (relative imports still resolve, since
+both are named `cptr.utils.*`) and calls `_load_message_history` on each:
+
+| | chats | resumed history | summary differs |
+| --- | --- | --- | --- |
+| pre-fix | 23 | **11,484** messages | — |
+| working tree | 23 | **2,367** messages | 23/23 |
+
+79% less history replayed, e.g. `1a35d2a9` 326 → 62 rows-of-history and
+`277e477e` 491 → 161, with the summary in use in each case being the newer one.
+Every chat in the set differs, which is the expected shape: a chat is only in
+the set if the newest checkpoint is not the first, i.e. exactly the cases where
+the two rules disagree by construction.
+
 ## Note on the tests' shape
 
 The regression test asserts on the *replayed set* (`["u3", "a3"]`), not on an
