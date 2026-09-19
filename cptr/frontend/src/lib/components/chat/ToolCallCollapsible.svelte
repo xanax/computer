@@ -3,6 +3,7 @@
 	import { quintOut } from 'svelte/easing';
 	import { t } from '$lib/i18n';
 	import { expandToolDetails } from '$lib/stores';
+	import { ensureMessageOutput } from '$lib/utils/messageOutput';
 
 	interface Props {
 		item: any;
@@ -19,6 +20,13 @@
 	let expanded = $state($expandToolDetails || item.name === 'ask_user');
 	$effect(() => {
 		expanded = $expandToolDetails || item.name === 'ask_user';
+	});
+
+	// Arguments and tool output are not all in the chat payload: long ones are
+	// clipped or replaced by a placeholder until a row is opened. See
+	// `$lib/utils/messageOutput`.
+	$effect(() => {
+		if (expanded) ensureMessageOutput(chatId, messageId);
 	});
 
 	const args = $derived(item.arguments || {});
@@ -331,6 +339,17 @@
 										})}
 									</div>
 								{/if}
+							</div>
+						</div>
+					{:else if pairedOutput?.stripped}
+						<div>
+							<div
+								class="text-[0.625rem] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5 px-1"
+							>
+								{$t('chat.toolOutput')}
+							</div>
+							<div class="text-xs text-gray-400 dark:text-gray-500 px-1">
+								{$t('common.loading')}…
 							</div>
 						</div>
 					{/if}

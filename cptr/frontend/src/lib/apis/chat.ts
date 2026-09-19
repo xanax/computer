@@ -17,6 +17,9 @@ export interface ChatMessageRow {
 	/** Non-zero when this message is a compaction checkpoint: everything *above*
 	 *  it has been replaced by a rolling summary (whose length this is). */
 	summary_chars?: number;
+	/** Set when `output` has been trimmed to what collapsed rows draw. Expansion
+	 *  fetches the full stream via `getMessageOutput`. */
+	output_stripped?: boolean;
 }
 
 export interface ChatInfo {
@@ -132,10 +135,25 @@ export const getChats = (
 		`/api/chats?${workspace ? `workspace=${encodeURIComponent(workspace)}&` : ''}limit=${limit}&offset=${offset}&sort_by=${sortBy}&sort_dir=${sortDir}&include_closed=${includeClosed ? 'true' : 'false'}`
 	);
 
-export const getChat = (chatId: string, modelId?: string) => {
-	const suffix = modelId ? `?model_id=${encodeURIComponent(modelId)}` : '';
+export const getChat = (chatId: string, modelId?: string, full = false) => {
+	const params = new URLSearchParams();
+	if (modelId) params.set('model_id', modelId);
+	if (full) params.set('full', '1');
+	const suffix = params.size ? `?${params}` : '';
 	return fetchJSON<ChatDetail>(`/api/chats/${chatId}${suffix}`);
 };
+
+/**
+ * The complete output stream of one message.
+ *
+ * `getChat` sends only what the collapsed transcript draws — reasoning text and
+ * tool output arrive as placeholders — so this is called the first time a row
+ * is expanded (see `$lib/utils/messageOutput`).
+ */
+export const getMessageOutput = (chatId: string, messageId: string) =>
+	fetchJSON<{ message_id: string; output: any[] }>(
+		`/api/chats/${chatId}/messages/${messageId}/output`
+	);
 
 export const getUsage = () => fetchJSON<UsageResponse>('/api/chats/usage');
 

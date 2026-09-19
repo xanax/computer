@@ -12,6 +12,7 @@
 	import { ttsConfigured, ttsEnabled } from '$lib/stores/audio';
 	import { tooltip } from '$lib/tooltip';
 	import { fileIconName } from '$lib/utils/fileIcon';
+	import { ensureMessageOutput, hydratedOutputs } from '$lib/utils/messageOutput';
 	import Icon from '../Icon.svelte';
 	import { t } from '$lib/i18n';
 
@@ -62,10 +63,23 @@
 	let collapsedFiles = $state<Record<string, boolean>>({});
 	let textareaEl: HTMLTextAreaElement;
 
+	/**
+	 * The full output stream, once it has been fetched on demand.
+	 *
+	 * `output` arrives trimmed: reasoning text and tool output are placeholders
+	 * until a row is expanded (see `$lib/utils/messageOutput`). Everything that
+	 * renders or saves the stream reads this, so the trimmed copy is never
+	 * mistaken for the real thing.
+	 */
+	const fullOutput = $derived($hydratedOutputs.get(messageId) ?? output);
+
 	async function startEdit() {
+		// Editing writes the output stream back, so never open the editor on a
+		// placeholder — the trimmed items would be saved over the real ones.
+		await ensureMessageOutput(chatId, messageId);
 		edit = true;
-		if (output?.length) {
-			editedOutput = JSON.parse(JSON.stringify(output));
+		if (fullOutput?.length) {
+			editedOutput = JSON.parse(JSON.stringify(fullOutput));
 		} else {
 			editedContent = content;
 		}
@@ -117,7 +131,7 @@
 
 	function copyContent() {
 		const text =
-			(output || [])
+			(fullOutput || [])
 				.filter((i: any) => i.type === 'message')
 				.flatMap((i: any) => i.content || [])
 				.map((c: any) => c.text)
@@ -131,7 +145,7 @@
 
 	function shareContent() {
 		const text =
-			(output || [])
+			(fullOutput || [])
 				.filter((i: any) => i.type === 'message')
 				.flatMap((i: any) => i.content || [])
 				.map((c: any) => c.text)
@@ -296,7 +310,7 @@
 	type DisplayItem = ActivityGroup | MessageItem | ArtifactItem | ImageItem | FileItem | DownloadItem;
 
 	const outputText = $derived.by((): string => {
-		return (output || [])
+		return (fullOutput || [])
 			.filter((i: any) => i.type === 'message')
 			.filter((i: any) => messageItemText(i).trim())
 			.flatMap((i: any) => i.content || [])
@@ -305,7 +319,7 @@
 	});
 
 	const structuredImageUrls = $derived.by((): string[] => {
-		return (output || [])
+		return (fullOutput || [])
 			.filter((i: any) => i.type === 'image')
 			.flatMap((i: any) => i.images || [])
 			.map((image: any) => image?.url)
@@ -340,14 +354,14 @@
 	}
 
 	const displayItems = $derived.by((): DisplayItem[] => {
-		if (!output?.length) return [];
+		if (!fullOutput?.length) return [];
 
 		const items: DisplayItem[] = [];
 		let currentGroup: ActivityGroup | null = null;
 
 		// Collect all function_call_output items for lookup
 		const outputMap = new Map<string, any>();
-		for (const item of output) {
+		for (const item of fullOutput) {
 			if (item.type === 'function_call_output' && item.call_id) {
 				outputMap.set(item.call_id, item);
 			}
@@ -372,7 +386,7 @@
 			}
 		};
 
-		for (const [index, item] of output.entries()) {
+		for (const [index, item] of fullOutput.entries()) {
 			if (item.type === 'function_call') {
 				if (item.name !== 'ask_user' || item.status !== 'pending') {
 					ensureGroup();
@@ -471,7 +485,7 @@
 	{:else}
 		<!-- Normal display -->
 		<div>
-			{#if !done && (!output || output.length === 0)}
+			{#if !done && (!fullOutput || fullOutput.length === 0)}
 				<MarkdownRenderer {content} /><span
 					class="inline-block w-[0.125rem] h-3.5 bg-gray-400 dark:bg-gray-500 ml-0.5 animate-pulse align-text-bottom"
 				></span>
@@ -618,7 +632,12 @@
 						{#if displayItem.entries.length === 1}
 							{@const item = displayItem.entries[0]}
 							{#if item.type === 'reasoning'}
-								<ReasoningCollapsible {item} fallbackId={`reasoning-${groupIdx}-0`} />
+								<ReasoningCollapsible
+									{item}
+									fallbackId={`reasoning-${groupIdx}-0`}
+									{chatId}
+									{messageId}
+								/>
 							{:else}
 								<ToolCallCollapsible
 									{item}

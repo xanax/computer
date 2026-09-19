@@ -2,15 +2,24 @@
 	import { slide } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 	import { t } from '$lib/i18n';
+	import { ensureMessageOutput } from '$lib/utils/messageOutput';
 
 	interface Props {
 		item: any;
 		fallbackId: string;
+		chatId?: string | null;
+		messageId?: string;
 	}
 
-	let { item, fallbackId }: Props = $props();
+	let { item, fallbackId, chatId = null, messageId = '' }: Props = $props();
 
 	let expanded = $state(false);
+
+	// The thought text is not in the chat payload until it is asked for; see
+	// `$lib/utils/messageOutput`.
+	$effect(() => {
+		if (expanded) ensureMessageOutput(chatId, messageId);
+	});
 
 	const reasoningId = $derived(item.id || fallbackId);
 	const isThinking = $derived(item.status === 'in_progress' || item.status === 'running');
@@ -82,6 +91,10 @@
 					{thoughtText}
 				</div>
 			</div>
+		</div>
+	{:else if expanded && item.stripped}
+		<div id={reasoningId} class="mt-1 mb-0.5 px-1">
+			<div class="text-sm text-gray-400 dark:text-gray-500">{$t('common.loading')}…</div>
 		</div>
 	{/if}
 </div>

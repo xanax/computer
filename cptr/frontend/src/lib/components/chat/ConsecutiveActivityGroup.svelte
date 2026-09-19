@@ -3,6 +3,7 @@
 	import { quintOut } from 'svelte/easing';
 	import { t } from '$lib/i18n';
 	import { expandToolDetails } from '$lib/stores';
+	import { ensureMessageOutput } from '$lib/utils/messageOutput';
 	import ReasoningCollapsible from './ReasoningCollapsible.svelte';
 	import ToolCallCollapsible from './ToolCallCollapsible.svelte';
 
@@ -35,6 +36,12 @@
 	let expanded = $state($expandToolDetails);
 	$effect(() => {
 		expanded = $expandToolDetails;
+	});
+
+	// Expanding reveals reasoning text and tool output, which the chat load left
+	// out of the payload; pull them the first time anything is opened.
+	$effect(() => {
+		if (expanded) ensureMessageOutput(chatId, messageId);
 	});
 
 	const hasReasoningPending = $derived(
@@ -216,7 +223,12 @@
 			<div class="mb-0.5 space-y-0.5 mt-1">
 				{#each entries as item, entryIdx}
 					{#if item.type === 'reasoning'}
-						<ReasoningCollapsible {item} fallbackId={`reasoning-${groupIdx}-${entryIdx}`} />
+						<ReasoningCollapsible
+							{item}
+							fallbackId={`reasoning-${groupIdx}-${entryIdx}`}
+							{chatId}
+							{messageId}
+						/>
 					{:else}
 						<ToolCallCollapsible
 							{item}

@@ -39,12 +39,14 @@
 	import { get } from 'svelte/store';
 	import {
 		currentWorkspace,
+		expandToolDetails,
 		openChatTab,
 		streamingBehavior,
 		toolApprovalMode as defaultToolApprovalMode,
 		widescreenMode
 	} from '$lib/stores';
 	import { getPathDisplayName } from '$lib/utils/paths';
+	import { registerLoadedMessages } from '$lib/utils/messageOutput';
 	import {
 		ttsEnabled,
 		ttsConfigured,
@@ -442,9 +444,13 @@
 		const savedScroll = !isInitialLoad && messagesEl ? messagesEl.scrollTop : -1;
 
 		try {
-			const data = await getChat(id);
+			// Collapsed-only detail (reasoning text, tool output) is fetched when a
+			// row is expanded — unless the user keeps every row open, in which case
+			// ask for the whole thing at once instead of one request per message.
+			const data = await getChat(id, undefined, $expandToolDetails);
 			// Discard stale response if a newer loadChat was called while we waited
 			if (gen !== loadGeneration) return;
+			registerLoadedMessages(data.messages);
 			allMessages = data.messages;
 			loadChatSettings(data.chat.meta);
 			currentMessageId = data.chat.current_message_id;

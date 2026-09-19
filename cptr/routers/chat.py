@@ -677,8 +677,17 @@ async def get_chat(
     chat_id: str,
     request: Request,
     model_id: str | None = Query(None, description="Model used for system prompt context"),
+    full: bool = Query(
+        False,
+        description="Include the full text of collapsed details (reasoning, tool output)",
+    ),
 ):
-    """Get chat metadata + all messages."""
+    """Get chat metadata + all messages.
+
+    By default the response carries only what the collapsed transcript draws;
+    reasoning text and tool output are fetched per message when a row is
+    expanded (see ``get_message_output``). Pass ``full=true`` for everything.
+    """
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
     if not chat or chat.user_id != user_id:
@@ -703,14 +712,46 @@ async def get_chat(
             "closed_at": chat.closed_at,
             "is_active": chat_id in get_active_chat_ids(),
         },
-        "messages": [_message_dict(m) for m in messages],
+        "messages": [_message_dict(m, skeleton=not full) for m in messages],
         "tasks": tasks,
         "context_usage": context_usage,
     }
 
 
-def _message_dict(m) -> dict:
-    """Serialize a ChatMessage, overlaying live state if task is running."""
+@router.get("/{chat_id}/messages/{message_id}/output")
+async def get_message_output(chat_id: str, message_id: str, request: Request):
+    """The complete output stream of one message.
+
+    Counterpart of the skeleton `get_chat` returns: the client asks for this the
+    first time a collapsed row (reasoning, tool call) is expanded, which keeps
+    tens of megabytes of never-rendered text off the initial load.
+    """
+    from cptr.utils.chat_task import get_live_state
+
+    user_id = _get_user(request)
+    chat = await Chat.get_by_id(chat_id)
+    if not chat or chat.user_id != user_id:
+        raise HTTPException(404, "chat not found")
+
+    message = await ChatMessage.get_by_id(message_id)
+    if not message or message.chat_id != chat_id:
+        raise HTTPException(404, "message not found")
+
+    live = get_live_state(message_id)
+    return {
+        "message_id": message_id,
+        "output": (live["output"] if live else message.output) or [],
+    }
+
+
+def _message_dict(m, *, skeleton: bool = False) -> dict:
+    """Serialize a ChatMessage, overlaying live state if task is running.
+
+    With ``skeleton=True`` the parts that only exist behind a collapsed row
+    (reasoning text, tool output) are replaced by a placeholder — see
+    ``_skeleton_output``. A message that is still streaming is never reduced:
+    its live text is on screen as it arrives.
+    """
     from cptr.utils.chat_task import get_live_state
 
     d = {
@@ -735,7 +776,112 @@ def _message_dict(m) -> dict:
         d["content"] = live["content"]
         d["output"] = live["output"]
         d["done"] = False
+    elif skeleton and d["output"]:
+        reduced, stripped = _skeleton_output(d["output"])
+        if stripped:
+            d["output"] = reduced
+            # The frontend hydrates on expand; it needs to know there is more.
+            d["output_stripped"] = True
     return d
+
+
+# ── Collapsed-details payload trimming ──────────────────────
+# Reasoning text and tool output are the bulk of a stored chat — measured at
+# 16.1 MB and 32.5 MB of this box's 60.8 MB of messages — and none of it is
+# drawn until a row is expanded. The client even truncates tool output to 10k
+# chars when it renders it. So a chat load ships only what the collapsed rows
+# show, and the full text arrives from GET /{chat_id}/messages/{message_id}/output
+# on first expand.
+
+#: Longest argument string kept for a collapsed row. Tool labels read `path`,
+#: `query`, `command` and similar, which are short; this only bounds the rare
+#: argument that carries a whole file.
+ARG_CHARS = 200
+
+
+def _clip_args(value, cap: int = ARG_CHARS):
+    """Clip long strings anywhere inside a tool call's arguments."""
+    if isinstance(value, str):
+        return value[:cap] if len(value) > cap else value
+    if isinstance(value, dict):
+        return {key: _clip_args(item, cap) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clip_args(item, cap) for item in value]
+    return value
+
+
+def _reasoning_text(item) -> str:
+    """The thought text a ReasoningCollapsible would render."""
+    parts = item.get("summary") or item.get("content") or []
+    return "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+
+
+def _skeleton_output(output: list) -> tuple[list, bool]:
+    """Reduce a message's output items to what collapsed rows render.
+
+    Returns ``(items, stripped)``. Anything whose text is always on screen is
+    left alone — in particular the answers to ``ask_user``, since that row
+    renders itself expanded, so stripping it would blank the question it is
+    answering.
+    """
+    ask_user_calls = {
+        item.get("call_id")
+        for item in output
+        if item.get("type") == "function_call" and item.get("name") == "ask_user"
+    }
+    items: list = []
+    stripped = False
+    for item in output:
+        kind = item.get("type")
+
+        if kind == "function_call_output":
+            body = item.get("output")
+            if item.get("call_id") in ask_user_calls or len(str(body or "")) <= ARG_CHARS:
+                items.append(item)
+                continue
+            items.append(
+                {
+                    "type": kind,
+                    "call_id": item.get("call_id"),
+                    # Shown while the real output is on its way.
+                    "chars": len(str(body)),
+                    "stripped": True,
+                }
+            )
+            stripped = True
+
+        elif kind == "reasoning":
+            text = _reasoning_text(item)
+            if not text:
+                items.append(item)
+                continue
+            items.append(
+                {
+                    "type": kind,
+                    "id": item.get("id"),
+                    "status": item.get("status"),
+                    "chars": len(text),
+                    "stripped": True,
+                }
+            )
+            stripped = True
+
+        elif kind == "function_call":
+            if item.get("name") == "ask_user":
+                items.append(item)
+                continue
+            args = item.get("arguments") or {}
+            clipped = _clip_args(args)
+            if clipped != args:
+                items.append({**item, "arguments": clipped})
+                stripped = True
+            else:
+                items.append(item)
+
+        else:
+            # message / image / artifact / file / download: small, and rendered.
+            items.append(item)
+    return items, stripped
 
 
 async def _get_context_leaf_message_id(chat) -> str | None:
