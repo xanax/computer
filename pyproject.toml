@@ -40,6 +40,7 @@ all = [
 [dependency-groups]
 dev = [
     "ruff>=0.14.8",
+    "pytest>=8.0",
 ]
 
 [project.scripts]
@@ -69,3 +70,6 @@ extend-exclude = [
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -25,6 +25,7 @@ from urllib.parse import urlencode
 
 from fastapi import Request
 from cptr.env import CHAT_TOOL_COMMAND_MAX_CHARS, CHAT_TOOL_MAX_CHARS, EXECUTE_TIMEOUT
+from cptr.utils import git as gitlib
 from cptr.utils.gitignore import is_gitignored, load_gitignore
 from cptr.utils.identity import (
     IdentityUnavailable,
@@ -685,6 +686,12 @@ async def search_files(
     regex: bool = False,
     case_insensitive: bool = False,
     include: str = "",
+    exclude: str = "",
+    type: str = "",
+    context: int = 0,
+    max_results: int = 50,
+    word: bool = False,
+    multiline: bool = False,
     filenames_only: bool = False,
     *,
     __context__: dict,
@@ -694,7 +701,13 @@ async def search_files(
     :param path: Directory to search in, relative to workspace.
     :param regex: Treat query as a regular expression.
     :param case_insensitive: Case-insensitive matching.
-    :param include: Glob pattern to filter files (e.g. '*.py', '*.ts').
+    :param include: Comma-separated globs to include (e.g. '*.py', '*.ts').
+    :param exclude: Comma-separated globs to exclude (e.g. '*.min.js', 'dist/*').
+    :param type: Comma-separated ripgrep file types (e.g. 'py', 'rust', 'markdown').
+    :param context: Number of context lines to show around each match.
+    :param max_results: Maximum matching lines to return (1-500).
+    :param word: Match whole words only.
+    :param multiline: Enable multiline matching.
     :param filenames_only: Only return filenames, not matching lines.
     """
     workspace = __context__["workspace"]
@@ -714,11 +727,17 @@ async def search_files(
         res = await _search_rg(
             query,
             full,
-            regex,
-            case_insensitive,
-            include,
-            filenames_only,
-            await identity_for_context(__context__),
+            regex=regex,
+            case_insensitive=case_insensitive,
+            include=include,
+            exclude=exclude,
+            type=type,
+            context=context,
+            max_results=max_results,
+            word=word,
+            multiline=multiline,
+            filenames_only=filenames_only,
+            identity=await identity_for_context(__context__),
         )
     except FileNotFoundError:
         try:
@@ -744,26 +763,50 @@ async def _search_rg(
     regex: bool,
     case_insensitive: bool,
     include: str,
+    exclude: str,
+    type: str,
+    context: int,
+    max_results: int,
+    word: bool,
+    multiline: bool,
     filenames_only: bool,
     identity,
 ) -> str:
     """Search using ripgrep."""
-    args = ["rg", "--no-heading", "--max-count=50", "--color=never"]
+    max_results = max(1, min(int(max_results), 500))
+    context = max(0, min(int(context), 50))
+    args = ["rg", "--no-heading", f"--max-count={max_results}", "--color=never"]
     # Never search .env files
     args.extend(["--glob", "!.env", "--glob", "!.env.*"])
     if not regex:
         args.append("--fixed-strings")
     if case_insensitive:
         args.append("--ignore-case")
+    if word:
+        args.append("--word-regexp")
+    if multiline:
+        args.append("--multiline")
+    if context > 0:
+        args.append(f"--context={context}")
     if filenames_only:
         args.append("--files-with-matches")
     else:
         args.append("--line-number")
+    if type:
+        for t in type.split(","):
+            t = t.strip()
+            if t:
+                args.extend(["--type", t])
     if include:
         for glob in include.split(","):
             glob = glob.strip()
             if glob:
                 args.extend(["--glob", glob])
+    if exclude:
+        for glob in exclude.split(","):
+            glob = glob.strip()
+            if glob:
+                args.extend(["--glob", f"!{glob}"])
 
     args.extend(["--", query, str(full)])
 
@@ -785,7 +828,7 @@ async def _search_rg(
 
     # Make paths relative
     prefix = str(full) + os.sep
-    lines = output.splitlines()[:50]
+    lines = output.splitlines()[:max_results]
     result = [line.replace(prefix, "") for line in lines]
     return "\n".join(result) if result else "No matches found."
 
@@ -843,6 +886,175 @@ async def _search_python(query: str, full: Path, case_insensitive: bool) -> str:
         return "\n".join(results) if results else "No matches found."
 
     return await asyncio.to_thread(_walk_and_search)
+
+
+# ── Git tools ────────────────────────────────────────────────
+
+
+def _git_workspace_root(__context__: dict) -> str:
+    """Return the workspace path to run git commands against ('' if none)."""
+    workspace = __context__.get("workspace") or ""
+    if not workspace:
+        return ""
+    return str(Path(workspace).resolve())
+
+
+async def _git_repo_root(__context__: dict) -> tuple[str, str | None, Any | None]:
+    """Resolve workspace + identity for a git tool. Returns (root, error, identity)."""
+    root = _git_workspace_root(__context__)
+    if not root:
+        return "", "Error: git tools require an open workspace.", None
+    try:
+        identity = await identity_for_context(__context__)
+    except IdentityUnavailable as e:
+        return "", f"Error: {e}", None
+    return root, None, identity
+
+
+async def git_status(*, __context__: dict) -> str:
+    """Show git status for the current workspace: branch, upstream, ahead/behind, and changed files."""
+    root, error, identity = await _git_repo_root(__context__)
+    if error:
+        return error
+    try:
+        if not await gitlib.is_repo(root, identity):
+            return "Not a git repository."
+        st = await gitlib.status(root, identity)
+    except gitlib.GitError as e:
+        return f"Error: {e}"
+
+    lines = [f"On branch {st['branch'] or '(detached HEAD)'}"]
+    if st["upstream"]:
+        lines.append(f"Tracking {st['upstream']} (ahead {st['ahead']}, behind {st['behind']})")
+    elif st["branch"]:
+        lines.append("No upstream branch (unpublished)")
+
+    files = st["files"]
+    if not files:
+        lines.append("Working tree clean")
+    else:
+        for f in files:
+            flags = []
+            if f.get("staged"):
+                flags.append(f"staged:{f.get('staged_status', '')}")
+            if f.get("unstaged"):
+                flags.append(f"unstaged:{f.get('unstaged_status', '')}")
+            counts = ""
+            if "additions" in f and "deletions" in f:
+                counts = f" (+{f['additions']}/-{f['deletions']})"
+            lines.append(f"  {f['path']}{counts} [{', '.join(flags)}]")
+    return _truncate_output("\n".join(lines), max_chars=CHAT_TOOL_MAX_CHARS)
+
+
+async def git_log(
+    limit: int = 30,
+    offset: int = 0,
+    path: str = "",
+    grep: str = "",
+    *,
+    __context__: dict,
+) -> str:
+    """Show commit history for the current workspace's repository.
+
+    :param limit: Number of commits to return (1-100).
+    :param offset: Number of commits to skip (for paging).
+    :param path: Restrict to commits touching this path (uses --follow).
+    :param grep: Only include commits whose message matches this pattern.
+    """
+    root, error, identity = await _git_repo_root(__context__)
+    if error:
+        return error
+    try:
+        if not await gitlib.is_repo(root, identity):
+            return "Not a git repository."
+        commits = await gitlib.log(
+            root,
+            limit=max(1, min(int(limit), 100)),
+            offset=max(0, int(offset)),
+            path=path or None,
+            grep=grep or None,
+            identity=identity,
+        )
+    except gitlib.GitError as e:
+        return f"Error: {e}"
+
+    if not commits:
+        return "No commits found."
+    lines = [f"{c['short_hash']}  {c['author']}  {c['date']}  {c['message']}" for c in commits]
+    return _truncate_output("\n".join(lines), max_chars=CHAT_TOOL_MAX_CHARS)
+
+
+async def git_show(ref: str, *, __context__: dict) -> str:
+    """Show a commit's metadata and patch.
+
+    :param ref: Commit reference (hash, branch, or relative like HEAD~1).
+    """
+    root, error, identity = await _git_repo_root(__context__)
+    if error:
+        return error
+    try:
+        if not await gitlib.is_repo(root, identity):
+            return "Not a git repository."
+        out = await gitlib.show_readable(root, ref, identity=identity)
+    except gitlib.GitError as e:
+        return f"Error: {e}"
+    return _truncate_output(out.strip() or "(no diff)", max_chars=CHAT_TOOL_MAX_CHARS)
+
+
+async def git_diff(
+    staged: bool = False,
+    file: str = "",
+    ref: str = "",
+    untracked: bool = False,
+    *,
+    __context__: dict,
+) -> str:
+    """Show a diff for the current workspace's repository.
+
+    :param staged: Show staged (index) changes instead of unstaged working-tree changes.
+    :param file: Restrict the diff to this single file path.
+    :param ref: Compare against a commit or range (e.g. 'HEAD~1', 'main...HEAD').
+    :param untracked: Include an untracked file's content as a diff (requires file).
+    """
+    root, error, identity = await _git_repo_root(__context__)
+    if error:
+        return error
+    try:
+        if not await gitlib.is_repo(root, identity):
+            return "Not a git repository."
+        if ref:
+            out = await gitlib.diff_ref_text(root, ref, identity=identity)
+        else:
+            out = await gitlib.diff_text(
+                root, file=file or None, staged=staged, untracked=untracked, identity=identity
+            )
+    except gitlib.GitError as e:
+        return f"Error: {e}"
+    out = out.strip()
+    return _truncate_output(out or "No changes.", max_chars=CHAT_TOOL_MAX_CHARS)
+
+
+async def git_blame(file: str, *, __context__: dict) -> str:
+    """Show who last changed each line of a file.
+
+    :param file: File path relative to the workspace.
+    """
+    root, error, identity = await _git_repo_root(__context__)
+    if error:
+        return error
+    if not file.strip():
+        return "Error: file is required."
+    try:
+        if not await gitlib.is_repo(root, identity):
+            return "Not a git repository."
+        entries = await gitlib.blame(root, file, identity)
+    except gitlib.GitError as e:
+        return f"Error: {e}"
+
+    lines = []
+    for e in entries:
+        lines.append(f"{e['line']:>6}  {e['hash'][:10]}  {e['author']:<20}  {e['text']}")
+    return _truncate_output("\n".join(lines), max_chars=CHAT_TOOL_MAX_CHARS)
 
 
 async def create_file(
@@ -2493,6 +2705,11 @@ TOOLS: dict[str, dict] = {
     "read_file": {"fn": read_file, "approval": "allow"},
     "list_directory": {"fn": list_directory, "approval": "allow"},
     "search_files": {"fn": search_files, "approval": "allow"},
+    "git_status": {"fn": git_status, "approval": "allow"},
+    "git_log": {"fn": git_log, "approval": "allow"},
+    "git_show": {"fn": git_show, "approval": "allow"},
+    "git_diff": {"fn": git_diff, "approval": "allow"},
+    "git_blame": {"fn": git_blame, "approval": "allow"},
     "check_task": {"fn": check_task, "approval": "allow"},
     "web_search": {"fn": web_search, "approval": "allow"},
     "read_url": {"fn": read_url, "approval": "allow"},
@@ -2932,6 +3149,7 @@ BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
         "write_file",
     ),
     "terminal": ("run_command", "send_input", "check_task", "kill_task"),
+    "git": ("git_status", "git_log", "git_show", "git_diff", "git_blame"),
     "web": ("web_search", "read_url"),
     "browser": (
         "browser_navigate",
@@ -2961,6 +3179,7 @@ GLOBAL_CHAT_DISABLED_TOOLS = {
     *BUILTIN_TOOL_GROUPS["files"],
     *BUILTIN_TOOL_GROUPS["terminal"],
     *BUILTIN_TOOL_GROUPS["browser"],
+    *BUILTIN_TOOL_GROUPS["git"],
     *BUILTIN_TOOL_GROUPS["automations"],
     *BUILTIN_TOOL_GROUPS["images"],
     "manage_skill",

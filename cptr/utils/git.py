@@ -296,6 +296,37 @@ async def effective_config(
     }
 
 
+async def diff_text(
+    root: str,
+    file: str | None = None,
+    staged: bool = False,
+    untracked: bool = False,
+    ignore_whitespace: bool = False,
+    identity: ExecutionIdentity | None = None,
+) -> str:
+    """Return raw unified diff output for working-tree or index changes."""
+    if untracked and file:
+        # Untracked files: use --no-index to diff against empty
+        null_device = "NUL" if sys.platform == "win32" else "/dev/null"
+        args = ["diff", "--no-index", "--unified=3", "--color=never"]
+        if ignore_whitespace:
+            args.append("--ignore-all-space")
+        args.extend(["--", null_device, file])
+        _, out, _ = await _run(*args, cwd=root, check=False, identity=identity)
+        return out
+
+    args = ["diff", "--unified=3", "--color=never"]
+    if ignore_whitespace:
+        args.append("--ignore-all-space")
+    if staged:
+        args.append("--staged")
+    if file:
+        args.extend(["--", file])
+
+    _, out, _ = await _run(*args, cwd=root, identity=identity)
+    return out
+
+
 async def diff(
     root: str,
     file: str | None = None,
@@ -305,26 +336,23 @@ async def diff(
     identity: ExecutionIdentity | None = None,
 ) -> dict[str, Any]:
     """Get diff output as structured data."""
-    if untracked and file:
-        # Untracked files: use --no-index to diff against empty
-        null_device = "NUL" if sys.platform == "win32" else "/dev/null"
-        args = ["diff", "--no-index", "--unified=3"]
-        if ignore_whitespace:
-            args.append("--ignore-all-space")
-        args.extend(["--", null_device, file])
-        _, out, _ = await _run(*args, cwd=root, check=False, identity=identity)
-        return _parse_diff(out)
+    out = await diff_text(root, file, staged, untracked, ignore_whitespace, identity)
+    return _parse_diff(out)
 
-    args = ["diff", "--unified=3"]
+
+async def diff_ref_text(
+    root: str,
+    ref: str,
+    ignore_whitespace: bool = False,
+    identity: ExecutionIdentity | None = None,
+) -> str:
+    """Return raw unified diff for a commit or ``base...head`` range."""
+    args = ["diff", "--unified=3", "--color=never"]
     if ignore_whitespace:
         args.append("--ignore-all-space")
-    if staged:
-        args.append("--staged")
-    if file:
-        args.extend(["--", file])
-
+    args.append(ref)
     _, out, _ = await _run(*args, cwd=root, identity=identity)
-    return _parse_diff(out)
+    return out
 
 
 async def compare_diff(
@@ -335,12 +363,7 @@ async def compare_diff(
     identity: ExecutionIdentity | None = None,
 ) -> dict[str, Any]:
     """Get a structured diff for a base...head comparison."""
-    args = ["diff", "--unified=3", "--color=never"]
-    if ignore_whitespace:
-        args.append("--ignore-all-space")
-    args.append(f"{base}...{head}")
-    _, out, _ = await _run(*args, cwd=root, identity=identity)
-    return _parse_diff(out)
+    return _parse_diff(await diff_ref_text(root, f"{base}...{head}", ignore_whitespace, identity))
 
 
 async def staged_diff(
@@ -535,15 +558,18 @@ async def log(
     limit: int = 50,
     offset: int = 0,
     identity: ExecutionIdentity | None = None,
+    path: str | None = None,
+    grep: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Get commit log."""
+    """Get commit log, optionally restricted to a path or message pattern."""
     fmt = "%H%x00%h%x00%an%x00%aI%x00%s"
+    args = ["log", f"--format={fmt}", f"-n{limit}", f"--skip={offset}", "--no-merges"]
+    if grep:
+        args.append(f"--grep={grep}")
+    if path:
+        args.extend(["--follow", "--", path])
     _, out, _ = await _run(
-        "log",
-        f"--format={fmt}",
-        f"-n{limit}",
-        f"--skip={offset}",
-        "--no-merges",
+        *args,
         cwd=root,
         check=False,
         identity=identity,
@@ -565,18 +591,44 @@ async def log(
     return commits
 
 
+async def show_text(
+    root: str,
+    ref: str,
+    ignore_whitespace: bool = False,
+    identity: ExecutionIdentity | None = None,
+) -> str:
+    """Return raw ``git show`` output (formatted header + patch) for a commit."""
+    fmt = "%H%x00%h%x00%an%x00%aI%x00%s"
+    args = ["show", ref, f"--format={fmt}", "--patch", "--color=never"]
+    if ignore_whitespace:
+        args.append("--ignore-all-space")
+    _, out, _ = await _run(*args, cwd=root, identity=identity)
+    return out
+
+
+async def show_readable(
+    root: str,
+    ref: str,
+    ignore_whitespace: bool = False,
+    identity: ExecutionIdentity | None = None,
+) -> str:
+    """Return human-readable ``git show`` output for a commit (header + patch)."""
+    fmt = "commit %H (%h)%nAuthor: %an <%ae>%nDate: %aI%n%n%B"
+    args = ["show", ref, f"--format={fmt}", "--patch", "--color=never"]
+    if ignore_whitespace:
+        args.append("--ignore-all-space")
+    _, out, _ = await _run(*args, cwd=root, identity=identity)
+    return out
+
+
 async def show(
     root: str,
     ref: str,
     ignore_whitespace: bool = False,
     identity: ExecutionIdentity | None = None,
 ) -> dict[str, Any]:
-    """Show a commit's diff."""
-    fmt = "%H%x00%h%x00%an%x00%aI%x00%s"
-    args = ["show", ref, f"--format={fmt}", "--patch"]
-    if ignore_whitespace:
-        args.append("--ignore-all-space")
-    _, out, _ = await _run(*args, cwd=root, identity=identity)
+    """Show a commit's diff as structured data."""
+    out = await show_text(root, ref, ignore_whitespace, identity)
 
     # First line is the formatted header, rest is diff
     lines = out.split("\n", 1)
@@ -595,6 +647,43 @@ async def show(
 
     info["diff"] = _parse_diff(diff_text)
     return info
+
+
+async def blame(
+    root: str,
+    file: str,
+    identity: ExecutionIdentity | None = None,
+) -> list[dict[str, Any]]:
+    """Return per-line blame data for a file.
+
+    Each entry maps a source line to its originating commit: ``line`` (1-based),
+    ``hash``, ``author``, and ``text``.
+    """
+    _, out, _ = await _run("blame", "--porcelain", "--", file, cwd=root, identity=identity)
+
+    result: list[dict[str, Any]] = []
+    lines = out.splitlines()
+    i = 0
+    # `--porcelain` only repeats author/committer metadata when the commit
+    # changes, so carry the last-seen author forward across same-commit lines.
+    author = ""
+    while i < len(lines):
+        header = lines[i].split()
+        i += 1
+        if not header:
+            continue
+        commit = header[0]
+        final_line = int(header[2]) if len(header) > 2 else 0
+        while i < len(lines) and not lines[i].startswith("\t"):
+            line = lines[i]
+            if line.startswith("author "):
+                author = line[len("author ") :]
+            i += 1
+        text = lines[i][1:] if i < len(lines) and lines[i].startswith("\t") else ""
+        i += 1
+        result.append({"line": final_line, "hash": commit, "author": author, "text": text})
+
+    return result
 
 
 async def branches(root: str, identity: ExecutionIdentity | None = None) -> dict[str, Any]:
