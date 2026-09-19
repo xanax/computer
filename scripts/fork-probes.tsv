@@ -1,0 +1,28 @@
+# Fork probes: does each fork change / bug still differ from upstream?
+#
+# Tab-separated: id <TAB> kind <TAB> path <TAB> pattern <TAB> note
+#
+# kind:
+#   fix   pattern is our fix's signature.  found in upstream = merged upstream,
+#         our patch is now redundant (delete it at the next sync).
+#         not found = still fork-only, patch still needed.
+#   bug   pattern is the *buggy* code.  found in upstream = bug still present
+#         upstream (candidate for an upstream issue).  not found = gone.
+#   file  whole-file check: does upstream have this fork-only file at all?
+#   feature  pattern is a fork feature's signature.  found in upstream = they
+#         shipped the same thing (expect conflicts); not found = still ours.
+#
+# Patterns are matched literally (`grep -FQ`) against `git show <upstream>:<path>`.
+# Keep them short, distinctive, and true to the current upstream base: a probe
+# that rots silently is worse than no probe, so re-check after each sync.
+
+B-001	fix	cptr/utils/git.py	_PATHSPEC_NO_MATCH	staging a path that matches nothing no longer aborts the batch
+B-002	fix	cptr/frontend/src/lib/components/Terminal.svelte	geometrychange	on-screen keyboard resize / visualViewport handling
+B-003	bug	cptr/frontend/src/lib/components/chat/SendButton.svelte	text-white bg-gray-200	idle send arrow: white on gray-200, 1.24:1 (measured)
+B-004	bug	cptr/utils/runtime.py	rglob	tree listing stats every entry and descends .git/node_modules (coarse probe)
+B-005	feature	cptr/frontend/src/app.css	.mono	paper/ink (e-ink) palettes and the mono utility layer
+B-006	file	cptr/models/ui_events.py		UI perf telemetry table
+B-007	file	cptr/routers/perf.py		ui-events ingest + summary/recent/prune endpoints
+B-008	file	cptr/frontend/src/lib/utils/perf.ts	client-side perf collector
+B-009	file	cptr/utils/native_tts.py	on-device (SAPI / say / espeak) TTS provider
+B-010	file	cptr/frontend/src/lib/components/SidebarWorkspaceList.svelte	workspace heading plates (file exists upstream, we changed it)

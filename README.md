@@ -18,6 +18,19 @@ Use it from your phone, tablet, laptop, another computer, or the machine it's ru
 
 > Start here: [Open WebUI Computer docs](https://docs.openwebui.com/ecosystem/computer/)
 
+## Fork note
+
+**This is a personal fork** of [Open WebUI Computer](https://github.com/open-webui/computer). The project and its name are upstream's; the changes below are mine. The fork exists because I run `cptr` against Windows files from WSL and drive it from a phone and an e-ink display — a combination upstream does not optimise for. Full write-up: [`FORK.md`](FORK.md). Bug ledger: [`BUGS.md`](BUGS.md). Fork changes: [`CHANGELOG.fork.md`](CHANGELOG.fork.md). Reasoning and measurements: [`notes/`](notes/).
+
+In short:
+
+- **Speed, for WSL's `/mnt/c`.** Reading Windows files across the 9p bridge costs ~1–5 ms per `stat` (vs ~0.005 ms on ext4) and ~5 ms just to open a directory (~0.04 ms on ext4), so the unit of cost is *directories visited*, not entries listed. File-tree listing no longer `stat`s every entry to decide whether it is a file — it classifies from the directory entry, prunes `.git`/`node_modules`, never follows symlinked directories, and runs under a ~1 s budget that degrades (`?` unscanned, `+` lower bound) instead of hanging. Directory browsing, with a TTL cache and hover prefetch: **820 ms → 302 ms**.
+- **Monitoring, which upstream has none of.** A `ui_events` table plus a best-effort client collector records tab switch → paint, component mount, and directory round-trips, on a real epoch-ms timeline. `GET /api/ui-events/summary` reports p50/p95/max per kind, sorted slowest first — the order worth fixing things in. It never slows the UI: it buffers, flushes every 5 s, and swallows its own failures.
+- **Tweaks and fixes.** The Commit button no longer returns 400 when a staged *deletion* is in the list; terminals handle the on-screen keyboard via `visualViewport` so it resizes instead of covering the prompt; terminal font size; directory download as zip; chats close rather than being force-marked unread; workspace folders start expanded; the Tab/Esc/Ctrl shortcut row can be switched off from Settings → Appearance.
+- **Themes for e-ink displays.** `bw` and `bw-dark` are pure ink-on-paper: no greyscales, no dithering, because mid-tones on a 1-bit display only become noise. Hover, active, and scrim states are solid inversions (ink surface, paper text) rather than grey washes; code and diagram surfaces stay paper with an ink border. Fixed en route: a fill-wiping CSS rule that matched the class attribute by *substring*, which left some buttons invisible — wiped surfaces measured **9/33 → 0/0** across a sweep of all 731 class strings in the codebase.
+
+Checked against upstream `f9d1d8c`. `./scripts/fork-status.sh` re-verifies every claim here and reports whether each logged bug is still present in upstream — so the numbers above can be re-derived rather than trusted.
+
 ## Install
 
 ```bash
