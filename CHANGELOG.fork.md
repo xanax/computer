@@ -26,6 +26,7 @@ Based on upstream `f9d1d8c` (2026-08-16).
 
 - **File-tree listing is bounded and stat-free.** `os.scandir` with dirent classification throughout, `_TREE_IGNORE` pruned *inside* the count walk, symlinked directories never followed, all under a shared `_ScanBudget` (~1 s plus ceilings). Unreached items are marked `?` and capped counts `+`.
 - **Directory listing** uses `scandir` + `dirs_only` + a 10 s TTL cache + hover prefetch: **820 ms → 302 ms** on a cold `/mnt/c` listing.
+- **Command-session polling is gated on visibility.** A chat tab polls `/api/terminal/sessions` every 5 s only while it is the active tab *and* `document.visibilityState === 'visible'`, re-arming on `visibilitychange`; previously every mounted tab polled forever, hidden or not.
 - Workspace folders start expanded by default.
 
 ### Fixed
@@ -33,6 +34,7 @@ Based on upstream `f9d1d8c` (2026-08-16).
 - **Commit button returned HTTP 400 whenever a staged deletion was present.** `GitBar.doCommit()` re-stages the files it is about to commit; a staged deletion matches neither worktree nor index, so one unmatchable path aborted the entire `git add` batch and `/api/git/commit` was never reached. `git.py::stage()` now keeps the single-call fast path and, only on the pathspec failure, retries per path treating "nothing to stage" as a no-op.
 - **Soft keyboard covered the terminal prompt** instead of resizing it — `visualViewport` / `geometrychange` handling added.
 - **Solid fills wiped in the mono themes.** An unlayered rule matched `[class*='bg-white/']` by *substring*, so any element merely mentioning an alpha utility in its class list lost its background — including an invisible "Open" button with a paper label on paper. Two blocks after the wipe re-assert the two real surfaces; a sweep of all 731 distinct class strings measured wiped surfaces at 9 ink / 33 paper → **0 / 0**, invisible-text cases 13 → 5 (bw) and 64 → 5 (bw-dark).
+- **Compaction reloaded from the wrong checkpoint**, so a repeatedly compacted chat re-sent history it had already summarized. `_load_message_history` scanned root→leaf and stopped at the *first* `chat_summary`, i.e. the oldest, loosest checkpoint on the branch; summaries stack, each absorbing the previous, so the newest is the one that bounds the replay. It now keeps the most recent checkpoint on the branch (which is also the point `_summary_checkpoint_message_id` stamps, so the two agree). Measured over the 158 chats in this install's DB: messages replayed per turn **17,236 → 8,119**, all 23 affected chats smaller, none larger. Regression tests in `tests/test_context_compaction.py`.
 - **Perf data quality:** `ts` was page-relative rather than epoch-ms (rows reset on reload, unordered across sessions) — now epoch-ms with `perf_ms` retaining the precise intra-page clock; ambient context (tab counts, groups, viewport, visibility) now attached to every sample at *record* time rather than flush time; long tasks attributed to the preceding interaction, sub-80 ms dropped as noise; `started_hidden` / `active` flags so rAF-throttled readings from background tabs can be discounted instead of read as slowness.
 
 ### Removed

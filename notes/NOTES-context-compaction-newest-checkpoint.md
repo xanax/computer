@@ -1,7 +1,7 @@
 # Compaction reloaded from the oldest checkpoint on a branch
 
 Ledger: **B-010**. Probe: `scripts/fork-probes.tsv` → `B-010` (kind `bug`, pattern `existing_summary = m.chat_summary`,
-still `PRESENT-UPSTREAM` at `f9d1d8c`). Fix commit: `742dcc1`.
+still `PRESENT-UPSTREAM` at `f9d1d8c`). Fix commit: `bb7faa6`.
 
 ## Symptom
 
