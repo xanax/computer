@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - ⬇️ **Chats can hand you a file to download.** Ask a chat to download, save, or send you a file and it posts a download card: click it and the file saves to the computer you are browsing from, not the runtime.
+- ⌨️ **The terminal key row can be turned off.** Settings → Appearance has a "Terminal shortcut bar" switch: flip it off and the Tab/Esc/Ctrl/arrow row stops taking up space above your terminals — which is what you want when you are typing on a real keyboard.
 - 🧹 **Chats close when you are done with them.** A chat row grows an × next to its menu, and there is a close action at the end of the conversation. Closed chats step out of the sidebar and the workspace chat list; they come back on their own as soon as new activity makes them unread, and you can reopen any of them from the "What can I help you with?" page.
 
 ### Changed

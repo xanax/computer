@@ -147,6 +147,8 @@ export interface UserPreferences {
 	expandToolDetails?: boolean;
 	/** Terminal (xterm.js) font size in px; null = default. */
 	terminalFontSize?: number | null;
+	/** Show the on-screen key row (Tab/Esc/Ctrl/arrows) above terminals (default true). */
+	terminalShortcutBar?: boolean;
 	homeGroup?: EditorGroup;
 	homeState?: HomeState;
 	git?: {
@@ -378,6 +380,11 @@ export const textScale = writable<number | null>(null);
 export const borderContrast = writable<number | null>(null);
 /** Terminal font size in px; null means DEFAULT_TERMINAL_FONT_SIZE. */
 export const terminalFontSize = writable<number | null>(null);
+/**
+ * Show the on-screen key row (Tab, Esc, Ctrl, arrows) above terminals.
+ * Handy on a phone or tablet; dead weight if you have a physical keyboard.
+ */
+export const terminalShortcutBar = writable(true);
 export const widescreenMode = writable(false);
 export const expandToolDetails = writable(false);
 
@@ -491,6 +498,7 @@ function persistPreferences(): void {
 			widescreenMode: get(widescreenMode),
 			expandToolDetails: get(expandToolDetails),
 			terminalFontSize: get(terminalFontSize),
+			terminalShortcutBar: get(terminalShortcutBar),
 			homeState: get(homeState)
 		};
 		savePreferences(prefs as unknown as Record<string, unknown>).catch(() => {});
@@ -549,6 +557,9 @@ function subscribeForPersistence() {
 	terminalFontSize.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
+	terminalShortcutBar.subscribe(() => {
+		if (get(stateLoaded)) persistPreferences();
+	});
 	expandToolDetails.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
@@ -599,6 +610,8 @@ export async function loadPreferences(): Promise<void> {
 		terminalFontSize.set(
 			normalizeTerminalFontSize(appearance.terminalFontSize ?? prefs.terminalFontSize)
 		);
+		if (prefs.terminalShortcutBar !== undefined)
+			terminalShortcutBar.set(prefs.terminalShortcutBar as boolean);
 		if (prefs.expandToolDetails !== undefined)
 			expandToolDetails.set(prefs.expandToolDetails as boolean);
 		const savedHomeGroup = prefs.homeGroup as EditorGroup | undefined;

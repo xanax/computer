@@ -1095,6 +1095,8 @@
 	"appearance.terminalFontSize": "Terminal font size",
 	"appearance.decreaseTerminalFontSize": "Decrease terminal font size",
 	"appearance.increaseTerminalFontSize": "Increase terminal font size",
+	"appearance.terminalShortcutBar": "Terminal shortcut bar",
+	"appearance.terminalShortcutBarDesc": "Show the on-screen key row (Tab, Esc, Ctrl, arrows) above terminals. Turn this off if you type on a physical keyboard.",
 	"appearance.widescreenMode": "Widescreen Mode",
 	"appearance.expandToolDetails": "Always Expand Activity",
 	"appearance.exported": "Theme exported",

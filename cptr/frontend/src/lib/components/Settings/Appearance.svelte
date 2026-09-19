@@ -6,6 +6,7 @@
 		borderContrast,
 		expandToolDetails,
 		terminalFontSize,
+		terminalShortcutBar,
 		textScale,
 		theme,
 		themeConfig,
@@ -577,6 +578,19 @@
 				</div>
 			{/if}
 		</div>
+
+		<label class="flex items-center justify-between gap-3 mt-3">
+			<span class="text-xs text-gray-600 dark:text-gray-400">
+				{$t('appearance.terminalShortcutBar')}
+			</span>
+			<ToggleSwitch
+				value={$terminalShortcutBar}
+				onchange={(value) => terminalShortcutBar.set(value)}
+			/>
+		</label>
+		<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 mt-1 leading-snug">
+			{$t('appearance.terminalShortcutBarDesc')}
+		</p>
 	</div>
 </div>
 

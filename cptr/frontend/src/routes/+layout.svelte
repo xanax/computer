@@ -32,7 +32,8 @@
 		updateAvailable,
 		showChangelog,
 		showSearch,
-		showUpdateToastPref
+		showUpdateToastPref,
+		terminalShortcutBar
 	} from '$lib/stores';
 	import { matchKeybinding, executeAction } from '$lib/stores/keybindings';
 	import { systemEvents } from '$lib/stores/systemEvents.svelte';
@@ -537,7 +538,7 @@
 				<GitBar />
 			{/if}
 
-			{#if $activeTab?.type === 'terminal' || (!$currentWorkspace && $activeHomeTab?.type === 'terminal')}
+			{#if $terminalShortcutBar && ($activeTab?.type === 'terminal' || (!$currentWorkspace && $activeHomeTab?.type === 'terminal'))}
 				<ShortcutBar />
 			{/if}
 		</div>
