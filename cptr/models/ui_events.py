@@ -144,6 +144,46 @@ class UiEvent(Base):
         return out
 
     @staticmethod
+    async def scan(since_ms: int = 0, limit: int = 200_000) -> list[dict]:
+        """Raw samples ordered by event time, for offline analysis.
+
+        Deliberately ordered and filtered on ``ts`` (the client's wall clock)
+        rather than ``created_at`` (server receive time): batches are delivered
+        on a timer and on unload, so receive order scrambles the real sequence
+        and would misattribute every gap. Rows whose ``ts`` is not epoch-ms are
+        legacy samples written before migration 0006 and are skipped — they
+        can't be placed on a timeline at all.
+        """
+        async with await get_db() as db:
+            stmt = (
+                select(
+                    UiEvent.ts,
+                    UiEvent.kind,
+                    UiEvent.label,
+                    UiEvent.workspace,
+                    UiEvent.session_id,
+                    UiEvent.duration_ms,
+                )
+                .where(UiEvent.ts > 1e12)
+                .order_by(UiEvent.ts.asc())
+                .limit(limit)
+            )
+            if since_ms > 0:
+                stmt = stmt.where(UiEvent.ts >= since_ms)
+            result = await db.execute(stmt)
+            return [
+                {
+                    "ts": row[0],
+                    "kind": row[1],
+                    "label": row[2],
+                    "workspace": row[3],
+                    "session_id": row[4],
+                    "duration_ms": row[5],
+                }
+                for row in result.all()
+            ]
+
+    @staticmethod
     async def prune(before_ms: int) -> int:
         async with await get_db() as db:
             result = await db.execute(delete(UiEvent).where(UiEvent.created_at < before_ms))

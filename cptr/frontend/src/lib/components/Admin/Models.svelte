@@ -98,6 +98,11 @@
 			id: 'notifications',
 			label: 'models.builtinTools.notifications',
 			desc: 'models.builtinTools.notificationsDesc'
+		},
+		{
+			id: 'telemetry',
+			label: 'models.builtinTools.telemetry',
+			desc: 'models.builtinTools.telemetryDesc'
 		}
 	];
 

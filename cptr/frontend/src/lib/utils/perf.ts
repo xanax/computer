@@ -36,6 +36,10 @@ const HARD_BUFFER_CAP = 400;
 const LONG_TASK_MIN_MS = 80;
 /** A long task is attributed to an interaction that started within this window. */
 const ATTRIBUTION_WINDOW_MS = 1500;
+/** Dwell spans shorter than this are flicker, not time spent anywhere. */
+const DWELL_MIN_MS = 1000;
+/** Clamp a single dwell span — guards against a laptop sleeping mid-session. */
+const DWELL_MAX_MS = 30 * 60 * 1000;
 
 export interface PerfEvent {
 	/** Wall-clock epoch ms — survives reloads, orderable across sessions. */
@@ -83,6 +87,64 @@ let started = false;
 
 /** Last interaction seen, used to attribute the long task it caused. */
 let lastActivity: { kind: string; label?: string; at: number } | null = null;
+
+// ── Dwell tracking ──────────────────────────────────────────────
+// "How long did the user actually spend in workspace X?" is not derivable from
+// the interaction samples alone (it needs the gaps, and gaps can't be told apart
+// from being away). So we measure it directly: a span stays open while the
+// document is visible in one workspace, and closes when the workspace changes,
+// when the document is hidden, or on unload. Summing `dwell` durations per
+// workspace gives real active time instead of an estimate.
+let dwellWorkspace: string | null = null;
+let dwellStartedAt = 0;
+
+function contextWorkspace(): string | null {
+	try {
+		return contextGetter()?.workspace ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/** Close the open span, if any, recording it as a `dwell` sample. */
+function closeDwell(reason: string, atMs: number): void {
+	if (dwellWorkspace === null) return;
+	const raw = atMs - dwellStartedAt;
+	const durationMs = Math.min(raw, DWELL_MAX_MS);
+	const workspace = dwellWorkspace;
+	dwellWorkspace = null;
+	if (durationMs < DWELL_MIN_MS) return;
+	pushEvent({
+		ts: Date.now(),
+		perf_ms: Math.round(nowMs() * 10) / 10,
+		duration_ms: Math.round(durationMs),
+		kind: 'dwell',
+		label: reason,
+		workspace,
+		meta: { capped: raw > DWELL_MAX_MS }
+	});
+}
+
+/**
+ * Reconcile the open dwell span with reality. Idempotent — safe to call on
+ * every sample, which is what keeps the workspace switch in the right order
+ * relative to the interaction that caused it.
+ */
+function syncDwell(): void {
+	if (!isEnabled()) return;
+	const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+	const workspace = contextWorkspace();
+	const at = nowMs();
+	if (dwellWorkspace !== null && (hidden || dwellWorkspace !== workspace)) {
+		closeDwell(hidden ? 'hidden' : 'switch', at);
+	}
+	// Only accrues while the tab is actually on screen, so a window left open
+	// overnight doesn't count as eight hours in one workspace.
+	if (!hidden && dwellWorkspace === null && workspace) {
+		dwellWorkspace = workspace;
+		dwellStartedAt = at;
+	}
+}
 
 function isEnabled(): boolean {
 	if (typeof window === 'undefined' || typeof performance === 'undefined') return false;
@@ -132,6 +194,22 @@ export function nowMs(): number {
 }
 
 /** Record a finished measurement. Cheap: pushes to an in-memory buffer. */
+/** Append a sample and keep the buffer bounded. */
+function pushEvent(event: PerfEvent): void {
+	buffer.push(event);
+	if (buffer.length >= MAX_BUFFER) {
+		flush();
+		return;
+	}
+	// Emergency brake: if flushing keeps failing, drop the oldest samples
+	// rather than growing without bound.
+	if (buffer.length > HARD_BUFFER_CAP) {
+		buffer.splice(0, buffer.length - MAX_BUFFER);
+	}
+	scheduleFlush();
+}
+
+/** Record a finished measurement. Cheap: pushes to an in-memory buffer. */
 export function record(
 	kind: string,
 	label: string | undefined,
@@ -141,7 +219,10 @@ export function record(
 	if (!isEnabled()) return;
 	const ctx = safeContext();
 	const perfMs = Math.round(nowMs() * 10) / 10;
-	buffer.push({
+	// Settle any workspace change before appending, so the dwell span that just
+	// ended is attributed to the workspace it was actually in.
+	syncDwell();
+	pushEvent({
 		ts: Date.now(),
 		perf_ms: perfMs,
 		duration_ms: Math.round(durationMs * 10) / 10,
@@ -155,16 +236,6 @@ export function record(
 	if (kind !== 'long_task') {
 		lastActivity = { kind, label, at: perfMs };
 	}
-	if (buffer.length >= MAX_BUFFER) {
-		flush();
-		return;
-	}
-	// Emergency brake: if flushing keeps failing, drop the oldest samples
-	// rather than growing without bound.
-	if (buffer.length > HARD_BUFFER_CAP) {
-		buffer.splice(0, buffer.length - MAX_BUFFER);
-	}
-	scheduleFlush();
 }
 
 function scheduleFlush(): void {
@@ -333,8 +404,13 @@ export function initPerf(): void {
 	if (started || !isEnabled()) return;
 	started = true;
 	startLongTaskObserver();
-	window.addEventListener('pagehide', flushBeacon);
+	syncDwell();
+	window.addEventListener('pagehide', () => {
+		syncDwell();
+		flushBeacon();
+	});
 	document.addEventListener('visibilitychange', () => {
+		syncDwell();
 		if (document.visibilityState === 'hidden') flushBeacon();
 	});
 }
