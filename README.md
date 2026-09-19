@@ -20,6 +20,8 @@ Use it from your phone, tablet, laptop, another computer, or the machine it's ru
 
 ## Fork note
 
+** Hi, this is the only human part! ** I forked computer having fallen in love with the original and wanting to quickly iterate to fix some bugs, speed things up and make compatible with my BOOX e-ink display via a black and white theme. I'm using it in earnest to work on many projects while tweaking it as I go. I've tried to keep all the functional changes togglable in settings where possible. My work style is basically that I work on many projects at once on my Windows PC and on my BOOX while traveling or in bed. I kinda use the chat sessions as mini work streams so want them visible in the workspaces list by default until I close them. I found having the chats as tabs tended to clutter things up so have removed them from the top. [end of human bit]  
+
 **This is a personal fork** of [Open WebUI Computer](https://github.com/open-webui/computer). The project and its name are upstream's; the changes below are mine. The fork exists because I run `cptr` against Windows files from WSL and drive it from a phone and an e-ink display — a combination upstream does not optimise for. Full write-up: [`FORK.md`](FORK.md). Bug ledger: [`BUGS.md`](BUGS.md). Fork changes: [`CHANGELOG.fork.md`](CHANGELOG.fork.md). Reasoning and measurements: [`notes/`](notes/).
 
 In short:
