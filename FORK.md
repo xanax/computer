@@ -43,10 +43,13 @@ Reading `/mnt/c` through the 9p bridge is expensive in a way that shapes every o
 - **File-tree listing** (the agent's `list_directory` tool) no longer `stat`s every entry. It classifies from the directory entry — 9p supplies `d_type` for free — prunes `.git`/`node_modules` *inside* the count walk, never follows symlinked directories, and runs under a ~1 s budget with ceilings on dirs/files/stats/lines. Anything it cannot reach is marked `?`, any capped count is marked `+`, so an enormous tree degrades instead of hanging.
 - **Directory browsing** (`use:scandir` + `dirs_only` + a 10 s TTL cache + hover prefetch): **820 ms → 302 ms** on a cold `/mnt/c` listing.
 - **Perf telemetry that was missing entirely** — a `ui_events` table, `POST /api/ui-events`, and a client collector that measures tab switch → paint, component mount, and directory round-trips, on a real epoch-ms timeline. The first real sample (766 rows / 5 sessions) exposed four defects in the data itself, all fixed: `ts` wasn't a clock, `mount` events carried no context, 75% of rows were unattributable long tasks, and `requestAnimationFrame` readings from hidden tabs were silently inflated.
+- **Opening a chat** pays only for what the transcript draws. The largest chat here sent **6.60 MB** and now sends **0.66 MB** (89.9% less): reasoning text and tool output — 48.6 MB of the 60.8 MB of stored messages — arrive per message, when a row is expanded. The same load also stopped re-reading the whole message table to answer three bookkeeping questions (the newest message id, the newest `model`, and the usage-checkpoint walk): four full row-reads became two, **418 ms → 204 ms** of query time.
 
 ### Monitoring — seeing the machine from the outside
 
 The same `ui_events` pipeline is deliberately best-effort: it buffers, flushes every 5 s or at 40 samples, sends with `sendBeacon` on unload, swallows its own failures, and is capped — a down backend cannot slow the UI. `GET /api/ui-events/summary` returns p50/p95/max per event kind, sorted slowest-first, which is the order worth fixing things in. Per-sample it records tab counts, group counts, viewport, and whether the tab was visible, so "slow because 40 tabs are open" is distinguishable from "slow on a cold cache".
+
+"Where did my time go" used to be inferred from the gaps between events, which cannot tell a break from being away. The frontend now times it: a `dwell` span opens while a workspace's tab is visible and closes on switch, on a visibility change or on unload (clamped at 30 minutes, so a sleeping laptop is not read as a session of work), `GET /api/ui-events/dwell` sums the spans, and each sidebar heading shows its workspace's share of the tracked total — measured, with no gap-attribution fallback, because the number is printed next to a workspace name. The read-only `ui_metrics` agent tool (Admin → Models, `telemetry` group) puts the same samples in front of the agent.
 
 ### Fixes and tweaks
 
@@ -56,6 +59,8 @@ The same `ui_events` pipeline is deliberately best-effort: it buffers, flushes e
 - **Directory download as zip** in the file browser.
 - **Tabs and sidebar:** workspace folders start expanded, chats close rather than being force-marked unread, active/muted font colours corrected.
 - **Terminal shortcut bar** (Tab/Esc/Ctrl row) can be switched off in Settings → Appearance, for when you are typing on a real keyboard.
+- **Chat header:** the line under the title names the question whose answer is on screen, so a long answer never leaves the reader without its prompt. Clicking it walks back to that question — and then to the one before it, so repeated clicks climb the chat. In a short chat it never appears.
+- **Tool servers per workspace:** an OpenAPI or MCP server can be attached to a single workspace rather than every one. New servers default to workspace-only; existing global servers stay global.
 - **`.github/` deleted.** Upstream's `Docker (GHCR)`, `Publish to PyPI`, and `Release` workflows, plus `FUNDING.yml`, assumed this repository publishes images and packages. It does not, so the only thing they did here was fire a GHCR build on every push to `main`. This is a deliberate divergence: `git merge upstream/main` will keep trying to restore them, and `git diff upstream/main` will always show the deletion. Bring them back if this fork ever needs to publish.
 
 ### Themes for e-ink displays
