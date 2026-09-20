@@ -131,6 +131,32 @@ async def emit_to_user(user_id: str, data: dict):
         await sio.emit("events:chat", data, to=sid)
 
 
+async def emit_todos_changed(user_id: str, workspace: str) -> None:
+    """Notify all connected tabs that a workspace's todos changed."""
+    await emit_to_user(user_id, {"type": "todos_changed", "workspace": workspace})
+
+
+async def emit_open_browser(
+    user_id: str, url: str, *, chat_id: str = "", workspace: str = "", label: str = ""
+) -> None:
+    """Ask the user's connected tabs to open a Browser tab at ``url``.
+
+    Used by the ``open_browser`` tool so a chat can show the user a page it just
+    built or started. The client opens it in its current workspace (see
+    ``openBrowserFromChat`` in lib/stores/chat.ts).
+    """
+    await emit_to_user(
+        user_id,
+        {
+            "type": "open_browser",
+            "url": url,
+            "chat_id": chat_id,
+            "workspace": workspace,
+            "label": label,
+        },
+    )
+
+
 async def broadcast_chat_read_state(user_id: str, chat_id: str, last_read_at: int) -> None:
     """Echo a chat's read watermark plus its workspace unread count."""
     chat = await Chat.get_by_id(chat_id)

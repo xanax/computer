@@ -28,6 +28,7 @@ from cptr.routers import (
     skills_router,
     state_router,
     terminal_router,
+    todos_router,
     workspace_router,
 )
 from cptr.utils.config import check_access, load_config
@@ -325,6 +326,7 @@ app.include_router(search_router)
 app.include_router(skills_router)
 app.include_router(state_router)
 app.include_router(terminal_router)
+app.include_router(todos_router)
 app.include_router(workspace_router)
 
 

@@ -16,12 +16,13 @@ import inspect
 import json
 import mimetypes
 import os
+import re
 import stat
 import time
 import uuid
 from pathlib import Path, PureWindowsPath
 from typing import Any, Literal, Optional, get_args, get_origin, get_type_hints
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import Request
 from cptr.env import CHAT_TOOL_COMMAND_MAX_CHARS, CHAT_TOOL_MAX_CHARS, EXECUTE_TIMEOUT
@@ -2054,6 +2055,224 @@ async def delete_automation(
         return json.dumps({"error": str(e)})
 
 
+# ── Workspace todo tools ────────────────────────────────────
+#
+# Chats never mutate todos directly. Every add/complete/reopen/remove is
+# recorded as a TodoRequest and lands in the dashboard "awaiting verification"
+# queue, where the human approves or rejects it.
+
+
+async def list_workspace_todos(
+    *,
+    __context__: dict,
+) -> str:
+    """List the todos for the current workspace, with their status and IDs.
+    Use this before proposing changes so you reference real todo IDs.
+    """
+    workspace = __context__["workspace"]
+    user_id = __context__["user_id"]
+
+    try:
+        from cptr.models.todos import WorkspaceTodo
+
+        todos = await WorkspaceTodo.list_for_workspace(user_id, workspace)
+        return json.dumps(
+            {
+                "workspace": workspace,
+                "todos": [
+                    {
+                        "id": t.id,
+                        "title": t.title,
+                        "status": t.status,
+                        "source": t.source,
+                    }
+                    for t in todos
+                ],
+            }
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+async def add_workspace_todo(
+    title: str,
+    *,
+    __context__: dict,
+) -> str:
+    """Propose a new todo for the current workspace. The todo is NOT added
+    immediately — it is queued for the human to verify in the dashboard.
+    :param title: The todo text.
+    """
+    workspace = __context__["workspace"]
+    user_id = __context__["user_id"]
+
+    try:
+        title = (title or "").strip()
+        if not title:
+            return json.dumps({"error": "title is required"})
+
+        from cptr.models.todos import TodoRequest
+        from cptr.utils.config import now_ms
+        from cptr.socket.main import emit_todos_changed
+
+        req = await TodoRequest.create(
+            user_id=user_id,
+            workspace=workspace,
+            action="add",
+            created_at=now_ms(),
+            title=title,
+        )
+        await emit_todos_changed(user_id, workspace)
+        return json.dumps(
+            {
+                "status": "pending_verification",
+                "request_id": req.id,
+                "message": (
+                    f'Todo "{title}" proposed. It will appear in the workspace '
+                    "dashboard under \"awaiting verification\" for the human to approve."
+                ),
+            }
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+async def complete_workspace_todo(
+    todo_id: str,
+    *,
+    __context__: dict,
+) -> str:
+    """Propose marking a workspace todo as complete. The change is NOT applied
+    immediately — it is queued for the human to verify in the dashboard.
+    :param todo_id: The ID of the todo (from list_workspace_todos).
+    """
+    workspace = __context__["workspace"]
+    user_id = __context__["user_id"]
+
+    try:
+        from cptr.models.todos import TodoRequest, WorkspaceTodo
+        from cptr.utils.config import now_ms
+        from cptr.socket.main import emit_todos_changed
+
+        todo = await WorkspaceTodo.get_by_id(todo_id)
+        if not todo or todo.user_id != user_id or todo.workspace != workspace:
+            return json.dumps({"error": "Todo not found in this workspace"})
+        if todo.status == "done":
+            return json.dumps({"error": "Todo is already done"})
+
+        req = await TodoRequest.create(
+            user_id=user_id,
+            workspace=workspace,
+            action="complete",
+            created_at=now_ms(),
+            todo_id=todo_id,
+            title=todo.title,
+        )
+        await emit_todos_changed(user_id, workspace)
+        return json.dumps(
+            {
+                "status": "pending_verification",
+                "request_id": req.id,
+                "message": (
+                    f'Marking "{todo.title}" complete is proposed and awaits '
+                    "the human's approval in the workspace dashboard."
+                ),
+            }
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+async def reopen_workspace_todo(
+    todo_id: str,
+    *,
+    __context__: dict,
+) -> str:
+    """Propose reopening (un-completing) a workspace todo. The change is NOT
+    applied immediately — it is queued for the human to verify in the dashboard.
+    :param todo_id: The ID of the todo (from list_workspace_todos).
+    """
+    workspace = __context__["workspace"]
+    user_id = __context__["user_id"]
+
+    try:
+        from cptr.models.todos import TodoRequest, WorkspaceTodo
+        from cptr.utils.config import now_ms
+        from cptr.socket.main import emit_todos_changed
+
+        todo = await WorkspaceTodo.get_by_id(todo_id)
+        if not todo or todo.user_id != user_id or todo.workspace != workspace:
+            return json.dumps({"error": "Todo not found in this workspace"})
+        if todo.status == "open":
+            return json.dumps({"error": "Todo is already open"})
+
+        req = await TodoRequest.create(
+            user_id=user_id,
+            workspace=workspace,
+            action="reopen",
+            created_at=now_ms(),
+            todo_id=todo_id,
+            title=todo.title,
+        )
+        await emit_todos_changed(user_id, workspace)
+        return json.dumps(
+            {
+                "status": "pending_verification",
+                "request_id": req.id,
+                "message": (
+                    f'Reopening "{todo.title}" is proposed and awaits the '
+                    "human's approval in the workspace dashboard."
+                ),
+            }
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+async def remove_workspace_todo(
+    todo_id: str,
+    *,
+    __context__: dict,
+) -> str:
+    """Propose removing a workspace todo. The todo is NOT removed immediately —
+    it is queued for the human to verify in the dashboard.
+    :param todo_id: The ID of the todo (from list_workspace_todos).
+    """
+    workspace = __context__["workspace"]
+    user_id = __context__["user_id"]
+
+    try:
+        from cptr.models.todos import TodoRequest, WorkspaceTodo
+        from cptr.utils.config import now_ms
+        from cptr.socket.main import emit_todos_changed
+
+        todo = await WorkspaceTodo.get_by_id(todo_id)
+        if not todo or todo.user_id != user_id or todo.workspace != workspace:
+            return json.dumps({"error": "Todo not found in this workspace"})
+
+        req = await TodoRequest.create(
+            user_id=user_id,
+            workspace=workspace,
+            action="remove",
+            created_at=now_ms(),
+            todo_id=todo_id,
+            title=todo.title,
+        )
+        await emit_todos_changed(user_id, workspace)
+        return json.dumps(
+            {
+                "status": "pending_verification",
+                "request_id": req.id,
+                "message": (
+                    f'Removing "{todo.title}" is proposed and awaits the '
+                    "human's approval in the workspace dashboard."
+                ),
+            }
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 # ── Skill tools ─────────────────────────────────────────────
 
 # Track activated skills per session (cleared on import)
@@ -2819,6 +3038,137 @@ async def ui_metrics(
     return "\n".join(lines)
 
 
+_URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
+_LOCAL_HOST_RE = re.compile(
+    r"^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?([/?#]|$)", re.IGNORECASE
+)
+
+
+def _qualify_url(raw: str) -> str:
+    """Turn ``8765``, ``localhost:8765/x`` or ``example.com`` into a URL."""
+    value = (raw or "").strip().strip("<>\"'")
+    if not value:
+        return ""
+    if value.isdigit():
+        return f"http://localhost:{value}/"
+    if not _URL_SCHEME_RE.match(value):
+        value = f"http://{value}"
+    return value
+
+
+def _browser_label(url: str) -> str:
+    """Short tab label (``host:port``) when the model doesn't name one."""
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError:
+        return "Browser"
+    if not host:
+        return "Browser"
+    return f"{host}:{port}" if port else host
+
+
+async def open_browser(
+    url: str, where: str = "auto", label: str = "", *, __context__: dict
+) -> str:
+    """Open a web page in the browser the user is looking at, so they see it immediately.
+
+    Use this to *show* something: right after building a web app, starting a dev
+    server or static file server, or whenever the user asks to see/open a page.
+    Do not make the user copy a URL or click anything first -- that is the whole
+    point. The browser_* tools are the opposite: they drive a hidden automation
+    browser that only you can inspect, so they never show the user anything.
+    :param url: http(s) URL, or shorthand: "8765" / "localhost:8765" / "example.com".
+    :param where: "auto" (default) opens a Browser tab inside the cptr UI when
+        there is a workspace and a connected app, and otherwise the user's own
+        desktop browser. "app" forces the in-app tab, "system" forces the desktop
+        browser, "both" does both.
+    :param label: Optional tab label, e.g. "Todo demo".
+    """
+    user_id = __context__.get("user_id")
+    if not user_id:
+        return "Error: authentication required."
+
+    target = (where or "auto").strip().lower()
+    if target in ("browser", "tab", "in-app", "inapp"):
+        target = "app"
+    elif target in ("desktop", "os", "default"):
+        target = "system"
+    elif target == "":
+        target = "auto"
+    if target not in ("auto", "app", "system", "both"):
+        return "Error: where must be 'auto', 'app', 'system' or 'both'."
+
+    qualified = _qualify_url(url)
+    if not qualified:
+        return "Error: url is required."
+    parsed = urlsplit(qualified)
+    if parsed.scheme not in ("http", "https", "file"):
+        return f"Error: unsupported URL scheme: {parsed.scheme}"
+    if parsed.scheme != "file" and not parsed.netloc:
+        return f"Error: not a valid URL: {url}"
+
+    notes: list[str] = []
+    if parsed.scheme == "file" and target in ("auto", "app", "both"):
+        # The in-app Browser tab proxies over http(s) only.
+        notes.append("file:// URLs can only open in the system browser")
+        target = "system"
+
+    from cptr.socket.main import emit_open_browser, is_user_active
+
+    workspace = str(__context__.get("workspace") or "")
+    chat_id = str(__context__.get("chat_id") or "")
+    tab_label = label.strip() or _browser_label(qualified)
+    app_possible = bool(workspace) and is_user_active(user_id)
+    want_app = target in ("auto", "app", "both") and app_possible
+    want_system = target in ("system", "both") or (target == "auto" and not app_possible)
+    opened: dict[str, bool] = {}
+
+    if want_app:
+        await emit_open_browser(
+            user_id, qualified, chat_id=chat_id, workspace=workspace, label=tab_label
+        )
+        opened["app"] = True
+    elif target in ("app", "both"):
+        notes.append(
+            "no cptr app is connected, so no in-app Browser tab"
+            if workspace
+            else "no workspace is open, so no in-app Browser tab"
+        )
+
+    if want_system:
+        from cptr.utils.browser.opener import open_in_system_browser
+
+        launched, detail = await open_in_system_browser(qualified)
+        opened["system"] = launched
+        if not launched:
+            notes.append(f"system browser did not open: {detail}")
+
+    if not any(opened.values()):
+        return json.dumps(
+            {
+                "success": False,
+                "url": qualified,
+                "opened": opened,
+                "error": "; ".join(notes) or "nothing was opened",
+                "hint": "Retry with where='system' to open the user's desktop browser.",
+            },
+            ensure_ascii=False,
+        )
+
+    return json.dumps(
+        {
+            "success": True,
+            "url": qualified,
+            "label": tab_label,
+            "opened": opened,
+            "notes": notes,
+        },
+        ensure_ascii=False,
+    )
+
+
 # ── Registry ────────────────────────────────────────────────
 
 ToolApprovalPolicy = Literal["allow", "review"]
@@ -2844,7 +3194,11 @@ TOOLS: dict[str, dict] = {
     "read_url": {"fn": read_url, "approval": "allow"},
     "search_chats": {"fn": search_chats, "approval": "allow"},
     "create_download_link": {"fn": create_download_link, "approval": "allow"},
+    # Puts a page in front of the user (in-app Browser tab and/or their desktop
+    # browser). Approval-free: showing a page is the whole point of the tool.
+    "open_browser": {"fn": open_browser, "approval": "allow"},
     "list_automations": {"fn": list_automations, "approval": "allow"},
+    "list_workspace_todos": {"fn": list_workspace_todos, "approval": "allow"},
     "view_skill": {"fn": view_skill, "approval": "allow"},
     "update_tasks": {"fn": update_tasks, "approval": "allow"},
     # Missing approval inherits tool_approval.default_builtin_approval.
@@ -2860,6 +3214,11 @@ TOOLS: dict[str, dict] = {
     "update_automation": {"fn": update_automation},
     "toggle_automation": {"fn": toggle_automation},
     "delete_automation": {"fn": delete_automation},
+    # Todo mutations only enqueue a human-verification request (never mutate).
+    "add_workspace_todo": {"fn": add_workspace_todo, "approval": "allow"},
+    "complete_workspace_todo": {"fn": complete_workspace_todo, "approval": "allow"},
+    "reopen_workspace_todo": {"fn": reopen_workspace_todo, "approval": "allow"},
+    "remove_workspace_todo": {"fn": remove_workspace_todo, "approval": "allow"},
     "notify": {"fn": notify},
     "image_generate": {"fn": image_generate},
     "manage_skill": {"fn": manage_skill},
@@ -3289,6 +3648,7 @@ BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
         "browser_type",
         "browser_screenshot",
         "browser_evaluate",
+        "open_browser",
     ),
     "memory": ("update_memory",),
     "chats": ("search_chats",),
@@ -3300,6 +3660,13 @@ BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
         "update_automation",
         "toggle_automation",
         "delete_automation",
+    ),
+    "todos": (
+        "list_workspace_todos",
+        "add_workspace_todo",
+        "complete_workspace_todo",
+        "reopen_workspace_todo",
+        "remove_workspace_todo",
     ),
     "images": ("image_generate",),
     "subagents": ("delegate_task",),
@@ -3316,6 +3683,10 @@ GLOBAL_CHAT_DISABLED_TOOLS = {
     *BUILTIN_TOOL_GROUPS["images"],
     "manage_skill",
 }
+
+# Showing the user a page needs no workspace -- a workspace-free chat can still
+# open the desktop browser (it just has no tab strip to put a Browser tab in).
+GLOBAL_CHAT_DISABLED_TOOLS.discard("open_browser")
 
 
 def disabled_builtin_tool_names(builtin_tools: dict | None) -> set[str]:

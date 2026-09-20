@@ -176,6 +176,25 @@ notificationSound.subscribe((v) => {
 	if (typeof localStorage !== 'undefined') localStorage.setItem('notificationSound', String(v));
 });
 
+/**
+ * The `open_browser` tool asks us to put a page in front of the user -- normally
+ * a web app the model just built, or a dev server it just started.
+ *
+ * Prefer cptr's own Browser tab: it is a normal UI tab (no popup blocker to
+ * fight, since this runs off a socket event rather than a click) and its proxy
+ * fetches from the server, so WSL-localhost URLs resolve. With no workspace open
+ * there is no tab strip to add to, so fall back to a plain browser tab and let
+ * the browser decide whether to allow it.
+ */
+async function openBrowserFromChat(url: string, label?: string) {
+	const stores = await import('$lib/stores');
+	if (!get(stores.currentWorkspace)) {
+		window.open(url, '_blank', 'noopener');
+		return;
+	}
+	await stores.openBrowserTab(undefined, url, label || url);
+}
+
 export function bindGlobalChatListener() {
 	if (globalListenerBound) return;
 
@@ -189,6 +208,8 @@ export function bindGlobalChatListener() {
 			title?: string;
 			content?: string;
 			tool_name?: string;
+			url?: string;
+			label?: string;
 			workspace?: string;
 			workspace_name?: string;
 			active?: boolean;
@@ -196,6 +217,9 @@ export function bindGlobalChatListener() {
 			last_read_at?: number;
 			closed_at?: number | null;
 		}) => {
+			if (data.type === 'open_browser' && typeof data.url === 'string') {
+				void openBrowserFromChat(data.url, data.label);
+			}
 			if (data.type === 'chat:active' && typeof data.active === 'boolean') {
 				setChatActive(data.chat_id, data.active, data.workspace);
 			}

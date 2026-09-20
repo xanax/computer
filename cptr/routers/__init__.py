@@ -20,6 +20,7 @@ from cptr.routers.search import router as search_router
 from cptr.routers.skills import router as skills_router
 from cptr.routers.state import router as state_router
 from cptr.routers.terminal import router as terminal_router
+from cptr.routers.todos import router as todos_router
 from cptr.routers.workspace import router as workspace_router
 
 __all__ = [
@@ -43,5 +44,6 @@ __all__ = [
     "skills_router",
     "state_router",
     "terminal_router",
+    "todos_router",
     "workspace_router",
 ]
