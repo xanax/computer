@@ -17,12 +17,13 @@ import json
 import mimetypes
 import os
 import re
+import shlex
 import stat
 import time
 import uuid
 from pathlib import Path, PureWindowsPath
 from typing import Any, Literal, Optional, get_args, get_origin, get_type_hints
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 
 from fastapi import Request
 from cptr.env import CHAT_TOOL_COMMAND_MAX_CHARS, CHAT_TOOL_MAX_CHARS, EXECUTE_TIMEOUT
@@ -2273,6 +2274,101 @@ async def remove_workspace_todo(
         return json.dumps({"error": str(e)})
 
 
+async def defer_workspace_todo(
+    todo_id: str,
+    at: str,
+    instructions: str = "",
+    resume_here: bool = False,
+    model: str = "",
+    *,
+    __context__: dict,
+) -> str:
+    """Hand a workspace todo to a model to do later, on its own.
+
+    Use it for work that should happen out of hours or after something else
+    finishes — "run this tonight", "revisit in an hour". The todo keeps its
+    place in the dashboard; what changes is that a model runs it at `at`
+    instead of waiting for the human.
+
+    Unlike the add/complete/reopen/remove tools, this one applies immediately:
+    a deferral is a schedule, not a claim about the work, and it is visible and
+    reversible (the human finishing the todo by hand cancels it). The *outcome*
+    of the run still lands in the dashboard for approval — the run ends as
+    "awaiting review", never as done.
+
+    :param todo_id: The ID of the todo (from list_workspace_todos).
+    :param at: When to run it — a relative time such as "30m", "in 4 hours" or
+        an RFC 3339 timestamp with a timezone ("2026-09-21T03:00:00Z").
+    :param instructions: Optional extra briefing for the run, if the todo title
+        alone is not enough to act on.
+    :param resume_here: Run it in this conversation later. Default false: the
+        run gets its own chat, which is what an unattended run wants.
+    :param model: Model id for the run. Defaults to the model of this chat.
+    """
+    workspace = __context__["workspace"]
+    user_id = __context__["user_id"]
+
+    try:
+        from cptr.models.jobs import Job
+        from cptr.utils.config import now_ms
+        from cptr.utils.timers import parse_timer_at
+        from cptr.socket.main import emit_jobs_changed
+
+        todo = await Job.get_by_id(todo_id)
+        if not todo or todo.user_id != user_id or todo.workspace != workspace:
+            return json.dumps({"error": "Todo not found in this workspace"})
+        if todo.kind != "task":
+            return json.dumps({"error": "That job is not an actionable todo"})
+        if todo.status == "done":
+            return json.dumps({"error": "Todo is already done"})
+
+        try:
+            trigger_at = parse_timer_at(at)
+        except ValueError as exc:
+            return json.dumps({"error": str(exc)})
+
+        executor = model or __context__.get("full_model_id") or __context__.get("model_id") or ""
+        if not executor:
+            return json.dumps({"error": "No model available to run this todo"})
+
+        await Job.update_by_id(
+            todo_id,
+            executor=executor,
+            trigger="at",
+            trigger_at=trigger_at,
+            payload=(instructions or "").strip() or None,
+            parent_chat=__context__.get("chat_id") if resume_here else None,
+            status="open",
+            last_error=None,
+            meta={
+                **(todo.meta or {}),
+                "deferred_by": "chat",
+                "deferred_at": now_ms(),
+                "deferred_from_chat": __context__.get("chat_id"),
+            },
+        )
+        await emit_jobs_changed(user_id, workspace)
+
+        from cptr.utils.jobs import _iso  # noqa: PLC0415  (local import keeps tools light)
+
+        return json.dumps(
+            {
+                "status": "deferred",
+                "todo_id": todo_id,
+                "run_at": _iso(trigger_at),
+                "executor": executor,
+                "runs_in": "this chat" if resume_here else "its own chat",
+                "message": (
+                    f'"{todo.title}" will be run by {executor} at {_iso(trigger_at)}. '
+                    "The result lands in the workspace dashboard as awaiting review. "
+                    "If the human completes the todo by hand first, the run is cancelled."
+                ),
+            }
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 # ── Skill tools ─────────────────────────────────────────────
 
 # Track activated skills per session (cleared on import)
@@ -3039,9 +3135,10 @@ async def ui_metrics(
 
 
 _URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
-_LOCAL_HOST_RE = re.compile(
-    r"^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?([/?#]|$)", re.IGNORECASE
-)
+# Loopback hosts `_local_page_status` can reach on the user's behalf: the Browser
+# tab loads pages through this process, so a port on this machine shows up in the
+# user's window even when their own network cannot route to this box.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 
 
 def _qualify_url(raw: str) -> str:
@@ -3069,104 +3166,177 @@ def _browser_label(url: str) -> str:
     return f"{host}:{port}" if port else host
 
 
-async def open_browser(
-    url: str, where: str = "auto", label: str = "", *, __context__: dict
-) -> str:
-    """Open a web page in the browser the user is looking at, so they see it immediately.
+def _host_of(url: str) -> str:
+    """Lower-cased hostname of ``url``, or "" when it does not parse."""
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
 
-    Use this to *show* something: right after building a web app, starting a dev
-    server or static file server, or whenever the user asks to see/open a page.
-    Do not make the user copy a URL or click anything first -- that is the whole
-    point. The browser_* tools are the opposite: they drive a hidden automation
-    browser that only you can inspect, so they never show the user anything.
-    :param url: http(s) URL, or shorthand: "8765" / "localhost:8765" / "example.com".
-    :param where: "auto" (default) opens a Browser tab inside the cptr UI when
-        there is a workspace and a connected app, and otherwise the user's own
-        desktop browser. "app" forces the in-app tab, "system" forces the desktop
-        browser, "both" does both.
+
+def _is_local_url(url: str) -> bool:
+    """Whether ``url`` points at the machine cptr itself runs on."""
+    host = _host_of(url)
+    return host in _LOCAL_HOSTS or host.endswith(".localhost")
+
+
+def _local_path(raw: str, workspace: str) -> str:
+    """The path when ``raw`` names something on this machine rather than a URL.
+
+    A model that has just written ``dist/index.html`` will pass that path to a tool
+    called open_browser; ``_qualify_url`` would otherwise invent
+    ``http://dist/index.html/`` and open a tab on a host that does not exist.
+    """
+    value = (raw or "").strip().strip("<>\"'")
+    if not value or value.isdigit() or _URL_SCHEME_RE.match(value):
+        return ""
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = Path(workspace or ".") / candidate
+    try:
+        return str(candidate) if candidate.exists() else ""
+    except OSError:
+        return ""
+
+
+def _serve_hint(path: str) -> str:
+    """How to get a local file or directory in front of the user over http."""
+    target = Path(path)
+    directory = target if target.is_dir() else target.parent
+    page = "" if str(target) == str(directory) else f"/{target.name}"
+    return (
+        "Serve it and open the server instead: run "
+        f"`python3 -m http.server 8765 --directory {shlex.quote(str(directory))}` "
+        f"in the background, wait until it is listening, then "
+        f"open_browser('localhost:8765{page}')."
+    )
+
+
+async def _local_page_status(url: str) -> tuple[bool, str]:
+    """Whether something answers on a local URL, retrying while it boots.
+
+    Only a refused or timed-out *connection* counts as "not serving": a slow or
+    rude reply still means a process is there, and a redirect, 404 or 500 is the
+    page's own business rather than a failure to show it.
+    """
+    import httpx
+
+    detail = ""
+    for attempt in range(3):
+        if attempt:
+            await asyncio.sleep(1.2)
+        try:
+            async with httpx.AsyncClient(
+                follow_redirects=False, timeout=httpx.Timeout(4.0, connect=1.5)
+            ) as client:
+                response = await client.get(url)
+            return True, f"HTTP {response.status_code}"
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:  # answered, just not politely (TLS, slow, ...)
+            return True, f"{type(exc).__name__}: {exc}"
+    return False, detail
+
+
+async def open_browser(
+    url: str, label: str = "", *, where: str = "", __context__: dict
+) -> str:
+    """Show the user a page in cptr's own Browser tab -- never a browser on this machine.
+
+    Use this the moment there is something to look at: right after building a web
+    app, starting a dev server or a static file server, or whenever the user asks
+    to see a page. It adds a Browser tab to the cptr window the user already has
+    open, beside the chat, and loads the URL there, so the page is simply in front
+    of them -- no URL to copy, nothing to click. The browser_* tools are the
+    opposite: they drive a hidden automation browser that only you can inspect, so
+    they never show the user anything.
+
+    That tab loads the page *through cptr*, so a process you started on this
+    machine (a port on ``localhost``) reaches the user's screen even when their own
+    computer or phone cannot route to this box. Nothing is launched on this
+    machine's desktop: a chat runs on a server, often headless, so a browser
+    started here is a window nobody can see.
+
+    A local target is probed before the tab opens, because "nothing is listening"
+    is the one failure that leaves the user staring at a blank tab: it comes back
+    as an error asking you to start the process first.
+    :param url: http(s) URL, or shorthand: "8765" (i.e. localhost) / "localhost:8765/x" /
+        "example.com". A file or directory on this machine cannot be shown as-is; the
+        result carries the command that serves it over http.
     :param label: Optional tab label, e.g. "Todo demo".
     """
     user_id = __context__.get("user_id")
     if not user_id:
         return "Error: authentication required."
-
-    target = (where or "auto").strip().lower()
-    if target in ("browser", "tab", "in-app", "inapp"):
-        target = "app"
-    elif target in ("desktop", "os", "default"):
-        target = "system"
-    elif target == "":
-        target = "auto"
-    if target not in ("auto", "app", "system", "both"):
-        return "Error: where must be 'auto', 'app', 'system' or 'both'."
-
-    qualified = _qualify_url(url)
-    if not qualified:
+    if not (url or "").strip():
         return "Error: url is required."
-    parsed = urlsplit(qualified)
-    if parsed.scheme not in ("http", "https", "file"):
-        return f"Error: unsupported URL scheme: {parsed.scheme}"
-    if parsed.scheme != "file" and not parsed.netloc:
-        return f"Error: not a valid URL: {url}"
 
-    notes: list[str] = []
-    if parsed.scheme == "file" and target in ("auto", "app", "both"):
-        # The in-app Browser tab proxies over http(s) only.
-        notes.append("file:// URLs can only open in the system browser")
-        target = "system"
-
-    from cptr.socket.main import emit_open_browser, is_user_active
+    # `where` is legacy: an earlier version could also open the user's desktop
+    # browser, and a transcript replaying that call must not fail on it. Being
+    # keyword-only it stays out of the schema the model is shown, and is ignored.
+    del where
 
     workspace = str(__context__.get("workspace") or "")
     chat_id = str(__context__.get("chat_id") or "")
-    tab_label = label.strip() or _browser_label(qualified)
-    app_possible = bool(workspace) and is_user_active(user_id)
-    want_app = target in ("auto", "app", "both") and app_possible
-    want_system = target in ("system", "both") or (target == "auto" and not app_possible)
-    opened: dict[str, bool] = {}
 
-    if want_app:
-        await emit_open_browser(
-            user_id, qualified, chat_id=chat_id, workspace=workspace, label=tab_label
-        )
-        opened["app"] = True
-    elif target in ("app", "both"):
-        notes.append(
-            "no cptr app is connected, so no in-app Browser tab"
-            if workspace
-            else "no workspace is open, so no in-app Browser tab"
-        )
-
-    if want_system:
-        from cptr.utils.browser.opener import open_in_system_browser
-
-        launched, detail = await open_in_system_browser(qualified)
-        opened["system"] = launched
-        if not launched:
-            notes.append(f"system browser did not open: {detail}")
-
-    if not any(opened.values()):
+    local_path = _local_path(url, workspace)
+    if local_path:
         return json.dumps(
             {
                 "success": False,
-                "url": qualified,
-                "opened": opened,
-                "error": "; ".join(notes) or "nothing was opened",
-                "hint": "Retry with where='system' to open the user's desktop browser.",
+                "local_path": local_path,
+                "error": "not a URL: this is a path on the machine cptr runs on",
+                "hint": _serve_hint(local_path),
             },
             ensure_ascii=False,
         )
 
-    return json.dumps(
-        {
-            "success": True,
-            "url": qualified,
-            "label": tab_label,
-            "opened": opened,
-            "notes": notes,
-        },
-        ensure_ascii=False,
+    qualified = _qualify_url(url)
+    parsed = urlsplit(qualified)
+    if parsed.scheme == "file":
+        path = unquote(parsed.path)
+        return json.dumps(
+            {
+                "success": False,
+                "local_path": path,
+                "error": "the Browser tab loads http(s) URLs, not file://",
+                "hint": _serve_hint(path or "."),
+            },
+            ensure_ascii=False,
+        )
+    if parsed.scheme not in ("http", "https"):
+        return f"Error: unsupported URL scheme: {parsed.scheme}"
+    if not parsed.netloc:
+        return f"Error: not a valid URL: {url}"
+
+    tab_label = (label or "").strip() or _browser_label(qualified)
+    result: dict[str, Any] = {"success": False, "url": qualified, "label": tab_label}
+
+    if _is_local_url(qualified):
+        serving, detail = await _local_page_status(qualified)
+        result["probe"] = detail
+        if not serving:
+            result["error"] = f"nothing is listening on {_browser_label(qualified)}"
+            result["hint"] = (
+                "Start the process first (run_command, then check_task until it is "
+                "serving), then call open_browser again -- opening the tab now would "
+                "only show the user a blank page."
+            )
+            return json.dumps(result, ensure_ascii=False)
+
+    from cptr.socket.main import emit_open_browser, is_user_active
+
+    if not is_user_active(user_id):
+        result["error"] = "no cptr window is connected, so there is nowhere to show the page"
+        result["hint"] = "Give the user the URL itself, or retry once their window is open."
+        return json.dumps(result, ensure_ascii=False)
+
+    await emit_open_browser(
+        user_id, qualified, chat_id=chat_id, workspace=workspace, label=tab_label
     )
+    result["success"] = True
+    result["opened_in"] = "cptr Browser tab"
+    return json.dumps(result, ensure_ascii=False)
 
 
 # ── Registry ────────────────────────────────────────────────
@@ -3194,8 +3364,8 @@ TOOLS: dict[str, dict] = {
     "read_url": {"fn": read_url, "approval": "allow"},
     "search_chats": {"fn": search_chats, "approval": "allow"},
     "create_download_link": {"fn": create_download_link, "approval": "allow"},
-    # Puts a page in front of the user (in-app Browser tab and/or their desktop
-    # browser). Approval-free: showing a page is the whole point of the tool.
+    # Puts a page in front of the user in cptr's own Browser tab. Approval-free:
+    # showing a page is the whole point of the tool.
     "open_browser": {"fn": open_browser, "approval": "allow"},
     "list_automations": {"fn": list_automations, "approval": "allow"},
     "list_workspace_todos": {"fn": list_workspace_todos, "approval": "allow"},
@@ -3219,6 +3389,9 @@ TOOLS: dict[str, dict] = {
     "complete_workspace_todo": {"fn": complete_workspace_todo, "approval": "allow"},
     "reopen_workspace_todo": {"fn": reopen_workspace_todo, "approval": "allow"},
     "remove_workspace_todo": {"fn": remove_workspace_todo, "approval": "allow"},
+    # Deferring hands the todo to an unattended model run later, so it is a real
+    # write (unlike the tools above): applied immediately, approved first.
+    "defer_workspace_todo": {"fn": defer_workspace_todo, "approval": "review"},
     "notify": {"fn": notify},
     "image_generate": {"fn": image_generate},
     "manage_skill": {"fn": manage_skill},
@@ -3667,6 +3840,7 @@ BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
         "complete_workspace_todo",
         "reopen_workspace_todo",
         "remove_workspace_todo",
+        "defer_workspace_todo",
     ),
     "images": ("image_generate",),
     "subagents": ("delegate_task",),
@@ -3685,7 +3859,7 @@ GLOBAL_CHAT_DISABLED_TOOLS = {
 }
 
 # Showing the user a page needs no workspace -- a workspace-free chat can still
-# open the desktop browser (it just has no tab strip to put a Browser tab in).
+# open the Browser tab (it lands in whichever workspace the user is looking at).
 GLOBAL_CHAT_DISABLED_TOOLS.discard("open_browser")
 
 

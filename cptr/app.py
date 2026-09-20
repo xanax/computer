@@ -21,6 +21,7 @@ from cptr.routers import (
     gateway_router,
     git_router,
     images_router,
+    jobs_router,
     memory_router,
     notifications_router,
     perf_router,
@@ -78,6 +79,12 @@ async def lifespan(app: FastAPI):
     await recover_timers()
     app.state.timer_task = asyncio.create_task(timer_worker_loop(app))
 
+    # Start the job scheduler (deferred todos: `trigger='at'`)
+    from cptr.utils.jobs import job_worker_loop, recover_jobs
+
+    await recover_jobs()
+    app.state.job_task = asyncio.create_task(job_worker_loop(app))
+
     # Start messaging bots
     from cptr.utils.bridge import BotManager
 
@@ -98,6 +105,12 @@ async def lifespan(app: FastAPI):
             scheduler_task.cancel()
             with suppress(asyncio.CancelledError):
                 await scheduler_task
+
+        job_task = getattr(app.state, "job_task", None)
+        if job_task:
+            job_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await job_task
 
         bot_manager = getattr(app.state, "bot_manager", None)
         if bot_manager:
@@ -319,6 +332,7 @@ app.include_router(files_router)
 app.include_router(gateway_router)
 app.include_router(git_router)
 app.include_router(images_router)
+app.include_router(jobs_router)
 app.include_router(memory_router)
 app.include_router(notifications_router)
 app.include_router(perf_router)

@@ -1,7 +1,13 @@
-"""Workspace todos router.
+"""Workspace todos router — now a shim over the `jobs` table.
 
 Humans edit todos directly (list/add/toggle/remove). Chats propose mutations
 via TodoRequest rows, which a human must approve or reject in the dashboard.
+
+Phase 1 of ``notes/NOTES-myriad-job-queue.md``: a todo *is* a job with
+``executor='human'`` and ``trigger='manual'`` (or ``'at'`` once it has been
+deferred to a model). The routes and their response shapes are unchanged — the
+dashboard cannot tell the difference. ``workspace_todos`` is still written in
+lockstep by ``cptr/models/jobs.py``, so chat tools reading it keep working.
 """
 
 from __future__ import annotations
@@ -11,12 +17,18 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from cptr.models.todos import TodoRequest, WorkspaceTodo
+from cptr.models.jobs import Job, create_human_todo
+from cptr.models.todos import TodoRequest
 from cptr.utils.config import check_access, now_ms
 
 router = APIRouter(prefix="/api/todos", tags=["todos"])
 
 COOKIE_NAME = "cptr_session"
+
+#: Todo-shaped jobs: human tasks and tasks deferred to a model. Recurring
+#: (`rrule`) and non-actionable (`note`) rows belong to their own surfaces.
+TODO_TRIGGERS = ("manual", "at")
+TODO_KIND = "task"
 
 
 def _get_user(request: Request) -> str:
@@ -28,15 +40,21 @@ def _get_user(request: Request) -> str:
     return auth.user_id
 
 
-def _todo_dict(t: WorkspaceTodo) -> dict:
+def _todo_dict(j: Job) -> dict:
+    """The pre-jobs todo response shape, unchanged.
+
+    `status` collapses back to the two values the dashboard knows: anything not
+    finished reads as ``open`` (a queued or awaiting-review deferral is still an
+    outstanding task).
+    """
     return {
-        "id": t.id,
-        "workspace": t.workspace,
-        "title": t.title,
-        "status": t.status,
-        "source": t.source,
-        "created_at": t.created_at,
-        "updated_at": t.updated_at,
+        "id": j.id,
+        "workspace": j.workspace,
+        "title": j.title,
+        "status": "done" if j.status == "done" else "open",
+        "source": j.source,
+        "created_at": j.created_at,
+        "updated_at": j.updated_at,
     }
 
 
@@ -54,9 +72,23 @@ def _request_dict(r: TodoRequest) -> dict:
 
 
 async def _notify_changed(user_id: str, workspace: str) -> None:
-    from cptr.socket.main import emit_to_user
+    from cptr.socket.main import emit_jobs_changed
 
-    await emit_to_user(user_id, {"type": "todos_changed", "workspace": workspace})
+    await emit_jobs_changed(user_id, workspace)
+
+
+async def _list_todo_jobs(user_id: str, workspace: str) -> list[Job]:
+    jobs = await Job.list_for_workspace(user_id, workspace)
+    return [
+        j for j in jobs if j.kind == TODO_KIND and j.trigger in TODO_TRIGGERS
+    ]
+
+
+async def _get_todo(todo_id: str, user_id: str) -> Job:
+    job = await Job.get_by_id(todo_id)
+    if not job or job.user_id != user_id or job.kind != TODO_KIND:
+        raise HTTPException(404, "todo not found")
+    return job
 
 
 # ── List todos + pending requests ───────────────────────────
@@ -68,7 +100,7 @@ async def list_todos(
     workspace: str = Query(..., description="Workspace path"),
 ):
     user_id = _get_user(request)
-    todos = await WorkspaceTodo.list_for_workspace(user_id, workspace)
+    todos = await _list_todo_jobs(user_id, workspace)
     pending = await TodoRequest.list_pending(user_id, workspace)
     return {
         "todos": [_todo_dict(t) for t in todos],
@@ -91,7 +123,7 @@ async def add_todo(request: Request, body: AddTodoRequest):
     if not title:
         raise HTTPException(400, "title is required")
 
-    todo = await WorkspaceTodo.create(
+    todo = await create_human_todo(
         user_id=user_id,
         workspace=body.workspace,
         title=title,
@@ -108,15 +140,25 @@ async def add_todo(request: Request, body: AddTodoRequest):
 @router.post("/{todo_id}/toggle")
 async def toggle_todo(request: Request, todo_id: str):
     user_id = _get_user(request)
-    todo = await WorkspaceTodo.get_by_id(todo_id)
-    if not todo or todo.user_id != user_id:
-        raise HTTPException(404, "todo not found")
+    todo = await _get_todo(todo_id, user_id)
 
     new_status = "done" if todo.status == "open" else "open"
-    await WorkspaceTodo.update_status(todo_id, new_status, now_ms())
+    fields: dict = {}
+    if new_status == "done" and todo.trigger == "at":
+        # Finishing it by hand cancels the deferred run: a model should not be
+        # woken to do work the human just did. The deferral is kept in `meta`
+        # for the record.
+        fields = {
+            "executor": "human",
+            "trigger": "manual",
+            "trigger_at": None,
+            "meta": {**(todo.meta or {}), "defer_cancelled_at": now_ms()},
+        }
+
+    await Job.update_status(todo_id, new_status, now_ms(), **fields)
     await _notify_changed(user_id, todo.workspace)
 
-    updated = await WorkspaceTodo.get_by_id(todo_id)
+    updated = await Job.get_by_id(todo_id)
     return _todo_dict(updated)
 
 
@@ -126,11 +168,9 @@ async def toggle_todo(request: Request, todo_id: str):
 @router.delete("/{todo_id}")
 async def remove_todo(request: Request, todo_id: str):
     user_id = _get_user(request)
-    todo = await WorkspaceTodo.get_by_id(todo_id)
-    if not todo or todo.user_id != user_id:
-        raise HTTPException(404, "todo not found")
+    todo = await _get_todo(todo_id, user_id)
 
-    await WorkspaceTodo.delete(todo_id)
+    await Job.delete(todo_id)
     await _notify_changed(user_id, todo.workspace)
     return {"ok": True}
 
@@ -153,7 +193,7 @@ async def approve_request(request: Request, request_id: str):
         title = (req.title or "").strip()
         if not title:
             raise HTTPException(400, "request has no title")
-        await WorkspaceTodo.create(
+        await create_human_todo(
             user_id=user_id,
             workspace=req.workspace,
             title=title,
@@ -163,15 +203,15 @@ async def approve_request(request: Request, request_id: str):
     elif req.action == "complete":
         if not req.todo_id:
             raise HTTPException(400, "request has no todo_id")
-        await WorkspaceTodo.update_status(req.todo_id, "done", now)
+        await Job.update_status(req.todo_id, "done", now)
     elif req.action == "reopen":
         if not req.todo_id:
             raise HTTPException(400, "request has no todo_id")
-        await WorkspaceTodo.update_status(req.todo_id, "open", now)
+        await Job.update_status(req.todo_id, "open", now)
     elif req.action == "remove":
         if not req.todo_id:
             raise HTTPException(400, "request has no todo_id")
-        await WorkspaceTodo.delete(req.todo_id)
+        await Job.delete(req.todo_id)
     else:
         raise HTTPException(400, f"unknown action: {req.action}")
 

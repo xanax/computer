@@ -15,6 +15,7 @@ from cptr.models.chats import (
     is_subagent_result_message,
 )
 from cptr.models.automations import Automation, AutomationRun
+from cptr.models.jobs import Job
 from cptr.models.todos import WorkspaceTodo, TodoRequest
 from cptr.models.ui_events import UiEvent
 
@@ -34,6 +35,7 @@ __all__ = [
     "is_subagent_result_message",
     "Automation",
     "AutomationRun",
+    "Job",
     "WorkspaceTodo",
     "TodoRequest",
     "UiEvent",

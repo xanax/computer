@@ -121,6 +121,16 @@ STREAM_WRITE_TIMEOUT_SECONDS = float(os.environ.get("CPTR_STREAM_WRITE_TIMEOUT",
 AUTOMATION_POLL_INTERVAL = int(os.environ.get("AUTOMATION_POLL_INTERVAL", "10"))
 TIMER_POLL_INTERVAL = int(os.environ.get("TIMER_POLL_INTERVAL", "1"))
 
+# ── Job scheduler ───────────────────────────────────────────
+# Jobs fire `trigger='at'` work: deferred todos run by an agent.
+JOB_POLL_INTERVAL = int(os.environ.get("CPTR_JOB_POLL_INTERVAL", "2"))
+# A job with no parent chat gets its own chat; this is its tool approval mode.
+# 'full' (default, matching automations) lets a 03:00 run actually finish —
+# under 'auto' it would stall on the first write-class tool with nobody to
+# approve it. Whatever it produces is landable *only* after human review: a run
+# ends 'needs_review', never 'done'.
+JOB_TOOL_APPROVAL_MODE = os.environ.get("CPTR_JOB_TOOL_APPROVAL_MODE", "full")
+
 # ── CORS ────────────────────────────────────────────────────
 # Socket.IO CORS allowed origins.
 # Default → "*" (allow all origins)

@@ -131,9 +131,20 @@ async def emit_to_user(user_id: str, data: dict):
         await sio.emit("events:chat", data, to=sid)
 
 
+async def emit_jobs_changed(user_id: str, workspace: str) -> None:
+    """Notify all connected tabs that a workspace's job board changed.
+
+    Emits `jobs_changed` *and* `todos_changed`: the todo routes are a shim over
+    `jobs` (Phase 1 of the job-queue design), and the dashboard's todo list is
+    still driven by the older event.
+    """
+    await emit_to_user(user_id, {"type": "jobs_changed", "workspace": workspace})
+    await emit_to_user(user_id, {"type": "todos_changed", "workspace": workspace})
+
+
 async def emit_todos_changed(user_id: str, workspace: str) -> None:
     """Notify all connected tabs that a workspace's todos changed."""
-    await emit_to_user(user_id, {"type": "todos_changed", "workspace": workspace})
+    await emit_jobs_changed(user_id, workspace)
 
 
 async def emit_open_browser(
