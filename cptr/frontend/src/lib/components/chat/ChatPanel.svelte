@@ -42,6 +42,7 @@
 		currentWorkspace,
 		expandToolDetails,
 		openChatTab,
+		sleepClosedChatTabs,
 		streamingBehavior,
 		toolApprovalMode as defaultToolApprovalMode,
 		widescreenMode
@@ -418,13 +419,28 @@
 		if (chatId === commandSessionsChatId) return;
 		commandSessionsChatId = chatId;
 		commandSessions = [];
-		if (chatId) refreshCommandSessions();
+		if (chatId && active) refreshCommandSessions();
 	});
 
 	// ── Load chat from DB ───────────────────────────────────────
 
 	let loadGeneration = 0;
 	let loadedChatId = $state<string | null>(null);
+	// Hidden tabs skip history fetches. Streaming deltas are gated server-side
+	// while the tab is not visible, so a switch only reloads when this copy is
+	// missing or stale (streamed / compacted / reconnect while we were away).
+	let needsResync = false;
+
+	function requestVisibleSync() {
+		if (!active) return;
+		if (chatId) {
+			if (loadedChatId === chatId && !needsResync) return;
+			needsResync = false;
+			loadChat(chatId);
+			return;
+		}
+		if (previousChats.length === 0) loadPreviousChats(chatPage);
+	}
 
 	function markChatRead(id: string) {
 		setChatReadAt(id);
@@ -552,6 +568,7 @@
 
 	async function deleteChat(id: string) {
 		await apiDeleteChat(id);
+		sleepClosedChatTabs(id);
 		previousChats = previousChats.filter((c) => c.id !== id);
 	}
 
@@ -654,10 +671,14 @@
 
 		if (data.chat_id !== chatId) return;
 
-		// Hidden tabs don't render streaming updates — the server doesn't send
-		// them heavy payloads (deltas/output items) while the chat isn't visible.
-		// We resync from the server when this tab becomes active again.
-		if (!active) return;
+		// Hidden tabs don't apply streaming updates — the server also withholds
+		// heavy payloads (deltas/output items) while the chat isn't visible.
+		// Remember that the local copy is stale so the next time this tab is
+		// shown we reload; idle hidden tabs are left alone.
+		if (!active) {
+			needsResync = true;
+			return;
+		}
 
 		// Mark that a chat is working before the per-event branches, so the block
 		// that follows is attributed to the stream rather than left anonymous.
@@ -777,7 +798,13 @@
 	}
 
 	function handleReconnect() {
-		if (chatId) loadChat(chatId);
+		if (!chatId) return;
+		if (active) {
+			needsResync = false;
+			loadChat(chatId);
+			return;
+		}
+		if (loadedChatId === chatId) needsResync = true;
 	}
 
 	function resetChatSettings() {
@@ -823,12 +850,7 @@
 
 	onMount(() => {
 		resetChatSettings();
-
-		if (chatId) {
-			loadChat(chatId);
-		} else {
-			loadPreviousChats();
-		}
+		requestVisibleSync();
 		window.addEventListener('computer:inspectCommandSession', handleInspectCommandSession);
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 
@@ -929,18 +951,12 @@
 	});
 
 	// ── Resync when the tab becomes visible again ────────────────
-	// While hidden, streaming payloads are skipped (server-side and here), so
-	// reload from the server to pick up whatever was produced in the meantime.
+	// Idle hidden tabs keep the copy they already have. A tab that streamed,
+	// compacted, or missed a reconnect while hidden reloads once on show.
 	// svelte-ignore state_referenced_locally -- prev-value transition tracking
 	let prevActive = active;
 	$effect(() => {
-		if (active && !prevActive) {
-			if (chatId) {
-				loadChat(chatId);
-			} else {
-				loadPreviousChats(chatPage);
-			}
-		}
+		if (active && !prevActive) requestVisibleSync();
 		prevActive = active;
 	});
 

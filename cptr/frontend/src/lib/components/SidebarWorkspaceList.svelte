@@ -6,7 +6,8 @@
 		reorderWorkspaces,
 		sidebarOpen,
 		activeTab,
-		currentWorkspace
+		currentWorkspace,
+		sleepClosedChatTabs
 	} from '$lib/stores';
 	import { chatEnabled, setChatClosed, updateChatStatuses } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
@@ -217,6 +218,7 @@
 		const { chatId, wsPath } = chatMenu;
 		closeChatMenu();
 		await apiDeleteChat(chatId);
+		sleepClosedChatTabs(chatId);
 		const chats = wsChatsCache.get(wsPath) ?? [];
 		wsChatsCache = new Map([...wsChatsCache, [wsPath, chats.filter((chat) => chat.id !== chatId)]]);
 		if (currentPath === wsPath && currentChatId === chatId) {

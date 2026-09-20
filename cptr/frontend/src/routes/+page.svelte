@@ -1680,6 +1680,9 @@
 		visibility: hidden;
 		z-index: 0;
 		pointer-events: none;
+		/* Skip style/layout of the subtree until the tab is shown. Absolute
+		   inset:0 already sizes the box from the pane, so this does not collapse it. */
+		content-visibility: hidden;
 	}
 
 	.git-review-panel {

@@ -88,7 +88,7 @@ per chat tab, all constructed on first render:
 
 ```css
 .persisted-tab        { position: absolute; inset: 0; z-index: 1; overflow: hidden; }
-.persisted-tab-hidden { visibility: hidden; z-index: 0; pointer-events: none; }
+.persisted-tab-hidden { visibility: hidden; z-index: 0; pointer-events: none; content-visibility: hidden; }
 ```
 
 `visibility: hidden` keeps the subtree in style recalc, in layout, and in memory. All 43
@@ -97,12 +97,17 @@ panels stay live, each holding a full `ChatPanel` instance, a TipTap editor, and
 
 Already-gated work (so these are **not** the problem):
 
-- `ChatPanel.svelte:928` — history load only on `active && !prevActive`.
-- `ChatPanel.svelte:943` — command-session poller gated on `active && docVisible`.
+- `ChatPanel.svelte` — history fetch only while `active`, and only when the
+  local copy is missing or stale (`needsResync`: streamed / compacted /
+  reconnect while hidden). Idle tab switches do not hit the server.
+- `ChatPanel.svelte` — command-session poller gated on `active && docVisible`.
 - Streaming deltas gated server-side and client-side on chat visibility.
+- `.persisted-tab-hidden` — `content-visibility: hidden` so off-screen
+  subtrees skip style and layout (the boxes stay `position:absolute; inset:0`).
 
-So the previous perf work correctly removed the *ongoing* per-hidden-tab costs. What it
-did not address is the *construction* cost of every panel at once.
+So the previous perf work correctly removed the *ongoing* per-hidden-tab costs,
+and a later pass stopped the fetch-on-every-click. What it did not address is
+the *construction* cost of every panel at once.
 
 ## Independent corroboration from the app's own telemetry
 
@@ -141,9 +146,15 @@ in headless, scaled down.
 Recommend (1) as the core change, (3) as a bounded-memory backstop.
 
 **Status:** the *highlighter* half of this is fixed ("Second cause" below) and shipped in
-the running build. Items (1)–(4) above are **still proposals** — tabs are still eagerly
-mounted, deliberately: the user keeps all tabs open and rejected lazy-mount, so the
-steady-state cost is accepted and the target is the load/streaming cost instead.
+the running build. History fetch is no longer paid on every mount or every tab click
+(hidden panels skip `loadChat`; a switch reloads only if that chat went stale while
+hidden). Concluded chats deep-sleep: closing a chat drops its tab so the panel
+unmounts, and workspace load prunes leftover tabs for chats that are already closed.
+Items (1) lazy-mount, (2) chunked mount, (3) LRU unmount of *open* chats, and (4)
+`content-visibility: auto` are **still proposals** for the remaining *construction*
+storm — (4)'s cheaper cousin `content-visibility: hidden` on `.persisted-tab-hidden`
+has shipped. Open tabs are still eagerly mounted, deliberately: the user keeps working
+tabs open and rejected lazy-mount, so the steady-state cost is accepted for those.
 
 ## Second cause: one Shiki highlighter per code block (fixed)
 

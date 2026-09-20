@@ -5,7 +5,7 @@ import { writable, get } from 'svelte/store';
 import { toast } from 'svelte-sonner';
 import { fetchJSON } from '$lib/apis';
 import { socketStore } from '$lib/stores/socket.svelte';
-import { activeHomeTab, activeTab, currentWorkspace } from '$lib/stores';
+import { activeHomeTab, activeTab, currentWorkspace, sleepClosedChatTabs } from '$lib/stores';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
 import { i18next } from '$lib/i18n';
 import { registerPerfGauge } from '$lib/utils/perf';
@@ -78,11 +78,14 @@ export function setChatReadAt(chatId: string, lastReadAt = Date.now()) {
 
 /**
  * Close (conclude) a chat, or reopen it. A closed chat drops out of the
- * workspace sidebar until new activity makes it unread again. The server
- * echoes the change to every session.
+ * workspace sidebar until new activity makes it unread again, and its live
+ * tab/panel is put to sleep (unmounted) because concluded chats are rarely
+ * reopened. The server echoes the change to every session.
  */
 export function setChatClosed(chatId: string, closed: boolean) {
 	socketStore.getSocket()?.emit('chat:closed', { chat_id: chatId, closed });
+	// Drop the live panel immediately; the socket echo does the same for other sessions.
+	if (closed) sleepClosedChatTabs(chatId);
 }
 
 export function isChatUnread(status: ChatStatus | undefined): boolean {
@@ -191,6 +194,7 @@ export function bindGlobalChatListener() {
 			active?: boolean;
 			updated_at?: number;
 			last_read_at?: number;
+			closed_at?: number | null;
 		}) => {
 			if (data.type === 'chat:active' && typeof data.active === 'boolean') {
 				setChatActive(data.chat_id, data.active, data.workspace);
@@ -208,6 +212,7 @@ export function bindGlobalChatListener() {
 			if (typeof data.last_read_at === 'number') {
 				setChatReadAt(data.chat_id, data.last_read_at);
 			}
+			if (data.closed_at) sleepClosedChatTabs(data.chat_id);
 			if (!data.done) return;
 
 			// Clear streaming indicator for the tab

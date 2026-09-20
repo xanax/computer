@@ -18,6 +18,7 @@
 
 import { writable, derived, get } from 'svelte/store';
 import { toast } from 'svelte-sonner';
+import { getChats } from '$lib/apis/chat';
 import {
 	getPreferences,
 	savePreferences,
@@ -628,9 +629,10 @@ export async function loadPreferences(): Promise<void> {
 					}
 				: undefined);
 		if (savedHomeState && Array.isArray(savedHomeState.groups)) {
-			const [terminalIds, browserIds] = await Promise.all([
+			const [terminalIds, browserIds, closedChatIds] = await Promise.all([
 				listSessions().catch(() => []),
-				listBrowserSessions().catch(() => [])
+				listBrowserSessions().catch(() => []),
+				fetchClosedChatIds().catch(() => new Set<string>())
 			]);
 			const aliveTerminals = new Set(terminalIds.map((session) => session.session_id));
 			const aliveBrowsers = new Set(browserIds);
@@ -647,6 +649,10 @@ export async function loadPreferences(): Promise<void> {
 							(tab) =>
 								tab.type !== 'browser' ||
 								(tab.browserSessionId !== undefined && aliveBrowsers.has(tab.browserSessionId))
+						)
+						.filter(
+							(tab) =>
+								tab.type !== 'chat' || !tab.path || !closedChatIds.has(tab.path)
 						);
 					const liveIds = new Set(liveTabs.map((tab) => tab.id));
 					return {
@@ -731,12 +737,16 @@ export async function loadWorkspace(path: string): Promise<void> {
 			// Validate terminal sessions are still alive
 			let aliveSessions: Set<string> = new Set();
 			let aliveBrowserSessions: Set<string> = new Set();
+			let closedChatIds: Set<string> = new Set();
 			try {
 				const sessions = await listSessions();
 				aliveSessions = new Set(sessions.map((s) => s.session_id));
 			} catch {}
 			try {
 				aliveBrowserSessions = new Set(await listBrowserSessions());
+			} catch {}
+			try {
+				closedChatIds = await fetchClosedChatIds(canonicalWorkspacePath);
 			} catch {}
 
 			const ws = wsData as unknown as WorkspaceState;
@@ -780,6 +790,9 @@ export async function loadWorkspace(path: string): Promise<void> {
 							t.type === 'browser' &&
 							(!t.browserSessionId || !aliveBrowserSessions.has(t.browserSessionId))
 						) {
+							return false;
+						}
+						if (t.type === 'chat' && t.path && closedChatIds.has(t.path)) {
 							return false;
 						}
 						return true;
@@ -1438,6 +1451,132 @@ export async function closeTab(
 		};
 	});
 	return true;
+}
+
+function dropChatTabsByPath(
+	groups: EditorGroup[],
+	chatIds: Set<string>
+): { groups: EditorGroup[]; removedTabIds: string[] } {
+	const removedTabIds: string[] = [];
+	const next = groups
+		.map((group) => {
+			const tabs = group.tabs.filter((tab) => {
+				if (tab.type === 'chat' && tab.path && chatIds.has(tab.path)) {
+					removedTabIds.push(tab.id);
+					return false;
+				}
+				return true;
+			});
+			if (tabs.length === group.tabs.length) return group;
+			const liveIds = new Set(tabs.map((tab) => tab.id));
+			const activeStillExists = tabs.some((tab) => tab.id === group.activeTabId);
+			return {
+				...group,
+				tabs,
+				tabHistory: (group.tabHistory ?? []).filter((id) => liveIds.has(id)),
+				activeTabId: activeStillExists ? group.activeTabId : (tabs[0]?.id ?? '')
+			};
+		})
+		.filter((group) => group.tabs.length > 0);
+	return { groups: next, removedTabIds };
+}
+
+function defaultHomeGroup(): EditorGroup {
+	return {
+		id: 'home',
+		tabs: [{ id: 'home', type: 'home', label: 'Home', permanent: true }],
+		activeTabId: 'home'
+	};
+}
+
+/**
+ * Put a concluded chat into deep sleep: drop its tabs so the ChatPanel unmounts.
+ * The chat stays in the DB and comes back via the sidebar if it gets new activity,
+ * or from history; that path opens a fresh tab.
+ */
+export function sleepClosedChatTabs(chatId: string): void {
+	const ids = new Set([chatId]);
+	const removed: string[] = [];
+
+	currentWorkspace.update((ws) => {
+		if (!ws) return ws;
+		const { groups, removedTabIds } = dropChatTabsByPath(ws.groups, ids);
+		if (!removedTabIds.length) return ws;
+		removed.push(...removedTabIds);
+		const nonempty = groups.length ? groups : [createDefaultGroup()];
+		const kept = new Set(nonempty.map((group) => group.id));
+		let layout = ws.layout;
+		for (const group of ws.groups) {
+			if (!kept.has(group.id)) {
+				layout = removeLayoutGroup(layout, group.id) ?? {
+					type: 'group',
+					groupId: nonempty[0].id
+				};
+			}
+		}
+		return {
+			...ws,
+			groups: nonempty,
+			layout: normalizeLayout(
+				layout,
+				nonempty,
+				ws.splitDirection ?? 'horizontal',
+				ws.splitRatio ?? 0.5
+			),
+			activeGroupId: nonempty.some((group) => group.id === ws.activeGroupId)
+				? ws.activeGroupId
+				: nonempty[0].id
+		};
+	});
+
+	homeState.update((state) => {
+		const { groups, removedTabIds } = dropChatTabsByPath(state.groups, ids);
+		if (!removedTabIds.length) return state;
+		removed.push(...removedTabIds);
+		const nonempty = groups.length ? groups : [defaultHomeGroup()];
+		const kept = new Set(nonempty.map((group) => group.id));
+		let layout = state.layout;
+		for (const group of state.groups) {
+			if (!kept.has(group.id)) {
+				layout = removeLayoutGroup(layout, group.id) ?? {
+					type: 'group',
+					groupId: nonempty[0].id
+				};
+			}
+		}
+		return {
+			...state,
+			groups: nonempty,
+			layout: normalizeLayout(layout, nonempty, state.splitDirection ?? 'horizontal', 0.5),
+			activeGroupId: nonempty.some((group) => group.id === state.activeGroupId)
+				? state.activeGroupId
+				: nonempty[0].id
+		};
+	});
+
+	if (removed.length) {
+		streamingChatTabs.update((s) => {
+			const next = new Set(s);
+			for (const id of removed) next.delete(id);
+			return next;
+		});
+	}
+}
+
+async function fetchClosedChatIds(workspace?: string): Promise<Set<string>> {
+	const closed = new Set<string>();
+	let offset = 0;
+	const limit = 200;
+	for (;;) {
+		const data = await getChats(workspace, limit, offset, 'updated_at', 'desc', true);
+		for (const chat of data.chats || []) {
+			if (chat.closed_at) closed.add(chat.id);
+		}
+		if (!data.has_more) break;
+		offset += limit;
+		if (offset > 5000) break;
+	}
+	return closed;
 }
 
 export function setActiveTab(tabId: string, groupId?: string): void {
