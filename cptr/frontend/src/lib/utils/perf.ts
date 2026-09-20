@@ -64,6 +64,8 @@ export interface PerfContext {
 	total_tabs?: number;
 	groups?: number;
 	active_tab?: string | null;
+	/** Chats currently receiving tokens (assistant message not done). */
+	working_chats?: number;
 	hidden?: boolean;
 	focused?: boolean;
 	viewport?: string;
@@ -81,6 +83,13 @@ const SESSION_ID = (() => {
 })();
 
 let contextGetter: () => PerfContext = () => ({});
+/**
+ * Extra ambient fields owned by modules that cannot import `$lib/stores` (the
+ * store layer imports them, so a getter there would be a cycle). Each is
+ * sampled alongside the main context, so a sample can answer "was this block
+ * paid while chats were streaming?" without the reporting call site knowing.
+ */
+let contextGauges: (() => Record<string, unknown>)[] = [];
 let buffer: PerfEvent[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
@@ -158,7 +167,14 @@ function isEnabled(): boolean {
 
 function safeContext(): PerfContext {
 	try {
-		const ctx = contextGetter() ?? {};
+		const ctx: PerfContext = { ...(contextGetter() ?? {}) };
+		for (const gauge of contextGauges) {
+			try {
+				Object.assign(ctx, gauge());
+			} catch {
+				/* a bad gauge must not lose the sample */
+			}
+		}
 		// Cheap ambient flags the call sites must never have to remember.
 		if (typeof document !== 'undefined') {
 			ctx.hidden = document.visibilityState === 'hidden';
@@ -186,6 +202,15 @@ function contextMeta(ctx: PerfContext): Record<string, unknown> {
 /** Register a callback that supplies ambient context for every sample. */
 export function setPerfContext(fn: () => PerfContext): void {
 	contextGetter = fn;
+}
+
+/**
+ * Register an extra source of ambient context. Unlike `setPerfContext` this is
+ * additive and repeatable, so a leaf module can contribute a dimension (e.g.
+ * "how many chats are streaming") without owning the whole context.
+ */
+export function registerPerfGauge(fn: () => Record<string, unknown>): void {
+	contextGauges.push(fn);
 }
 
 /** Monotonic timestamp in ms, for callers that want to measure spans manually. */
@@ -236,6 +261,41 @@ export function record(
 	if (kind !== 'long_task') {
 		lastActivity = { kind, label, at: perfMs };
 	}
+}
+
+/**
+ * Note that work is happening *right now*, so a long task it causes can be
+ * blamed on it — without emitting a sample of its own.
+ *
+ * `record` is too heavy for the streaming path: a chat can push tens of deltas
+ * a second, and buffering a sample per delta would both flood the store and add
+ * cost to the very path we are trying to measure. This only moves the
+ * attribution cursor, which is what turns the wall of unattributed long tasks
+ * that pile up while chats work into `during: "stream:delta"` samples.
+ */
+export function markActivity(kind: string, label?: string): void {
+	if (!isEnabled()) return;
+	lastActivity = { kind, label, at: Math.round(nowMs() * 10) / 10 };
+}
+
+/**
+ * Record a measurement only when it is slow enough to matter.
+ *
+ * For hot, per-frame loops (auto-scroll, transcript measurement) the honest
+ * number is the *tail*, not the mean: measuring every call would generate
+ * thousands of samples of sub-millisecond noise and bury the signal. The
+ * threshold keeps the store readable while still capturing every block that a
+ * user could actually feel.
+ */
+export function recordIfSlow(
+	kind: string,
+	label: string | undefined,
+	durationMs: number,
+	thresholdMs: number,
+	meta?: Record<string, unknown>
+): void {
+	if (durationMs < thresholdMs) return;
+	record(kind, label, durationMs, meta);
 }
 
 function scheduleFlush(): void {

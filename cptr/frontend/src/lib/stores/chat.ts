@@ -8,6 +8,7 @@ import { socketStore } from '$lib/stores/socket.svelte';
 import { activeHomeTab, activeTab, currentWorkspace } from '$lib/stores';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
 import { i18next } from '$lib/i18n';
+import { registerPerfGauge } from '$lib/utils/perf';
 
 export const chatEnabled = writable<boolean>(false);
 
@@ -95,6 +96,16 @@ export function isChatUnread(status: ChatStatus | undefined): boolean {
 
 /** Set of tab IDs whose chat is currently streaming (assistant message not done). */
 export const streamingChatTabs = writable<Set<string>>(new Set());
+
+// Stamp every perf sample with how many chats are working, so the long tasks
+// that pile up during a multi-chat session can finally be split from the idle
+// ones. `active` comes from the server's own is_active flag (the truth), while
+// `streamingChatTabs` only counts tabs this browser knows are mid-stream.
+registerPerfGauge(() => {
+	let working = 0;
+	for (const status of get(chatStatuses).values()) if (status.active) working++;
+	return { working_chats: working, streaming_tabs: get(streamingChatTabs).size };
+});
 
 /**
  * Maps chatId -> tab IDs so we can clear streamingChatTabs from a global

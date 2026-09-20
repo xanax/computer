@@ -35,6 +35,7 @@
 		setChatClosed
 	} from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
+	import { markActivity, nowMs, recordIfSlow } from '$lib/utils/perf';
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { get } from 'svelte/store';
 	import {
@@ -658,6 +659,13 @@
 		// We resync from the server when this tab becomes active again.
 		if (!active) return;
 
+		// Mark that a chat is working before the per-event branches, so the block
+		// that follows is attributed to the stream rather than left anonymous.
+		if (data.delta) markActivity('stream', 'delta');
+		else if (data.output) markActivity('stream', 'output');
+		else if (data.type === 'chat:tasks') markActivity('stream', 'tasks');
+		else if (data.done) markActivity('stream', 'done');
+
 		if (data.type === 'chat:tasks') {
 			setChatTasks(data.tasks ?? []);
 			return;
@@ -952,6 +960,7 @@
 
 	function scrollToBottom() {
 		if (!messagesEl) return;
+		const t0 = nowMs();
 		messagesEl.scrollTop = messagesEl.scrollHeight;
 		// Follow-up scroll to account for content-visibility re-layouts
 		requestAnimationFrame(() => {
@@ -959,6 +968,7 @@
 				messagesEl.scrollTop = messagesEl.scrollHeight;
 			}
 		});
+		recordIfSlow('autoscroll', 'chat', nowMs() - t0, 4, { messages: activePath.length });
 	}
 
 	let lastScrollTop = 0;
@@ -1045,18 +1055,26 @@
 			scrolledQuestionEl = null;
 			return;
 		}
+		const t0 = nowMs();
 		const topEdge = readableTop();
 		let current = '';
 		let currentEl: HTMLElement | null = null;
+		let rows = 0;
 		for (const el of messagesEl.querySelectorAll<HTMLElement>('[data-question]')) {
 			// Elements are in visual order: the first one still on screen ends
 			// the search, since every question below it is even further down.
 			if (el.getBoundingClientRect().bottom > topEdge) break;
+			rows++;
 			current = el.dataset.question ?? '';
 			currentEl = el;
 		}
 		scrolledQuestion = current;
 		scrolledQuestionEl = currentEl;
+		// This walk forces a synchronous layout per question row, and it reruns on
+		// every transcript mutation — i.e. on every streamed token. Recording only
+		// the slow ones keeps the store legible while exposing the cost that grows
+		// with transcript length and with how many tabs are mounted.
+		recordIfSlow('question_measure', 'chat', nowMs() - t0, 4, { rows });
 	}
 
 	function queueScrolledQuestionMeasure() {
