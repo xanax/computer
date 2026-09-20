@@ -2,6 +2,12 @@
 
 Request: *"the workspace headings id like inverted so they really stand out"*.
 
+> **Update — the plate is now mono-only.** *"dark / light sidebars workspace
+> headings are too contrasty"*: the inverted plate is scoped to `:global(.mono)`
+> and the tinted palettes get a muted label plus an outline on the open
+> workspace (see NOTES-tinted-palette-revert.md). Everything below describes the
+> mono treatment, which is unchanged.
+
 ## What changed
 
 `cptr/frontend/src/lib/components/SidebarWorkspaceList.svelte` — the workspace row
