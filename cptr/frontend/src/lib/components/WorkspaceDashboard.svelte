@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { getAutomations, type AutomationData } from '$lib/apis/automations';
 	import { getChats, type ChatInfo } from '$lib/apis/chat';
 	import {
@@ -13,7 +13,16 @@
 		type TodoData,
 		type TodoRequestData
 	} from '$lib/apis/todos';
+	import {
+		cancelJob,
+		deferJob,
+		deleteJob,
+		getJobs,
+		type JobData,
+		type JobStatus
+	} from '$lib/apis/jobs';
 	import { openChatTab } from '$lib/stores';
+	import { chatModels, defaultModel, refreshChatState } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { t } from '$lib/i18n';
 	import { getPathDisplayName } from '$lib/utils/paths';
@@ -29,11 +38,81 @@
 	let upcoming = $state<AutomationData[]>([]);
 	let chats = $state<ChatInfo[]>([]);
 	let todos = $state<TodoData[]>([]);
+	let jobs = $state<JobData[]>([]);
 	let pendingRequests = $state<TodoRequestData[]>([]);
 	let newTodoTitle = $state('');
 	let todosBusy = $state(false);
 	let loading = $state(true);
 	let failed = $state(false);
+
+	// ── Deferred / agent-run state ──────────────────────────────
+
+	/** Which row has its "run later" form open. */
+	let deferOpenId = $state<string | null>(null);
+	let deferAt = $state('');
+	let deferModel = $state('');
+	let deferNote = $state('');
+	let deferBusy = $state(false);
+	let deferError = $state('');
+
+	/**
+	 * One row per board entry. The todo list is the human slice of the board, so
+	 * a todo and its job share an id: enrich the todo with its job rather than
+	 * listing both. Anything on the board with no todo of its own (a note, or a
+	 * job a chat put there) is appended.
+	 */
+	type Row = {
+		id: string;
+		title: string;
+		done: boolean;
+		source: string;
+		/** False for a board entry that has no `/api/todos` row of its own. */
+		fromTodos: boolean;
+		job: JobData | null;
+	};
+
+	const rows = $derived.by<Row[]>(() => {
+		const byId = new Map(jobs.map((job) => [job.id, job]));
+		const seen = new Set<string>();
+		const out: Row[] = [];
+
+		for (const todo of todos) {
+			seen.add(todo.id);
+			out.push({
+				id: todo.id,
+				title: todo.title,
+				done: todo.status === 'done',
+				source: todo.source,
+				fromTodos: true,
+				job: byId.get(todo.id) ?? null
+			});
+		}
+
+		const extra = jobs
+			.filter((job) => !seen.has(job.id) && job.status !== 'cancelled')
+			.sort((a, b) => (a.trigger_at ?? Infinity) - (b.trigger_at ?? Infinity));
+		for (const job of extra) {
+			out.push({
+				id: job.id,
+				title: job.title,
+				done: job.status === 'done',
+				source: job.source,
+				fromTodos: false,
+				job
+			});
+		}
+
+		return out;
+	});
+
+	/** True while a run is in flight, or about to be — the only time we poll. */
+	const liveRun = $derived(
+		jobs.some((job) => {
+			if (job.status === 'running' || job.status === 'queued') return true;
+			if (job.trigger !== 'at' || job.status !== 'open' || job.trigger_at == null) return false;
+			return nsToMs(job.trigger_at) - Date.now() < 5 * 60_000;
+		})
+	);
 
 	async function loadTodos(ws: string) {
 		if (!ws) return;
@@ -46,6 +125,20 @@
 		}
 	}
 
+	async function loadJobs(ws: string) {
+		if (!ws) return;
+		try {
+			const data = await getJobs(ws);
+			jobs = data.jobs;
+		} catch {
+			// As above: a failed read must not blank the board.
+		}
+	}
+
+	async function loadBoard(ws: string) {
+		await Promise.allSettled([loadTodos(ws), loadJobs(ws)]);
+	}
+
 	$effect(() => {
 		const ws = workspace;
 		if (!ws) return;
@@ -55,8 +148,9 @@
 		void Promise.allSettled([
 			getAutomations(ws),
 			getChats(ws, 8, 0, 'updated_at', 'desc', false),
-			getTodos(ws)
-		]).then(([autosResult, chatsResult, todosResult]) => {
+			getTodos(ws),
+			getJobs(ws)
+		]).then(([autosResult, chatsResult, todosResult, jobsResult]) => {
 			const autos = autosResult.status === 'fulfilled' ? autosResult.value.items : [];
 			const chatList = chatsResult.status === 'fulfilled' ? chatsResult.value.chats : [];
 			failed =
@@ -70,23 +164,95 @@
 				todos = todosResult.value.todos;
 				pendingRequests = todosResult.value.pending_requests;
 			}
+			if (jobsResult.status === 'fulfilled') {
+				jobs = jobsResult.value.jobs;
+			}
 			loading = false;
 		});
 	});
 
+	// ── Live updates ────────────────────────────────────────────
+
+	/** A run that settles emits jobs_changed *and* todos_changed; coalesce them. */
+	let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function scheduleReload() {
+		if (reloadTimer) return;
+		reloadTimer = setTimeout(() => {
+			reloadTimer = null;
+			void loadBoard(workspace);
+		}, 200);
+	}
+
+	let docVisible = $state(
+		typeof document !== 'undefined' ? document.visibilityState === 'visible' : true
+	);
+
+	function handleVisibilityChange() {
+		docVisible = document.visibilityState === 'visible';
+	}
+
+	let pollTimer: ReturnType<typeof setInterval> | null = null;
+
 	onMount(() => {
+		document.addEventListener('visibilitychange', handleVisibilityChange);
 		const off = socketStore.on('events:chat', (data: any) => {
-			if (data?.type === 'todos_changed' && data?.workspace === workspace) {
-				void loadTodos(workspace);
+			if (data?.workspace !== workspace) return;
+			// Either event means the board moved: the todo routes are a shim over
+			// the jobs table, so they are always emitted as a pair.
+			if (data?.type === 'todos_changed' || data?.type === 'jobs_changed') {
+				scheduleReload();
 			}
 		});
-		return off;
+		return () => {
+			off();
+			document.removeEventListener('visibilitychange', handleVisibilityChange);
+			if (reloadTimer) {
+				clearTimeout(reloadTimer);
+				reloadTimer = null;
+			}
+		};
 	});
 
-	function formatNextRun(ns: number): string {
-		const ms = ns / 1_000_000;
+	/**
+	 * While something is running (or due within minutes) poll, so the row moves
+	 * from "waiting to run" the moment it starts. Idle boards issue no requests,
+	 * and a backgrounded tab stays quiet: the scheduler emits jobs_changed when a
+	 * run settles, so nothing is missed by staying silent.
+	 */
+	function startPolling() {
+		if (pollTimer) return;
+		pollTimer = setInterval(() => void loadJobs(workspace), 5_000);
+	}
+
+	function stopPolling() {
+		if (!pollTimer) return;
+		clearInterval(pollTimer);
+		pollTimer = null;
+	}
+
+	$effect(() => {
+		if (liveRun && docVisible && workspace) startPolling();
+		else stopPolling();
+	});
+
+	onDestroy(() => {
+		if (pollTimer) clearInterval(pollTimer);
+	});
+
+
+	/** The board mixes units: timestamps are ms, `trigger_at` is ns. */
+	function nsToMs(ns: number): number {
+		return Math.floor(ns / 1_000_000);
+	}
+
+	/**
+	 * "Sep 20, 19:08 · in 4 hours". The relative half is dropped once the moment
+	 * has passed — a stale trigger must not read as a countdown.
+	 */
+	function formatWhen(ms: number): string {
 		const date = new Date(ms);
-		const diff = date.getTime() - Date.now();
+		const diff = ms - Date.now();
 		const dateStr = date.toLocaleString(undefined, {
 			month: 'short',
 			day: 'numeric',
@@ -103,6 +269,11 @@
 		if (hrs < 24) return `${dateStr} · ${$t('dashboard.hours', { count: hrs })}`;
 		const days = Math.floor(hrs / 24);
 		return `${dateStr} · ${$t('dashboard.days', { count: days })}`;
+	}
+
+	/** Automations carry ns timestamps, like a job's trigger. */
+	function formatNextRun(ns: number): string {
+		return formatWhen(nsToMs(ns));
 	}
 
 	function formatChatTime(ts: number): string {
@@ -135,59 +306,174 @@
 		goto('/scheduled');
 	}
 
+	/** One row action at a time: every board write shares this latch. */
+	async function withTodosBusy(fn: () => Promise<unknown>) {
+		if (todosBusy) return;
+		todosBusy = true;
+		try {
+			await fn();
+			await loadBoard(workspace);
+		} catch {
+			/* a failed write leaves the board as it was; the next read is truth */
+		} finally {
+			todosBusy = false;
+		}
+	}
+
 	async function handleAddTodo() {
 		const title = newTodoTitle.trim();
 		if (!title || todosBusy) return;
-		todosBusy = true;
-		try {
+		await withTodosBusy(async () => {
 			await addTodo(workspace, title);
 			newTodoTitle = '';
-			await loadTodos(workspace);
-		} catch {
-			/* ignore */
-		} finally {
-			todosBusy = false;
-		}
+		});
 	}
 
-	async function handleToggleTodo(id: string) {
-		if (todosBusy) return;
-		todosBusy = true;
-		try {
-			await toggleTodo(id);
-			await loadTodos(workspace);
-		} catch {
-			/* ignore */
-		} finally {
-			todosBusy = false;
+	async function handleToggleTodo(row: Row) {
+		// A row with no todo of its own lives only on the board, so it is toggled
+		// through the job route; every other row goes through the todo shim.
+		if (row.fromTodos) {
+			await withTodosBusy(() => toggleTodo(row.id));
+			return;
 		}
+		await withTodosBusy(() => patchJob(row.id, { status: row.done ? 'open' : 'done' }));
 	}
 
 	async function handleRemoveTodo(id: string) {
-		if (todosBusy) return;
-		todosBusy = true;
-		try {
-			await removeTodo(id);
-			await loadTodos(workspace);
-		} catch {
-			/* ignore */
-		} finally {
-			todosBusy = false;
+		await withTodosBusy(() => removeTodo(id));
+	}
+
+	/** Remove a row: through the todo route when it has a todo, else the board. */
+	async function handleRemove(row: Row) {
+		if (row.fromTodos) {
+			await withTodosBusy(() => removeTodo(row.id));
+			return;
+		}
+		await withTodosBusy(() => deleteJob(row.id));
+	}
+
+	// ── Job status text ────────────────────────────────────────
+
+	function statusLabel(status: JobStatus): string {
+		switch (status) {
+			case 'queued':
+				return $t('dashboard.jobQueued');
+			case 'running':
+				return $t('dashboard.jobRunning');
+			case 'needs_review':
+				return $t('dashboard.jobReady');
+			case 'blocked':
+				return $t('dashboard.jobBlocked');
+			case 'failed':
+				return $t('dashboard.jobFailed');
+			case 'cancelled':
+				return $t('dashboard.jobStopped');
+			default:
+				return '';
 		}
 	}
 
-	async function handleResolveRequest(id: string, approve: boolean) {
-		if (todosBusy) return;
-		todosBusy = true;
+	/** The second line of a row: who is running it, when, and how it went. */
+	function rowDetail(row: Row): string {
+		const job = row.job;
+		if (!job || row.done) return '';
+
+		const bits: string[] = [];
+		// An 'open' job with a trigger is waiting for its moment; say so, because a
+		// bare date reads like a deadline the user set.
+		if (job.status === 'open' && job.trigger === 'at') bits.push($t('dashboard.jobScheduled'));
+		else {
+			const label = statusLabel(job.status);
+			if (label) bits.push(label);
+		}
+		if (job.trigger === 'at' && job.trigger_at != null) bits.push(formatWhen(nsToMs(job.trigger_at)));
+		if (job.executor && job.executor !== 'human') bits.push(job.executor);
+		if (job.attempts > 1) bits.push($t('dashboard.jobAttempt', { count: job.attempts }));
+		if ((job.status === 'failed' || job.status === 'blocked') && job.last_error) {
+			bits.push(job.last_error);
+		}
+		return bits.join(' · ');
+	}
+
+	function runChatId(row: Row): string {
+		const id = row.job?.meta?.run_chat_id;
+		return typeof id === 'string' ? id : '';
+	}
+
+	/** True while a run is in flight or waiting for the user to look at it. */
+	function hasPendingRun(row: Row): boolean {
+		const job = row.job;
+		if (!job || row.done) return false;
+		if (job.status === 'running' || job.status === 'queued') return false;
+		if (job.status === 'needs_review') return true;
+		return job.trigger === 'at' && job.trigger_at != null;
+	}
+
+	/** True while the model is mid-turn — the moment the stop button means something. */
+	function isRunning(row: Row): boolean {
+		const status = row.job?.status;
+		if (row.done) return false;
+		return status === 'running' || status === 'queued';
+	}
+
+	// ── Run later ──────────────────────────────────────────────
+
+	async function toggleDefer(id: string) {
+		if (deferOpenId === id) {
+			deferOpenId = null;
+			return;
+		}
+		deferOpenId = id;
+		deferError = '';
+		deferAt = '';
+		deferNote = '';
+		if ($chatModels.length === 0) await refreshChatState();
+		pickDeferModel();
+	}
+
+	/**
+	 * Preselect the chat's default model, but only when it is one we can actually
+	 * offer: a select bound to a value with no matching option renders blank.
+	 */
+	function pickDeferModel() {
+		const ids = $chatModels.map((model) => model.id);
+		const preferred = $defaultModel;
+		if (preferred && ids.includes(preferred)) deferModel = preferred;
+		else deferModel = ids[0] ?? '';
+	}
+
+	async function handleDefer(id: string, title: string) {
+		const at = deferAt.trim();
+		if (!at || !deferModel || deferBusy) return;
+		deferBusy = true;
+		deferError = '';
 		try {
+			await deferJob(id, {
+				at,
+				executor: deferModel,
+				payload: deferNote.trim() ? `${title}\n\n${deferNote.trim()}` : title
+			});
+			deferOpenId = null;
+			deferAt = '';
+			deferNote = '';
+			await loadBoard(workspace);
+		} catch (err) {
+			deferError = err instanceof Error ? err.message : String(err);
+		} finally {
+			deferBusy = false;
+		}
+	}
+
+	async function handleCancel(id: string) {
+		await withTodosBusy(() => cancelJob(id));
+		deferOpenId = null;
+	}
+
+	async function handleResolveRequest(id: string, approve: boolean) {
+		await withTodosBusy(async () => {
 			if (approve) await approveTodoRequest(id);
 			else await rejectTodoRequest(id);
-			await loadTodos(workspace);
-		} catch {
-			/* ignore */
-		} finally {
-			todosBusy = false;
-		}
+		});
 	}
 
 	function requestLabel(req: TodoRequestData): string {
@@ -259,44 +545,132 @@
 					</button>
 				</div>
 
-				{#if todos.length === 0}
+				{#if rows.length === 0}
 					<div class="empty-card">
 						<p>{$t('dashboard.noTodos')}</p>
 					</div>
 				{:else}
 					<ul class="card-list">
-						{#each todos as todo (todo.id)}
+						{#each rows as row (row.id)}
+							{@const detail = rowDetail(row)}
+							{@const chatId = runChatId(row)}
 							<li>
-								<div class="todo-row">
-									<button
-										class="todo-check {todo.status === 'done' ? 'done' : ''}"
-										onclick={() => handleToggleTodo(todo.id)}
-										aria-label={todo.status === 'done'
-											? $t('dashboard.reopen')
-											: $t('dashboard.complete')}
-										title={todo.status === 'done'
-											? $t('dashboard.reopen')
-											: $t('dashboard.complete')}
-									>
-										{#if todo.status === 'done'}
-											<Icon name="check" size={12} />
+								<div class="todo-row" class:attention={row.job?.status === 'needs_review'}>
+									{#if isRunning(row)}
+										<button
+											class="todo-check stop"
+											onclick={() => handleCancel(row.id)}
+											aria-label={$t('dashboard.jobStop')}
+											title={$t('dashboard.jobStop')}
+										>
+											<Icon name="stop" size={12} />
+										</button>
+									{:else}
+										<button
+											class="todo-check {row.done ? 'done' : ''}"
+											onclick={() => handleToggleTodo(row)}
+											aria-label={row.done
+												? $t('dashboard.reopen')
+												: $t('dashboard.complete')}
+											title={row.done ? $t('dashboard.reopen') : $t('dashboard.complete')}
+										>
+											{#if row.done}
+												<Icon name="check" size={12} />
+											{/if}
+										</button>
+									{/if}
+									<div class="row-main">
+										<span
+											class="row-label {row.done ? 'done' : ''}"
+											class:todo-chat={row.source === 'chat'}
+										>
+											{row.title}
+										</span>
+										{#if detail}
+											<span class="row-detail">{detail}</span>
 										{/if}
-									</button>
-									<span
-										class="row-label {todo.status === 'done' ? 'done' : ''}"
-										class:todo-chat={todo.source === 'chat'}
-									>
-										{todo.title}
-									</span>
+									</div>
+									{#if chatId}
+										<button
+											class="icon-btn"
+											onclick={() => openChat(chatId)}
+											aria-label={$t('dashboard.jobOpenRun')}
+											title={$t('dashboard.jobOpenRun')}
+										>
+											<Icon name="chat-bubble" size={13} />
+										</button>
+									{/if}
+									{#if !row.done}
+										<button
+											class="icon-btn"
+											class:active={deferOpenId === row.id}
+											onclick={() => toggleDefer(row.id)}
+											aria-label={$t('dashboard.defer')}
+											title={$t('dashboard.defer')}
+										>
+											<Icon name="clock" size={13} />
+										</button>
+									{/if}
+									{#if hasPendingRun(row)}
+										<button
+											class="icon-btn"
+											onclick={() => handleCancel(row.id)}
+											aria-label={$t('dashboard.jobDismissRun')}
+											title={$t('dashboard.jobDismissRun')}
+										>
+											<Icon name="xmark" size={13} />
+										</button>
+									{/if}
 									<button
 										class="icon-btn"
-										onclick={() => handleRemoveTodo(todo.id)}
+										onclick={() => handleRemove(row)}
 										aria-label={$t('dashboard.remove')}
 										title={$t('dashboard.remove')}
 									>
 										<Icon name="trash" size={13} />
 									</button>
 								</div>
+
+								{#if deferOpenId === row.id}
+									<div class="defer-form">
+										<input
+											type="text"
+											class="todo-input defer-at"
+											bind:value={deferAt}
+											placeholder={$t('dashboard.deferAtPlaceholder')}
+											onkeydown={(e) => {
+												if (e.key === 'Enter') handleDefer(row.id, row.title);
+											}}
+										/>
+										<select class="defer-model" bind:value={deferModel}>
+											{#each $chatModels as model (model.id)}
+												<option value={model.id}>{model.name}</option>
+											{/each}
+										</select>
+										<input
+											type="text"
+											class="todo-input defer-note"
+											bind:value={deferNote}
+											placeholder={$t('dashboard.deferNotePlaceholder')}
+											onkeydown={(e) => {
+												if (e.key === 'Enter') handleDefer(row.id, row.title);
+											}}
+										/>
+										<button
+											class="btn-secondary"
+											onclick={() => handleDefer(row.id, row.title)}
+											disabled={deferBusy || !deferAt.trim() || !deferModel}
+										>
+											{$t('dashboard.deferSubmit')}
+										</button>
+										<button class="inline-link" onclick={() => (deferOpenId = null)}>
+											{$t('dashboard.deferCancel')}
+										</button>
+										{#if deferError}
+											<span class="defer-error">{deferError}</span>
+										{/if}
+									</div>
+								{/if}
 							</li>
 						{/each}
 					</ul>
@@ -692,6 +1066,73 @@
 
 	.todo-chat {
 		font-style: italic;
+	}
+
+	/* Second line of a row: status, trigger, executor, error. */
+	.row-main {
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
+		flex: 1;
+		min-width: 0;
+	}
+
+	.row-detail {
+		font-size: 0.6875rem;
+		color: var(--app-fg-muted);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* A run landed and is waiting on a human. An ink bar, never a grey wash. */
+	.todo-row.attention {
+		box-shadow: inset 2px 0 0 var(--app-fg);
+	}
+
+	.todo-check.stop {
+		border-color: var(--app-fg);
+		color: var(--app-fg);
+	}
+
+	.icon-btn.active {
+		border: 1px solid var(--app-border);
+		color: var(--app-fg);
+	}
+
+	/* ── Run later ─────────────────────────────────────────── */
+
+	.defer-form {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.625rem 0.875rem;
+		border-top: 1px dashed var(--app-divider);
+	}
+
+	.defer-form .todo-input {
+		flex: 1;
+		min-width: 8rem;
+	}
+
+	.defer-model {
+		padding: 0.45rem 0.5rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--app-border);
+		background: transparent;
+		color: var(--app-fg);
+		font-size: 0.8125rem;
+		max-width: 14rem;
+	}
+
+	.defer-error {
+		flex-basis: 100%;
+		font-size: 0.6875rem;
+		color: var(--app-fg);
+		text-decoration: underline;
+		text-decoration-style: dotted;
+		text-underline-offset: 2px;
 	}
 
 	.icon-btn {

@@ -337,6 +337,24 @@ async def run_job(app, job: Job) -> None:
         },
     )
 
+    # A human can cancel in the gap between the row claiming `running` and the
+    # turn actually starting: `_prepare_run` writes the status, `start_task`
+    # registers the task, and `/cancel` can only reach tasks that already exist.
+    # Without this re-read the cancel is accepted (the row reads `cancelled`) and
+    # the run happens anyway. As late as possible — the leftover window is the
+    # microseconds between this read and the registry write.
+    current = await Job.get_by_id(job.id)
+    if current is None or current.status != STATUS_RUNNING:
+        from cptr.models import ChatMessage
+
+        await ChatMessage.update(assistant_msg.id, content="cancelled", done=True)
+        logger.info(
+            "Job %s: cancelled before its run started (status=%s)",
+            job.id[:8],
+            current.status if current else "gone",
+        )
+        return
+
     start_task(
         request,
         message_id=assistant_msg.id,

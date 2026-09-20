@@ -476,6 +476,81 @@ def test_a_busy_chat_requeues_the_job(jobs_db, monkeypatch):
     assert requeued.attempts == 0
 
 
+def test_a_cancel_before_the_turn_starts_never_runs(jobs_db, monkeypatch):
+    """Stop means stop: a cancel landing during preparation must not run the job.
+
+    Observed live 2026-09-20: `_prepare_run` wrote `running`, the human pressed
+    Stop 25 ms later, and `/cancel` found no task registered yet -- so it only
+    flipped the row, and the model went on to work for two more minutes.
+    """
+    from types import SimpleNamespace
+
+    from cptr.models import Chat, ChatMessage
+    from cptr.utils import chat_task, identity, jobs as jobmod, model_targets
+
+    started: list[str] = []
+
+    def fake_start_task(request, *, message_id, **kwargs):
+        started.append(message_id)
+
+    async def fake_target(model_id, app_state=None):
+        return model_targets.ApiModelTarget(
+            kind="api", connection={}, runtime_model="some-model", full_model_id="some-model"
+        )
+
+    async def fake_request(app, user_id):
+        return SimpleNamespace(app=app)
+
+    async def fake_emit(user_id, payload):
+        return None
+
+    monkeypatch.setattr(model_targets, "resolve_model_target", fake_target)
+    monkeypatch.setattr(identity, "internal_request_for_user", fake_request)
+    monkeypatch.setattr(chat_task, "start_task", fake_start_task)
+    monkeypatch.setattr(jobmod, "emit_to_user", fake_emit, raising=False)
+
+    app = SimpleNamespace(state=SimpleNamespace())
+
+    async def main():
+        chat = await Chat.create(user_id=USER, title="run chat", created_at=1000)
+        prompt = await ChatMessage.create(
+            chat_id=chat.id, role="user", content="do it", created_at=1000
+        )
+        message = await ChatMessage.create(
+            chat_id=chat.id,
+            role="assistant",
+            content="",
+            parent_id=prompt.id,
+            done=False,
+            created_at=1000,
+        )
+        job = await jobmod.Job.create(
+            USER, WS, "cancelled mid-prep", executor="some-model", trigger="at", trigger_at=1
+        )
+        await jobmod.Job.update_status(job.id, "running", 2000)
+        # The human presses Stop while run_job is still getting ready: the row is
+        # cancelled before start_task has registered anything to cancel.
+        await jobmod.Job.update_status(job.id, "cancelled", 2001, trigger="manual")
+
+        async def fake_prepare(app_, job_):
+            return chat, message, await fake_target(job_.executor), ""
+
+        monkeypatch.setattr(jobmod, "_prepare_run", fake_prepare)
+        await jobmod.run_job(app, await jobmod.Job.get_by_id(job.id))
+
+        return (
+            await jobmod.Job.get_by_id(job.id),
+            await ChatMessage.get_by_id(message.id),
+        )
+
+    job, message = _run(main())
+    assert started == [], "the turn must not start once the row is cancelled"
+    assert job.status == "cancelled"
+    # The chat must not be left hanging as a pending turn.
+    assert message.done is True
+    assert message.content == "cancelled"
+
+
 def test_prompt_tells_the_agent_it_is_alone(jobs_db):
     from cptr.models.jobs import Job
     from cptr.utils.jobs import build_prompt

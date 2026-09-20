@@ -129,13 +129,64 @@ Against a **copy of the real database** (`cp -a ~/.cptr /tmp/reallike`, port 421
 
 ## 7. What is *not* built
 
-- **No UI.** There is no deferral control, no review queue, no board view. A deferral is
-  reachable only from chat (the `defer_workspace_todo` tool) or the API; a finished run is
-  visible as its own chat in the sidebar plus a `needs_review` job row. If the agent
-  proposes closing the todo, the proposal shows up in the existing dashboard. This is the
-  honest gap: the design's §11 open question — where a review queue lives — is still open,
-  and Phase 3-4's review backlog is the real cost of the queue.
+- **No UI beyond the dashboard board** (see §8). Deferral and review are reachable from the
+  board, from chat (the `defer_workspace_todo` tool) or from the API. There is still no
+  dedicated review queue *page* — a `needs_review` row is a marked row on the board, and the
+  design's §11 open question ("where does a review queue live") is answered only by that
+  strip for now.
 - **Phases 3-4:** pricing, `trigger='window'`, `resource` serialization, retry policy,
-  worktrees. `rrule`/`resource` columns exist and are unused.
+  worktrees. `rrule`/`resource` columns exist and are unused; nothing in the UI sets `rrule`.
 - **Timers and automations are not folded in.** They still run their own loops; `jobs` is
   where they would go, but Phase 1-2 deliberately did not move them.
+
+## 8. The board lands in the dashboard
+
+The dashboard's "To do" list *is* the board now: it renders `/api/todos` and `/api/jobs`
+merged, because a job the human checked off in the todo shim and a job an agent is
+mid-way through are the same table read two ways.
+
+- Rows arrive from both sources and are deduped by id (`Row.fromTodos`), so a todo-backed
+  job cannot draw twice; jobs with no todo of their own ("extra" rows) are appended after
+  the human's list.
+- A row shows a second line only when it has something to say: `waiting to run`,
+  `scheduled · Sep 20, 10:11 PM · in 1 hr · deepseek-flash`, `running now`, `ready to
+  check`, `stopped`, plus `attempt N` and the error text for a failed run. A plain todo
+  keeps its single line.
+- `needs_review` gets an **ink attention strip** (mono palettes) — solid ink on the row's
+  edge, no wash, no dithering — because "a model did something and nobody has looked" is
+  the one state you must not have to hunt for.
+- Per-row actions: the check toggles the todo (or the job, for extra rows), `Run later…`
+  opens an inline form (when + model + optional extra instructions; **Schedule** stays
+  disabled until a time is typed), a chat bubble opens the run's own chat, and the ×
+  clears a pending or finished run. While a run is in flight the check slot becomes a
+  **stop** button instead.
+- **Units are a trap the board had to fix:** `jobs.trigger_at` is nanoseconds while
+  `created_at`/`updated_at` are milliseconds. The first render read it as ms and printed
+  `in 20716777011 days`; `nsToMs()` is now applied at the point of use.
+
+### A cancel can beat the run to the starting line (fixed)
+
+Live probe, 2026-09-20: pressing **stop** on a running row 25 ms after it appeared left the
+row reading `stopped` — and the model went on to work for another two minutes.
+
+`run_job` writes `running` *before* it calls `start_task`, and `/cancel` can only cancel
+tasks already in `chat_task._tasks`. A cancel landing in that gap found nothing to kill, so
+it only flipped the row; the runner then started the turn anyway. `run_job` now re-reads the
+row as late as possible before `start_task` and, if it is no longer `running`, finalizes the
+run's assistant message as `cancelled` (so the chat does not dangle as a pending turn) and
+returns without starting anything. `test_a_cancel_before_the_turn_starts_never_runs` fails
+without the re-read. Ledger: B-012.
+
+### Verified
+
+CDP probes against the live server (`.cptr/harness/cdp.mjs`, `probe-*.js` in the same
+folder), not screenshots by eye:
+
+- a deferral typed into the board's own form (`test`, 1 minute, `deepseek-flash`) fired
+  60 s later, ran in its own chat — the brief, then `ok.` — and settled the row at
+  `ready to check · Sep 20, 08:08 PM · deepseek-flash` with the attention strip;
+- a run genuinely observed `running now` with the stop button present, and taking it moved
+  the row to `stopped` (`cancelled` in the DB);
+- the trash button on a job-backed row removes **both** the mirror todo and the job
+  (`/api/jobs` and `/api/todos` both empty of it afterwards);
+- the model picker really offers the 22 chat models with `deepseek-flash` preselected.
