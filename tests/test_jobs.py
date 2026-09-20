@@ -651,6 +651,58 @@ def test_approving_a_chat_addition_creates_a_job(jobs_db, auth, request_obj):
     _run(main())
 
 
+def test_deleting_a_job_settles_the_proposal_about_it(jobs_db, auth, request_obj):
+    """A pending request must not outlive the todo it points at (B-013)."""
+    from cptr.models.todos import TodoRequest
+    from cptr.routers.todos import AddTodoRequest, add_todo, list_todos, remove_todo
+    from cptr.utils.config import now_ms
+
+    async def main():
+        todo = await add_todo(request_obj, AddTodoRequest(workspace=WS, title="finish me"))
+        req = await TodoRequest.create(
+            user_id=USER,
+            workspace=WS,
+            action="complete",
+            created_at=now_ms(),
+            todo_id=todo["id"],
+        )
+
+        assert await remove_todo(request_obj, todo["id"]) == {"ok": True}
+
+        listed = await list_todos(request_obj, workspace=WS)
+        assert listed["todos"] == []
+        assert listed["pending_requests"] == []
+        settled = await TodoRequest.get_by_id(req.id)
+        assert (settled.status, settled.resolved_at is not None) == ("rejected", True)
+
+    _run(main())
+
+
+def test_a_human_toggle_settles_the_proposal_about_it(jobs_db, auth, request_obj):
+    """Closing a todo by hand answers a chat's "may I close this?" itself."""
+    from cptr.models.todos import TodoRequest
+    from cptr.routers.todos import AddTodoRequest, add_todo, list_todos, toggle_todo
+    from cptr.utils.config import now_ms
+
+    async def main():
+        todo = await add_todo(request_obj, AddTodoRequest(workspace=WS, title="close me"))
+        closing = await TodoRequest.create(
+            user_id=USER, workspace=WS, action="complete", created_at=now_ms(), todo_id=todo["id"]
+        )
+        removing = await TodoRequest.create(
+            user_id=USER, workspace=WS, action="remove", created_at=now_ms(), todo_id=todo["id"]
+        )
+
+        await toggle_todo(request_obj, todo["id"])
+
+        assert (await list_todos(request_obj, workspace=WS))["pending_requests"] == []
+        assert (await TodoRequest.get_by_id(closing.id)).status == "approved"
+        # The proposal that asked for the opposite is dropped, not left pending.
+        assert (await TodoRequest.get_by_id(removing.id)).status == "rejected"
+
+    _run(main())
+
+
 def test_finishing_a_deferred_todo_cancels_the_run(jobs_db, auth, request_obj):
     from cptr.models.jobs import Job
     from cptr.routers.todos import AddTodoRequest, add_todo, toggle_todo

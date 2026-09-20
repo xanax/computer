@@ -162,6 +162,47 @@ class TodoRequest(Base):
             return req
 
     @staticmethod
+    async def resolve_for_todo(
+        todo_id: str,
+        resolved_at: int,
+        *,
+        approved_actions: tuple[str, ...] = (),
+        status: str = "rejected",
+    ) -> list[str]:
+        """Settle every pending request about one todo. Returns the settled ids.
+
+        A request is a chat asking the human about a todo. Once that todo is gone
+        — or the human has just made the change themselves — nobody is being
+        asked anything any more, and the row left behind offers an Approve button
+        that quietly does nothing (B-013). Requests whose action is the change
+        that just happened are recorded `approved`; the rest are `rejected`.
+        """
+        async with await get_db() as db:
+            rows = (
+                await db.execute(
+                    select(TodoRequest.id, TodoRequest.action).where(
+                        TodoRequest.todo_id == todo_id,
+                        TodoRequest.status == "pending",
+                    )
+                )
+            ).all()
+            if not rows:
+                return []
+            by_status: dict[str, list[str]] = {}
+            for request_id, action in rows:
+                by_status.setdefault(
+                    "approved" if action in approved_actions else status, []
+                ).append(request_id)
+            for settled_status, ids in by_status.items():
+                await db.execute(
+                    update(TodoRequest)
+                    .where(TodoRequest.id.in_(ids))
+                    .values(status=settled_status, resolved_at=resolved_at)
+                )
+            await db.commit()
+            return [request_id for request_id, _ in rows]
+
+    @staticmethod
     async def resolve(request_id: str, status: str, resolved_at: int) -> bool:
         """Resolve a pending request. Returns False if not found or already resolved."""
         async with await get_db() as db:

@@ -221,12 +221,25 @@ class Job(Base):
 
     @staticmethod
     async def delete(job_id: str) -> bool:
-        """Delete a job, and its legacy mirror row if it has one."""
+        """Delete a job, its legacy mirror row, and any proposal about it.
+
+        A chat's pending request targets this job, so deleting the job answers
+        the question by itself — leaving the row pending would show an Approve
+        button for a todo that no longer exists (B-013).
+        """
+        from cptr.models.todos import TodoRequest
+        from cptr.utils.config import now_ms
+
         async with await get_db() as db:
             await _mirror_delete(db, job_id)
             result = await db.execute(delete(Job).where(Job.id == job_id))
             await db.commit()
-            return result.rowcount > 0
+        if result.rowcount > 0:
+            # A pending "remove" is what the human just did; the rest are moot.
+            await TodoRequest.resolve_for_todo(
+                job_id, now_ms(), approved_actions=("remove",)
+            )
+        return result.rowcount > 0
 
     # ── The clock ────────────────────────────────────────────
 

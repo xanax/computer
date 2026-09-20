@@ -156,6 +156,11 @@ async def toggle_todo(request: Request, todo_id: str):
         }
 
     await Job.update_status(todo_id, new_status, now_ms(), **fields)
+    # The human just changed this todo's state themselves, so any chat proposal
+    # about it is answered: the one that asked for exactly this is `approved`,
+    # anything else is dropped rather than left offering a dead Approve (B-013).
+    settled = "complete" if new_status == "done" else "reopen"
+    await TodoRequest.resolve_for_todo(todo_id, now_ms(), approved_actions=(settled,))
     await _notify_changed(user_id, todo.workspace)
 
     updated = await Job.get_by_id(todo_id)

@@ -189,4 +189,53 @@ folder), not screenshots by eye:
   the row to `stopped` (`cancelled` in the DB);
 - the trash button on a job-backed row removes **both** the mirror todo and the job
   (`/api/jobs` and `/api/todos` both empty of it afterwards);
-- the model picker really offers the 22 chat models with `deepseek-flash` preselected.
+- the model picker really offers the 22 chat models with `deepseek-flash` preselected;
+- the board's own **Run later…** form: opens under the row, offers all 22 models with
+  `deepseek-flash` preselected, keeps **Schedule** disabled while the when field is empty
+  and enables it on the first keystroke;
+- the whole loop driven from the UI, timed from the API side (`test`-style probe todo,
+  `1m`, `deepseek-flash`, board form only):
+  `20:40:03 open` → `20:40:53 running` (attempt 1, `run_chat_id` + `run_started_at` in
+  `meta`) → `20:42:14 needs_review`, with the run's own chat holding the brief
+  (`[Scheduled job — a deferred workspace todo just fired] …`) and the model's reply
+  (`done=True`) — i.e. schedule → poll → run → read-back → land for review, none of it
+  through the API by hand;
+- the settled row then reads `ready to check · Sep 20, 08:40 PM · deepseek-flash` and
+  carries **Open the run's chat**, **Run later…**, **Clear this finished run** and
+  **Remove**, i.e. a finished run can be re-scheduled or cleared without leaving the board;
+- the run's own proposal shows up as the dashboard's `Complete: … Approve/Reject` row, and
+  removing the todo cleared the pending request too — after the B-013 fix below.
+
+### A proposal can outlive its todo (fixed)
+
+The probe above also produced a live **B-013**: the run proposed completing its own todo, the
+todo was then removed, and the pending `todo_requests` row stayed `pending` — the dashboard
+kept drawing a `Complete: …` row with a working-looking **Approve** for a todo that no longer
+existed (`Job.update_status` on a missing id is a no-op that still answers `ok`). `list_pending`
+does not join against `jobs`, so nothing hid it. Fixed in
+`TodoRequest.resolve_for_todo()` + `Job.delete` / `toggle_todo`; see [`BUGS.md`](../BUGS.md).
+
+### Probe traps: two ways a click proves nothing
+
+The verify pass cost three false readings before the board's own form was proven. Both causes
+are silent — no exception, no console error, just a probe that reports the feature broken.
+
+1. **Document-wide selectors pick up another dashboard's form.** `probe-defer-e2e.js` looked
+   up `.icon-btn[aria-label*="later"]`, `.defer-at` and `.defer-form button` across the whole
+   document and clicked the first match. With more than one workspace mounted, that is the
+   *other* workspace's dashboard: the probe opened, filled and submitted a form belonging to a
+   row it never seeded, the `POST` went to that workspace's job, and `/api/jobs?workspace=` —
+   the only thing it checked — showed no deferral. Fixed by scoping every lookup to the row
+   the probe seeded (`rowFor('probe: …')` → that row's own buttons, `form = li > .defer-form`).
+2. **A click on a still-`disabled` button is silently ignored.** Svelte updates
+   `disabled={deferBusy || !deferAt.trim() || !deferModel}` on a microtask, so for one tick
+   after the `input` event the Schedule button is still disabled; `.click()` in that same tick
+   does nothing at all (`fetch` never called, `deferError` null, form still open). The probe
+   now polls `!btn.disabled` (20 × 50 ms) before clicking and reports
+   `enabledAtFirstLook`/`enabled` so the difference is visible in the output. The same trap
+   applies to any element a probe drives immediately after setting its bound value.
+
+With both fixed the probe is deterministic: `formClosed: true`, row `scheduled · Sep 20,
+08:49 PM · now · deepseek-flash`, job `trigger: "at"` with `trigger_at` set. **A probe that
+has to prove the board works must confine its selectors to the row it seeded and wait for the
+control to become enabled — a click proves nothing unless you can show the request it made.**
