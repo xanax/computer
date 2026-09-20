@@ -1116,6 +1116,7 @@
 	"terminal.dictateInput": "ターミナル入力を音声入力",
 	"a11y.page": "ページ {{page}}",
 	"markdown.linkTo": "{{target}} へのリンク",
+	"markdown.openLocalInBrowser": "{{host}} をブラウザータブで開きます",
 	"markdown.boldShortcut": "太字 (⌘B)",
 	"markdown.italicShortcut": "斜体 (⌘I)",
 	"markdown.underlineShortcut": "下線 (⌘U)",

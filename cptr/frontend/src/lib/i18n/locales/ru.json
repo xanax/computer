@@ -1116,6 +1116,7 @@
 	"terminal.dictateInput": "Диктовать ввод терминала",
 	"a11y.page": "Страница {{page}}",
 	"markdown.linkTo": "Ссылка на {{target}}",
+	"markdown.openLocalInBrowser": "Открывает {{host}} во вкладке «Браузер»",
 	"markdown.boldShortcut": "Жирный (⌘B)",
 	"markdown.italicShortcut": "Курсив (⌘I)",
 	"markdown.underlineShortcut": "Подчеркнутый (⌘U)",

@@ -1116,6 +1116,7 @@
 	"terminal.dictateInput": "터미널 입력 받아쓰기",
 	"a11y.page": "페이지 {{page}}",
 	"markdown.linkTo": "{{target}} 링크",
+	"markdown.openLocalInBrowser": "{{host}} 을(를) 브라우저 탭에서 엽니다",
 	"markdown.boldShortcut": "굵게 (⌘B)",
 	"markdown.italicShortcut": "기울임 (⌘I)",
 	"markdown.underlineShortcut": "밑줄 (⌘U)",

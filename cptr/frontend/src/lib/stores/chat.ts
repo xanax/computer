@@ -192,7 +192,7 @@ async function openBrowserFromChat(url: string, label?: string) {
 		window.open(url, '_blank', 'noopener');
 		return;
 	}
-	await stores.openBrowserTab(undefined, url, label || url);
+	await stores.openLocalPage(url, label);
 }
 
 export function bindGlobalChatListener() {

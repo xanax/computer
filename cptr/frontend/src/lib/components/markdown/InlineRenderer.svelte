@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Token } from 'marked';
-	import { openFileTab, setFileBrowserCwd, setActiveTab } from '$lib/stores';
+	import { openFileTab, openLocalPage, setFileBrowserCwd, setActiveTab } from '$lib/stores';
+	import { localPage } from '$lib/utils/localPage';
 	import { t } from '$lib/i18n';
 
 	interface Props {
@@ -24,6 +25,19 @@
 		const match = raw.trim().match(WIKILINK_HTML_RE);
 		if (match) return { target: match[1], label: match[2] };
 		return null;
+	}
+
+	/**
+	 * A link to the machine cptr runs on opens in cptr's own Browser tab: that
+	 * tab's page comes from the server, so it loads even when the user's browser
+	 * cannot reach the port (WSL, containers, a remote host). Modified clicks are
+	 * left alone — ctrl/cmd-click still hands the raw URL to the real browser.
+	 */
+	function handleLocalClick(event: MouseEvent, url: string): void {
+		if (event.defaultPrevented || event.button !== 0) return;
+		if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+		event.preventDefault();
+		void openLocalPage(url);
 	}
 </script>
 
@@ -63,6 +77,7 @@
 		>
 	{:else if item.type === 'link'}
 		{@const href = 'href' in item ? item.href : ''}
+		{@const local = localPage(href ?? '')}
 		{#if href?.startsWith('file:///')}
 			{@const rawPath = decodeURIComponent(href.replace('file://', ''))}
 			{@const isDirectory = rawPath.endsWith('/')}
@@ -114,6 +129,20 @@
 				{/if}
 				{fileName}
 			</button>
+		{:else if local}
+			<!-- Dotted underline marks a link that opens inside cptr, not in the browser. -->
+			<a
+				href={local.url}
+				class="cursor-pointer underline decoration-dotted underline-offset-2 hover:decoration-solid"
+				title={$t('markdown.openLocalInBrowser', { host: local.label })}
+				onclick={(event) => handleLocalClick(event, local.url)}
+			>
+				{#if 'tokens' in item && item.tokens}
+					<svelte:self items={item.tokens} />
+				{:else}
+					{'text' in item ? item.text : item.raw}
+				{/if}
+			</a>
 		{:else}
 			<a href={href || '#'} target="_blank" rel="noopener noreferrer">
 				{#if 'tokens' in item && item.tokens}

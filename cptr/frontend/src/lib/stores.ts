@@ -35,6 +35,7 @@ import { streamingChatTabs } from '$lib/stores/chat';
 import { keybindings, loadKeybindings } from '$lib/stores/keybindings';
 import { defaultPwaPreferences, type PwaPreferences } from '$lib/intents/types';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
+import { localPage } from '$lib/utils/localPage';
 import {
 	applyAppearance,
 	normalizeBorderContrast,
@@ -1311,6 +1312,35 @@ export async function openBrowserTab(
 		toast.error(error instanceof Error ? error.message : 'Failed to open Browser');
 		closeTab(tabId, gid, { skipUnsavedPrompt: true });
 	}
+}
+
+/**
+ * Show a page served on this machine in cptr's Browser tab (see
+ * `$lib/utils/localPage`). Used by chat markdown links to loopback URLs, so
+ * `localhost:5173` works even when the user's own browser cannot route to the
+ * box cptr runs on.
+ *
+ * With no workspace open there is no tab strip to add to, so fall back to a
+ * plain browser window: the click came from a real user gesture, so it will not
+ * be blocked, and doing nothing would be worse than leaving cptr.
+ */
+export async function openLocalPage(url: string, label?: string): Promise<void> {
+	const ws = get(currentWorkspace);
+	if (!ws) {
+		if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener');
+		return;
+	}
+
+	const gid = ws.activeGroupId;
+	const group = ws.groups.find((g) => g.id === gid);
+	// Reuse the tab when this page is already in front of the user.
+	const existing = group?.tabs.find((t) => t.type === 'browser' && t.path === url);
+	if (existing) {
+		setActiveTab(existing.id, gid);
+		return;
+	}
+
+	await openBrowserTab(gid, url, label || localPage(url)?.label || url);
 }
 
 export function openChatTab(chatId?: string, targetGroupId?: string): void {

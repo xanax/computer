@@ -1116,6 +1116,7 @@
 	"terminal.dictateInput": "Ditar entrada do terminal",
 	"a11y.page": "Página {{page}}",
 	"markdown.linkTo": "Link para {{target}}",
+	"markdown.openLocalInBrowser": "Abre {{host}} na aba Navegador",
 	"markdown.boldShortcut": "Negrito (⌘B)",
 	"markdown.italicShortcut": "Itálico (⌘I)",
 	"markdown.underlineShortcut": "Sublinhado (⌘U)",

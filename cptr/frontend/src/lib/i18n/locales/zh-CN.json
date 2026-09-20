@@ -1116,6 +1116,7 @@
 	"terminal.dictateInput": "听写终端输入",
 	"a11y.page": "第 {{page}} 页",
 	"markdown.linkTo": "链接到 {{target}}",
+	"markdown.openLocalInBrowser": "在浏览器标签页中打开 {{host}}",
 	"markdown.boldShortcut": "加粗 (⌘B)",
 	"markdown.italicShortcut": "斜体 (⌘I)",
 	"markdown.underlineShortcut": "下划线 (⌘U)",

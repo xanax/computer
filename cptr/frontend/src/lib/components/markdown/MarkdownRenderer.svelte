@@ -12,6 +12,7 @@
 
 	import { Lexer } from 'marked';
 	import BlockRenderer from './BlockRenderer.svelte';
+	import { localPageLexerOptions } from '$lib/utils/localPageLink';
 
 	interface Props {
 		content: string;
@@ -34,7 +35,10 @@
 		if (!content) return [];
 		try {
 			const processed = preprocessWikilinks(content);
-			return new Lexer().lex(processed);
+			// Loopback references like `localhost:5173` become plain `link` tokens;
+			// see $lib/utils/localPageLink (and InlineRenderer, which sends them to
+			// the Browser tab instead of a new browser window).
+			return new Lexer(localPageLexerOptions).lex(processed);
 		} catch {
 			return [];
 		}

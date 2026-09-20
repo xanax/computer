@@ -1116,6 +1116,7 @@
 	"terminal.dictateInput": "Terminaleingabe diktieren",
 	"a11y.page": "Seite {{page}}",
 	"markdown.linkTo": "Link zu {{target}}",
+	"markdown.openLocalInBrowser": "Öffnet {{host}} im Browser-Tab",
 	"markdown.boldShortcut": "Fett (⌘B)",
 	"markdown.italicShortcut": "Kursiv (⌘I)",
 	"markdown.underlineShortcut": "Unterstreichen (⌘U)",

@@ -1291,6 +1291,7 @@
 	"terminal.dictateInput": "Dictate terminal input",
 	"a11y.page": "Page {{page}}",
 	"markdown.linkTo": "Link to {{target}}",
+	"markdown.openLocalInBrowser": "Opens {{host}} in the Browser tab",
 	"markdown.boldShortcut": "Bold (⌘B)",
 	"markdown.italicShortcut": "Italic (⌘I)",
 	"markdown.underlineShortcut": "Underline (⌘U)",
