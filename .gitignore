@@ -32,3 +32,4 @@ Thumbs.db
 # Local runtime artifacts (server launched from this checkout)
 cptr-pid.txt
 downloads/
+notes/_scratch/
