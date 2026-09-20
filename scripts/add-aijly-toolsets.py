@@ -13,11 +13,21 @@ hyphenated app ids get underscores. ``1984-analysis`` becomes ``orwell_1984``
 rather than ``1984_analysis`` because model APIs that accept function names —
 Gemini in particular — require the name to start with a letter or underscore.
 
+Servers default to ``--scope workspace``, i.e. OFF everywhere until a workspace
+opts in. That is deliberate: cptr renders the per-workspace toggle switch as
+"always on" and *disabled* for ``scope=global`` servers
+(WorkspaceToolServersModal.svelte), so a global server cannot be turned off from
+the UI at all. ``scope=workspace`` keeps every server visible in that modal while
+leaving it out of every chat's prompt until it is switched on. Turn them on per
+workspace via the workspace context menu -> tool servers.
+
 Idempotent: creates what is missing, updates what already exists, then verifies
-every server by re-fetching its spec and converting it to tool schemas.
+every server by re-fetching its spec and converting it to tool schemas. Because it
+re-applies scope on update, re-running it resets them all to the given --scope.
 
 Usage:
     .venv/bin/python scripts/add-aijly-toolsets.py [--dry-run] [--aijly-host URL]
+    .venv/bin/python scripts/add-aijly-toolsets.py --scope global   # pin on everywhere
 
 Requires an admin session cookie (see .cptr/harness/mint-cookie.py); this talks
 to the admin API so the running server picks the servers up immediately.
@@ -114,7 +124,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--aijly-host", default="http://127.0.0.1:8000")
     parser.add_argument("--cptr-host", default="http://127.0.0.1:4200")
-    parser.add_argument("--scope", default="global", choices=("global", "workspace"))
+    parser.add_argument(
+        "--scope",
+        default="workspace",
+        choices=("global", "workspace"),
+        help="workspace (default) = off until a workspace opts in; global = always on",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--key",

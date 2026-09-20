@@ -3,6 +3,9 @@
 All 12 aijly per-app OpenAPI specs are registered as cptr **external tool servers**,
 so their operations are exposed to the model as tool calls. 25 tools total.
 
+They are registered `scope=workspace`, meaning they are **off in every workspace by
+default** and get attached per workspace as needed — see "Turning them on" below.
+
 ## How they are wired
 
 cptr's external tool servers live in the `tool_servers` config key (an array of
@@ -37,6 +40,38 @@ the key is only enforced on tool-run POSTs.
   accept function names (Gemini in particular) require the name to *start with a
   letter or underscore*, so a digit-leading tool name would be unusable there.
 
+## Turning them on
+
+Since the servers are `scope=workspace`, each one has to be attached to a workspace
+before it appears to the model. In the UI: **workspace context menu → tool servers**,
+flip the toggles, Save. The modal lists all 12 regardless of scope (the
+`/api/state/tool-servers` endpoint deliberately ignores scope) and shows each
+server's `description`, which is why those are set to `aijly app: <app-id>` — that
+subtitle is what identifies the row in that modal.
+
+By API, same call the modal makes:
+
+    curl -X PUT 'http://127.0.0.1:4200/api/state/workspace/tool-servers?path=/path/to/ws' \
+      -b /tmp/verify-cookies.txt -H 'Content-Type: application/json' \
+      -d '{"toolServers":["stags","abbeyfield"]}'
+
+Notes on the mechanics:
+
+* A workspace with **no** `toolServers` key has `attached=None`, which means *nothing*
+  is attached — absence is not "everything". `server_allowed_in_workspace` returns
+  False for any workspace-scoped server in that state, and `toolServers: []` behaves
+  the same way, so an untouched workspace has all 12 off.
+* They are also unavailable in a **workspace-less "global" chat**: attachment is
+  resolved from the workspace path, and with no workspace there is nothing to
+  attach to. To use these tools you must be in a workspace *and* have attached them.
+* `PUT /api/state/workspace` (the layout/group save) **preserves** `toolServers`
+  when the payload omits it, so a running tab saving layout will not clobber the
+  attachment list.
+
+Verified: after the switch the `computer` workspace's real tool list is 44 tools
+with **0** aijly tools; attaching `sandbox` via that endpoint makes exactly
+`sandbox_query_hardware` + `sandbox_web_search` appear, and detaching returns it to 0.
+
 ## Re-running / verifying
 
     .venv/bin/python .cptr/harness/mint-cookie.py        # admin session cookie
@@ -65,10 +100,13 @@ for host `127.0.0.1`, and curl filters cookies by domain, so
 
 ## Notes / gotchas
 
-* **Scope is `global`** on all 12, so they are visible in every workspace without
-  being attached. `scope=workspace` + the workspace's `toolServers` list is the
-  alternative, and `--scope workspace` does that — worth considering if 25 extra
-  tools in every chat's prompt becomes a problem.
+* **All 12 are `scope=workspace`**, i.e. OFF everywhere until a workspace opts in.
+  This is the script's default. The reason is that the per-workspace toggle is
+  rendered *"always on" and disabled* for `scope=global` servers
+  (`WorkspaceToolServersModal.svelte`: `value={scope === 'global' ? true : ...}`,
+  `disabled={scope === 'global' || ...}`), so a global server **cannot be switched
+  off from the UI at all** — `workspace` is the only scope where the switch works.
+  Use `--scope global` to pin them on everywhere instead.
 * **`sandbox` differs by lane**: 2 tools on `:8000` (`query_hardware`, `web_search`),
   **0 on `:3033`**. Since the server URL is pinned to `:8000` the tool set is stable,
   but the same app id is not a portable attachment target across aijly hosts.
