@@ -156,7 +156,7 @@
 	function openWorkspace(e: MouseEvent, path: string) {
 		if (e.metaKey || e.ctrlKey) return;
 		e.preventDefault();
-		goto(`/?workspace=${encodeURIComponent(path)}`);
+		goto(`/?workspace=${encodeURIComponent(path)}&view=dashboard`);
 		closeMobileSidebar();
 	}
 
@@ -439,7 +439,7 @@
 				class:ws-heading-current={ws.path === currentPath}
 			>
 				<a
-					href="/?workspace={encodeURIComponent(ws.path)}"
+					href="/?workspace={encodeURIComponent(ws.path)}&view=dashboard"
 					class="flex items-center gap-1.5 flex-1 min-w-0 no-underline text-inherit"
 					onclick={(e) => openWorkspace(e, ws.path)}
 				>

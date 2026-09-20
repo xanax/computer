@@ -49,6 +49,7 @@
 	import GroupTabBar from '$lib/components/GroupTabBar.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import WorkspacePicker from '$lib/components/WorkspacePicker.svelte';
+	import WorkspaceDashboard from '$lib/components/WorkspaceDashboard.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { TAB_DRAG_MIME } from '$lib/constants';
 	import { isSupportedWorkspacePath } from '$lib/utils/paths';
@@ -1353,6 +1354,8 @@
 			{@render renderHomePane(activeHomeGroup)}
 		{/if}
 	</div>
+{:else if $page.url.searchParams.get('view') === 'dashboard'}
+	<WorkspaceDashboard workspace={$currentWorkspace!.path} />
 {:else}
 	<!-- Editor groups layout -->
 	<div class="split-container" class:is-dragging={resizingSplit !== null} role="presentation">
