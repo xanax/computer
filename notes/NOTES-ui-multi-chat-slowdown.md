@@ -1,6 +1,11 @@
 # Why the UI crawls when many chats are open
 
-Diagnosed 2026-xx. Symptom: "if I have multiple chats running, it slows down the UI."
+Diagnosed 2026-09-20. Symptom: "if I have multiple chats running, it slows down the UI."
+
+Two independent causes are covered here: the **mount storm** (why load takes ~32 s, still
+open as a design decision) and the **per-block Shiki highlighter** (fixed — see "Second
+cause" below). Read the TL;DR for the first, then jump to the second if you are here
+because of load time with code-heavy transcripts.
 
 ## TL;DR
 
@@ -135,6 +140,104 @@ in headless, scaled down.
 
 Recommend (1) as the core change, (3) as a bounded-memory backstop.
 
+**Status:** the *highlighter* half of this is fixed ("Second cause" below) and shipped in
+the running build. Items (1)–(4) above are **still proposals** — tabs are still eagerly
+mounted, deliberately: the user keeps all tabs open and rejected lazy-mount, so the
+steady-state cost is accepted and the target is the load/streaming cost instead.
+
+## Second cause: one Shiki highlighter per code block (fixed)
+
+The mount storm above is one axis. A second, independent multiplier was found while
+profiling the same load: **every `CodeBlock` instance built its own Shiki highlighter.**
+
+`CodeBlock.svelte` (and `SyntaxDiffLine.svelte`, a near copy) each called
+`createHighlighterCore({ langs: [...31 grammars...] })` inside the component. On a
+45-tab page that is **77 highlighters**, each one registering ~31 grammars on the same
+JS thread, and the work is paid on every page load.
+
+### A/B, same 25 s load, same browser, 45 chat tabs, ~70 code blocks
+
+| | highlighters built | first tokens | coverage settled | long tasks | Σ long-task ms | max |
+|---|---:|---:|---:|---:|---:|---:|
+| **ARM A** (shared singleton) | **1** | 5.6 s | 12.3 s | 64 | **7,969** | 840 ms |
+| **ARM B** (HEAD, per-instance) | **77** | 22.0 s | 59.2 s | 198 | **53,098** | 902 ms |
+
+6.7× less long-task time, and the transcript starts highlighting **4× sooner**. The
+DOM/mount shape is identical in both arms, so this is purely highlighter construction.
+
+### What landed
+
+`cptr/frontend/src/lib/utils/highlighter.ts` (new) — one module-scope promise, so
+concurrent callers share a single highlighter, and a failed creation is not cached:
+
+- `getHighlighter()` — `createHighlighterCore({ langs: [] })`, both themes, oniguruma
+  WASM engine. Measured 138 ms once, for the whole page.
+- `resolveLanguage()` / `highlightCode()` — map a fence label to a grammar and load it
+  **lazily** via `loadLanguage()` (~8 ms each) the first time that label is seen.
+- `cacheTokens()` / `takeCachedTokens()` — token cache shared with `SyntaxDiffLine`.
+
+`CodeBlock.svelte` and `SyntaxDiffLine.svelte` now import from it instead of each
+constructing a highlighter; a duplicate local token cache in `SyntaxDiffLine` was
+dropped with it.
+
+Shiki 3.x details worth keeping (all verified against the installed version):
+
+- Grammars must be imported as `shiki/langs/<name>.mjs`; `langs: []` is legal and the
+  built-in `text` grammar works with zero grammars loaded.
+- An unknown language **throws** `ShikiError`, so the fallback to `text` must be
+  explicit — do not let a fence label reach `codeToTokens` unfiltered.
+- `loadLanguage()` resolves aliases itself: bash/sh/zsh → `shellscript`,
+  ts/cts/mts → `typescript`, js/cjs/mjs → `javascript`, md → `markdown`,
+  docker → `dockerfile`, make → `makefile`.
+- Aliases in `shiki/langs/*.mjs` are flat arrays in `default[0]`, not nested.
+- `xml → java` and `scss → css` alias entries in Shiki 3.x are **wrong** (they produce
+  Java/CSS tokenisation for XML/SCSS). Don't rely on those two.
+- The preflight/import must run from `frontend/` so `node_modules` resolves.
+
+A small probe surface is kept on `window.__cptrShiki` in `highlighter.ts`
+(`{ highlighters, hl }`): it counts creations in the one place a highlighter can be
+created, which is what makes "must stay 1" checkable from the harness.
+
+### Verification (final build, 45 tabs, 69 blocks in DOM)
+
+```
+Shiki highlighters built      : 1
+grammars loaded lazily        : 20, including aliases (bash/sh/zsh, js/ts/cjs/…)
+tokenised / plain fallback    : 30 / 39       (39 = console/transcript fences, by design)
+theme vars on <code>          : 67
+leaked <span> as text         : 1             (false positive: a CSS fence whose
+                                               *source* contains <span class="…">)
+painted token colours         : 7 distinct, 0 spans with no colour
+```
+
+The colour check reads `getComputedStyle` on token spans rather than trusting the DOM:
+in the dark theme 404 sampled spans painted 7 distinct colours (e.g. `rgb(249,117,131)`
+= `--shiki-dark` punctuation), which is what proves the `--shiki-*` vars resolve and
+the highlight is actually visible. The one "leaked span" hit was checked back against
+the source message in `app.db` and is faithful rendering of authored markup text.
+
+## Streaming phase
+
+Re-highlighting is reactive on the `code` prop, so a streaming block is invalidated on
+every delta. Coalesced in `CodeBlock.svelte` (leading edge + trailing pass):
+
+- `MIN_HIGHLIGHT_GAP_MS = 90` — at most one pass per 90 ms per block, so a delta storm
+  (the app coalesces socket deltas at 50 ms) cannot exceed ~11 passes/s.
+- The trailing pass guarantees the final text is never left un-highlighted, which is
+  the failure mode a naive debounce has when the last delta lands just after a pass.
+- A pass is dropped if the element was torn down or the block moved on
+  (`!el.isConnected || el !== codeEl`), so unmounted/streamed-past work is not applied.
+
+Per-block cost is the thing to watch here: ~27 ms warm for a growing block, so 11 passes/s
+on *several* simultaneously streaming blocks is still ~30 % of a core each. The mount
+storm dominates on load; this becomes the dominant term during active work, which is
+why it is worth a cap per block rather than per page.
+
+**Still open / not yet measured on hardware:** how many blocks actually stream at once in
+a typical session, and whether the 90 ms window should scale with block size. A
+`MutationObserver` on the `<code>` elements (Shiki rewrites `innerHTML` per pass) counts
+passes without any source change — that is the probe to run against a real stream.
+
 ## Caveat on the numbers
 
 Headless Chromium is slower than the user's real browser, so the absolute seconds above
@@ -147,6 +250,26 @@ cross-check magnitudes against `ui_events`. The 2-tab control run in the same br
 Probe scripts are in `notes/_scratch/`: `probe-settle.js` (load → usable time series +
 reveal cost), `probe-curve.js` (peel hidden panels), `probe-fix.js` (candidate CSS),
 `probe-resp.js` / `probe-steady.js` (steady-state fps).
+
+Highlighter-specific probes: `scripts/count-highlighters.mjs` is the one to run (it
+reloads the page and prints highlighters / token coverage / long tasks in one shot),
+plus `notes/_scratch/hl-painted.js` (computed colours → is the highlight visible?) and
+`notes/_scratch/hl-integrity.js` (visible entities/tags → did tokens eat the source?).
+
+```sh
+cd /home/brendan/computer && node scripts/count-highlighters.mjs --seconds 20
+```
+
+The harness browser has its own profile, so its session cookie goes stale on restart and
+it silently lands on the Sign In page with an empty DOM — which looks exactly like a
+broken UI. Refresh it before blaming the app:
+
+```sh
+cd /home/brendan/computer && .venv/bin/python .cptr/harness/mint-cookie.py
+```
+
+(That signs a token with the server's own JWT secret via `create_token`, so no password
+is needed. `--user <username>` picks a non-admin; `--data-dir` targets another lane.)
 
 ```sh
 cd /home/brendan/computer/.cptr/harness
