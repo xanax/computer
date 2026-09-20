@@ -1,6 +1,9 @@
 <script lang="ts">
-	import type { HighlighterCore } from 'shiki/core';
+	import { highlightCode } from '$lib/utils/highlighter';
 	import { t } from '$lib/i18n';
+
+	/** Coalescing window for re-highlighting a block while it streams. */
+	const MIN_HIGHLIGHT_GAP_MS = 90;
 
 	interface Props {
 		language: string;
@@ -33,99 +36,48 @@
 		}));
 	});
 
-	// Lazy-loaded Shiki highlighter singleton
-	let highlighterPromise: Promise<HighlighterCore> | null = null;
+	// Highlight non-diff code: reactive so it re-runs on prop changes (streaming).
+	//
+	// Highlighting a growing block costs ~27ms warm, and a streaming message can
+	// change it 20 times a second, so the work is coalesced: at most one pass per
+	// MIN_HIGHLIGHT_GAP_MS, with a trailing pass so the final text is never left
+	// un-highlighted. Static code highlights immediately (leading edge).
+	let highlightTimer: ReturnType<typeof setTimeout> | undefined;
+	let lastHighlightAt = 0;
 
-	async function getHighlighter(): Promise<HighlighterCore> {
-		if (!highlighterPromise) {
-			highlighterPromise = (async () => {
-				const { createHighlighterCore } = await import('shiki/core');
-				const { createOnigurumaEngine } = await import('shiki/engine/oniguruma');
-				const hl = await createHighlighterCore({
-					themes: [import('shiki/themes/github-light.mjs'), import('shiki/themes/github-dark.mjs')],
-					langs: [
-						import('shiki/langs/javascript.mjs'),
-						import('shiki/langs/typescript.mjs'),
-						import('shiki/langs/python.mjs'),
-						import('shiki/langs/bash.mjs'),
-						import('shiki/langs/shell.mjs'),
-						import('shiki/langs/json.mjs'),
-						import('shiki/langs/html.mjs'),
-						import('shiki/langs/css.mjs'),
-						import('shiki/langs/markdown.mjs'),
-						import('shiki/langs/yaml.mjs'),
-						import('shiki/langs/toml.mjs'),
-						import('shiki/langs/rust.mjs'),
-						import('shiki/langs/go.mjs'),
-						import('shiki/langs/c.mjs'),
-						import('shiki/langs/cpp.mjs'),
-						import('shiki/langs/java.mjs'),
-						import('shiki/langs/sql.mjs'),
-						import('shiki/langs/svelte.mjs'),
-						import('shiki/langs/dockerfile.mjs'),
-						import('shiki/langs/xml.mjs'),
-						import('shiki/langs/ruby.mjs'),
-						import('shiki/langs/php.mjs'),
-						import('shiki/langs/swift.mjs'),
-						import('shiki/langs/kotlin.mjs'),
-						import('shiki/langs/lua.mjs'),
-						import('shiki/langs/tsx.mjs'),
-						import('shiki/langs/jsx.mjs'),
-						import('shiki/langs/scss.mjs'),
-						import('shiki/langs/graphql.mjs'),
-						import('shiki/langs/makefile.mjs')
-					],
-					engine: createOnigurumaEngine(import('shiki/wasm'))
-				});
-				return hl;
-			})();
-		}
-		return highlighterPromise;
+	function applyHighlight(el: HTMLElement, text: string, lang: string) {
+		lastHighlightAt = performance.now();
+		void highlightCode(text, lang).then((result) => {
+			// The block may have moved on (streaming) or been torn down.
+			if (!result || !el.isConnected || el !== codeEl) return;
+			el.innerHTML = result.html;
+			for (const [name, value] of result.vars) el.style.setProperty(name, value);
+		});
 	}
 
-	// Highlight non-diff code: reactive so it re-runs on prop changes (streaming)
 	$effect(() => {
 		if (isDiff || !codeEl) return;
-		const currentCode = code;
-		const currentLang = language;
+		const el = codeEl;
+		const text = code;
+		const lang = language;
 
-		(async () => {
-			try {
-				const hl = await getHighlighter();
-				if (!codeEl || currentCode !== code) return;
+		if (highlightTimer !== undefined) clearTimeout(highlightTimer);
+		const wait = MIN_HIGHLIGHT_GAP_MS - (performance.now() - lastHighlightAt);
+		if (wait <= 0) {
+			applyHighlight(el, text, lang);
+		} else {
+			highlightTimer = setTimeout(() => {
+				highlightTimer = undefined;
+				applyHighlight(el, text, lang);
+			}, wait);
+		}
 
-				const lang =
-					currentLang && hl.getLoadedLanguages().includes(currentLang) ? currentLang : 'text';
-
-				const html = hl.codeToHtml(currentCode, {
-					lang,
-					themes: { light: 'github-light', dark: 'github-dark' },
-					defaultColor: false // use CSS variables for theme switching
-				});
-
-				// Shiki wraps in <pre style="--shiki-light:...;--shiki-dark:..."><code>...</code></pre>
-				// We extract the <code> innerHTML but must also transfer the CSS vars
-				// from <pre> onto our own <code> so base-color vars resolve.
-				const tmp = document.createElement('div');
-				tmp.innerHTML = html;
-				const shikiPre = tmp.querySelector('pre');
-				const shikiCode = tmp.querySelector('code');
-				if (shikiCode && codeEl) {
-					codeEl.innerHTML = shikiCode.innerHTML;
-					// Copy --shiki-* CSS vars from the discarded <pre> onto our <code>
-					if (shikiPre) {
-						const preStyle = shikiPre.getAttribute('style') || '';
-						const vars = preStyle.match(/--shiki[\w-]*:[^;]+/g) || [];
-						vars.forEach((v) => {
-							const [name, val] = v.split(':');
-							if (name && val) codeEl!.style.setProperty(name.trim(), val.trim());
-						});
-					}
-				}
-			} catch {
-				// Fallback: just show plain text
+		return () => {
+			if (highlightTimer !== undefined) {
+				clearTimeout(highlightTimer);
+				highlightTimer = undefined;
 			}
-		})();
+		};
 	});
 
 	function handleCopy() {

@@ -1,67 +1,16 @@
-<script module lang="ts">
-	import type { HighlighterCore } from 'shiki/core';
-
-	type HighlightToken = {
-		content: string;
-		offset: number;
-		variants?: {
-			light?: { color?: string };
-			dark?: { color?: string };
-		};
-	};
-
-	let highlighterPromise: Promise<HighlighterCore> | null = null;
-	const tokenCache = new Map<string, HighlightToken[]>();
-
-	async function getHighlighter(): Promise<HighlighterCore> {
-		if (!highlighterPromise) {
-			highlighterPromise = (async () => {
-				const { createHighlighterCore } = await import('shiki/core');
-				const { createOnigurumaEngine } = await import('shiki/engine/oniguruma');
-				return createHighlighterCore({
-					themes: [import('shiki/themes/github-light.mjs'), import('shiki/themes/github-dark.mjs')],
-					langs: [
-						import('shiki/langs/javascript.mjs'),
-						import('shiki/langs/typescript.mjs'),
-						import('shiki/langs/python.mjs'),
-						import('shiki/langs/bash.mjs'),
-						import('shiki/langs/shell.mjs'),
-						import('shiki/langs/json.mjs'),
-						import('shiki/langs/html.mjs'),
-						import('shiki/langs/css.mjs'),
-						import('shiki/langs/markdown.mjs'),
-						import('shiki/langs/yaml.mjs'),
-						import('shiki/langs/toml.mjs'),
-						import('shiki/langs/rust.mjs'),
-						import('shiki/langs/go.mjs'),
-						import('shiki/langs/c.mjs'),
-						import('shiki/langs/cpp.mjs'),
-						import('shiki/langs/java.mjs'),
-						import('shiki/langs/sql.mjs'),
-						import('shiki/langs/svelte.mjs'),
-						import('shiki/langs/dockerfile.mjs'),
-						import('shiki/langs/xml.mjs'),
-						import('shiki/langs/ruby.mjs'),
-						import('shiki/langs/php.mjs'),
-						import('shiki/langs/swift.mjs'),
-						import('shiki/langs/kotlin.mjs'),
-						import('shiki/langs/lua.mjs'),
-						import('shiki/langs/tsx.mjs'),
-						import('shiki/langs/jsx.mjs'),
-						import('shiki/langs/scss.mjs'),
-						import('shiki/langs/graphql.mjs'),
-						import('shiki/langs/makefile.mjs')
-					],
-					engine: createOnigurumaEngine(import('shiki/wasm'))
-				});
-			})();
-		}
-		return highlighterPromise;
-	}
-</script>
-
 <script lang="ts">
+	import {
+		cacheTokens,
+		getHighlighter,
+		PLAIN_TEXT,
+		resolveLanguage,
+		takeCachedTokens,
+		THEMES,
+		type HighlightToken
+	} from '$lib/utils/highlighter';
 	import type { DiffLineType, InlineDiffSegment } from '$lib/utils/diff';
+
+	const tokenKey = (language: string, content: string) => `${language}\u0000${content}`;
 
 	interface Props {
 		type: DiffLineType;
@@ -92,20 +41,22 @@
 			}
 
 			try {
-				const key = `${currentLanguage}\0${currentContent}`;
-				let tokens = tokenCache.get(key);
+				const key = tokenKey(currentLanguage, currentContent);
+				let tokens = takeCachedTokens(key);
 				if (!tokens) {
 					const highlighter = await getHighlighter();
-					if (!highlighter.getLoadedLanguages().includes(currentLanguage)) {
+					const lang = await resolveLanguage(highlighter, currentLanguage);
+					if (lang === PLAIN_TEXT) {
+						// Unknown language: leave the line to the diff colours below.
 						renderedSegments = null;
 						return;
 					}
 					const tokenLines = highlighter.codeToTokensWithThemes(currentContent, {
-						lang: currentLanguage,
-						themes: { light: 'github-light', dark: 'github-dark' }
+						lang,
+						themes: THEMES
 					}) as HighlightToken[][];
 					tokens = tokenLines[0] ?? [];
-					tokenCache.set(key, tokens);
+					cacheTokens(key, tokens);
 				}
 				if (
 					currentContent !== content ||
