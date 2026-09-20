@@ -294,12 +294,16 @@ export function applyAppearance(
 		setVar('--app-checker', monoPalette.foreground);
 		setVar('--app-scrim', monoPalette.foreground);
 		setVar('--app-bar-scrim', monoPalette.background);
+		// The chat header draws its own edge; on the tinted palettes it is the
+		// heavier hairline that separates the bar from the answer behind it.
+		setVar('--app-bar-border', monoPalette.foreground);
 	} else {
 		document.documentElement.style.removeProperty('--app-hover');
 		document.documentElement.style.removeProperty('--app-active');
 		document.documentElement.style.removeProperty('--app-checker');
 		document.documentElement.style.removeProperty('--app-scrim');
 		document.documentElement.style.removeProperty('--app-bar-scrim');
+		document.documentElement.style.removeProperty('--app-bar-border');
 		if (merged.muted) {
 			setVar('--app-fg-muted', merged.muted);
 			setVar(

@@ -1946,7 +1946,7 @@
 	{#if !isLanding}
 		<div
 			class="relative z-30 -mb-12 flex h-7 shrink-0 items-center gap-2 pl-3 pr-2 dark:border-white/6"
-			style="border-color: var(--app-border);"
+			style="border-color: var(--app-bar-border, color-mix(in oklab, var(--app-fg) 8%, transparent));"
 		>
 			<div
 				aria-hidden="true"

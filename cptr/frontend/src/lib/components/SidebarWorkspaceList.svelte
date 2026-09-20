@@ -606,44 +606,73 @@
 		margin-bottom: 0.125rem;
 	}
 
-	/* The workspace name heads its group of chats, so it is drawn as an inverted
-	   plate: ink surface, paper text and icons. That is the mono palette's own
-	   "solid inversion" rule, and it also gives the default themes a solid bar
-	   where weight and size alone are not enough. The open workspace keeps its
-	   plate and gains a paper hairline frame — the only "selected" mark that
-	   survives a pure ink/paper palette. */
+	/* The workspace name heads its group of chats. In the tinted palettes it is
+	   a quiet label in the theme's mid ink — the weight the Settings navigation
+	   gives an inactive row — that takes the full foreground under the pointer.
+	   The open workspace wears the same hairline frame as the open chat (see
+	   ChatItem) rather than a fill. Both colours come from --app-*, so the
+	   heading follows a custom appearance with everything else. */
 	.ws-heading {
-		background: var(--app-fg);
-		color: var(--app-bg);
 		border: 1px solid transparent;
 		margin-bottom: 0.125rem;
+		color: var(--app-fg-muted);
+	}
+
+	.ws-heading:hover {
+		color: var(--app-fg);
 	}
 
 	.ws-heading-current {
+		border-color: var(--app-fg-muted);
+		color: var(--app-fg);
+	}
+
+	/* Share of tracked time. */
+	.ws-heading .ws-dwell-share {
+		color: var(--app-fg-subtle);
+		font-size: 0.625rem;
+		font-variant-numeric: tabular-nums;
+		letter-spacing: 0.01em;
+	}
+
+	/* ── Monochrome (e-ink) palettes ─────────────────────────────────────────
+	   A mid-tone label is what a 1-bit panel turns into noise, so the heading is
+	   instead a solid ink plate: paper label, paper icons. The open workspace
+	   keeps its plate and gains a paper hairline frame — the only "selected"
+	   mark that survives a pure ink/paper palette. There is no hover colour:
+	   pointing at a row is not something an e-ink panel reports, so the plate
+	   stays put. */
+	:global(.mono) .ws-heading {
+		background: var(--app-fg);
+		color: var(--app-bg);
+	}
+
+	:global(.mono) .ws-heading:hover {
+		color: var(--app-bg);
+	}
+
+	:global(.mono) .ws-heading-current {
 		border-color: var(--app-bg);
 	}
 
 	/* Everything inside the plate has to be paper: the sidebar's greys (and the
 	   mono ramp, where grey collapses to ink) would otherwise paint ink on ink. */
-	.ws-heading .ws-icon-toggle .ws-icon-chevron,
-	.ws-heading .ws-heading-action {
+	:global(.mono) .ws-heading .ws-icon-toggle .ws-icon-chevron,
+	:global(.mono) .ws-heading .ws-heading-action {
 		color: var(--app-bg);
 	}
 
 	/* The unread count is a paper chip cut into the ink plate. */
-	.ws-heading .ws-unread {
+	:global(.mono) .ws-heading .ws-unread {
 		background: var(--app-bg);
 		color: var(--app-fg);
 	}
 
-	/* Share of tracked time. Printed in paper ink like the rest of the heading —
-	   deliberately not a grey or an opacity blend, which in the mono palette
-	   would smear ink into paper and break the pure ink-on-paper rule. */
-	.ws-heading .ws-dwell-share {
+	/* Printed in paper ink like the rest of the heading — deliberately not a
+	   grey or an opacity blend, which in the mono palette would smear ink into
+	   paper and break the pure ink-on-paper rule. */
+	:global(.mono) .ws-heading .ws-dwell-share {
 		color: var(--app-bg);
-		font-size: 0.625rem;
-		font-variant-numeric: tabular-nums;
-		letter-spacing: 0.01em;
 	}
 
 	.ws-icon-toggle {
