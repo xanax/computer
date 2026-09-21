@@ -26,6 +26,8 @@
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { t } from '$lib/i18n';
 	import { getPathDisplayName } from '$lib/utils/paths';
+	import { formatWhen as formatWhenAt, nsToMs, HOUR_MS } from '$lib/utils/when';
+	import DeferWhenPicker from './DeferWhenPicker.svelte';
 	import Icon from './Icon.svelte';
 	import Spinner from './common/Spinner.svelte';
 
@@ -54,6 +56,11 @@
 	let deferNote = $state('');
 	let deferBusy = $state(false);
 	let deferError = $state('');
+	/** "I'll do it myself": the row waits for the user instead of being run. */
+	let deferManual = $state(false);
+
+	/** The clock manual reminders are read against; loading the board resets it. */
+	let nowMs = $state(Date.now());
 
 	/**
 	 * One row per board entry. The todo list is the human slice of the board, so
@@ -109,6 +116,9 @@
 	const liveRun = $derived(
 		jobs.some((job) => {
 			if (job.status === 'running' || job.status === 'queued') return true;
+			// A manual reminder never fires server-side, so there is nothing to poll
+			// for: the clock alone moves it (see `manualReminderAhead`).
+			if (job.executor === 'human') return false;
 			if (job.trigger !== 'at' || job.status !== 'open' || job.trigger_at == null) return false;
 			return nsToMs(job.trigger_at) - Date.now() < 5 * 60_000;
 		})
@@ -130,6 +140,7 @@
 		try {
 			const data = await getJobs(ws);
 			jobs = data.jobs;
+			nowMs = Date.now();
 		} catch {
 			// As above: a failed read must not blank the board.
 		}
@@ -240,35 +251,54 @@
 		if (pollTimer) clearInterval(pollTimer);
 	});
 
-
-	/** The board mixes units: timestamps are ms, `trigger_at` is ns. */
-	function nsToMs(ns: number): number {
-		return Math.floor(ns / 1_000_000);
-	}
+	// ── Manual reminders ─────────────────────────────────────────
 
 	/**
-	 * "Sep 20, 19:08 · in 4 hours". The relative half is dropped once the moment
-	 * has passed — a stale trigger must not read as a countdown.
+	 * The clock a manual row needs. A reminder is `executor="human"` plus a
+	 * trigger, and the scheduler skips those rows on purpose (`mark_due_queued`
+	 * filters them out) — so no response will ever move the row, only time does.
+	 * Tick while one is due within the hour, so a row that comes due under the
+	 * user's eyes turns into "due now" without a reload; nothing here is a
+	 * request, and the ticker stops the moment the moment passes.
+	 */
+	const manualReminderAhead = $derived(
+		jobs.some((job) => {
+			if (!isManualReminder(job) || job.trigger_at == null) return false;
+			const delta = nsToMs(job.trigger_at) - nowMs;
+			return delta > 0 && delta <= HOUR_MS;
+		})
+	);
+
+	let tickTimer: ReturnType<typeof setInterval> | null = null;
+
+	function startTicking() {
+		if (tickTimer) return;
+		tickTimer = setInterval(() => (nowMs = Date.now()), 30_000);
+	}
+
+	function stopTicking() {
+		if (!tickTimer) return;
+		clearInterval(tickTimer);
+		tickTimer = null;
+	}
+
+	$effect(() => {
+		if (manualReminderAhead && docVisible) startTicking();
+		else stopTicking();
+	});
+
+	onDestroy(() => {
+		if (tickTimer) clearInterval(tickTimer);
+	});
+
+
+	/**
+	 * "Sep 20, 19:08 · in 4 hours", worded once for the whole app so a pick and the
+	 * row it lands on read identically. The board mixes units: timestamps are ms,
+	 * `trigger_at` is ns, which `nsToMs` reconciles.
 	 */
 	function formatWhen(ms: number): string {
-		const date = new Date(ms);
-		const diff = ms - Date.now();
-		const dateStr = date.toLocaleString(undefined, {
-			month: 'short',
-			day: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit'
-		});
-
-		if (diff <= 0) return dateStr;
-
-		const mins = Math.floor(diff / 60_000);
-		if (mins < 1) return `${dateStr} · ${$t('dashboard.now')}`;
-		if (mins < 60) return `${dateStr} · ${$t('dashboard.minutes', { count: mins })}`;
-		const hrs = Math.floor(mins / 60);
-		if (hrs < 24) return `${dateStr} · ${$t('dashboard.hours', { count: hrs })}`;
-		const days = Math.floor(hrs / 24);
-		return `${dateStr} · ${$t('dashboard.days', { count: days })}`;
+		return formatWhenAt(ms, $t);
 	}
 
 	/** Automations carry ns timestamps, like a job's trigger. */
@@ -373,6 +403,27 @@
 		}
 	}
 
+	/**
+	 * A row the user scheduled for themselves: a human executor with a trigger.
+	 * Nothing runs it, so the board can only say when it is theirs to do.
+	 */
+	function isManualReminder(job: JobData | null | undefined): boolean {
+		return (
+			!!job &&
+			job.executor === 'human' &&
+			job.status === 'open' &&
+			job.trigger === 'at' &&
+			job.trigger_at != null
+		);
+	}
+
+	/** True once a manual reminder's moment has arrived. */
+	function isDue(row: Row): boolean {
+		const job = row.job;
+		if (!job || row.done || !isManualReminder(job) || job.trigger_at == null) return false;
+		return nsToMs(job.trigger_at) <= nowMs;
+	}
+
 	/** The second line of a row: who is running it, when, and how it went. */
 	function rowDetail(row: Row): string {
 		const job = row.job;
@@ -381,12 +432,19 @@
 		const bits: string[] = [];
 		// An 'open' job with a trigger is waiting for its moment; say so, because a
 		// bare date reads like a deadline the user set.
-		if (job.status === 'open' && job.trigger === 'at') bits.push($t('dashboard.jobScheduled'));
-		else {
+		if (job.status === 'open' && job.trigger === 'at') {
+			// A human row is not a run waiting to happen: it waits for the user.
+			bits.push(
+				$t(isManualReminder(job) ? 'dashboard.reminderWaiting' : 'dashboard.jobScheduled')
+			);
+		} else {
 			const label = statusLabel(job.status);
 			if (label) bits.push(label);
 		}
-		if (job.trigger === 'at' && job.trigger_at != null) bits.push(formatWhen(nsToMs(job.trigger_at)));
+		if (job.trigger === 'at' && job.trigger_at != null) {
+			if (isDue(row)) bits.push($t('dashboard.reminderDue'));
+			bits.push(formatWhen(nsToMs(job.trigger_at)));
+		}
 		if (job.executor && job.executor !== 'human') bits.push(job.executor);
 		if (job.attempts > 1) bits.push($t('dashboard.jobAttempt', { count: job.attempts }));
 		if ((job.status === 'failed' || job.status === 'blocked') && job.last_error) {
@@ -427,6 +485,7 @@
 		deferError = '';
 		deferAt = '';
 		deferNote = '';
+		deferManual = false;
 		if ($chatModels.length === 0) await refreshChatState();
 		pickDeferModel();
 	}
@@ -444,13 +503,15 @@
 
 	async function handleDefer(id: string, title: string) {
 		const at = deferAt.trim();
-		if (!at || !deferModel || deferBusy) return;
+		// Manual: the same trigger, but no model — the row is a reminder for the user.
+		const executor = deferManual ? 'human' : deferModel;
+		if (!at || !executor || deferBusy) return;
 		deferBusy = true;
 		deferError = '';
 		try {
 			await deferJob(id, {
 				at,
-				executor: deferModel,
+				executor,
 				payload: deferNote.trim() ? `${title}\n\n${deferNote.trim()}` : title
 			});
 			deferOpenId = null;
@@ -555,7 +616,10 @@
 							{@const detail = rowDetail(row)}
 							{@const chatId = runChatId(row)}
 							<li>
-								<div class="todo-row" class:attention={row.job?.status === 'needs_review'}>
+								<div
+									class="todo-row"
+									class:attention={row.job?.status === 'needs_review' || isDue(row)}
+								>
 									{#if isRunning(row)}
 										<button
 											class="todo-check stop"
@@ -633,20 +697,19 @@
 
 								{#if deferOpenId === row.id}
 									<div class="defer-form">
-										<input
-											type="text"
-											class="todo-input defer-at"
-											bind:value={deferAt}
-											placeholder={$t('dashboard.deferAtPlaceholder')}
-											onkeydown={(e) => {
-												if (e.key === 'Enter') handleDefer(row.id, row.title);
-											}}
-										/>
-										<select class="defer-model" bind:value={deferModel}>
+										<DeferWhenPicker bind:at={deferAt} />
+										<select class="defer-model" bind:value={deferModel} disabled={deferManual}>
 											{#each $chatModels as model (model.id)}
 												<option value={model.id}>{model.name}</option>
 											{/each}
 										</select>
+										<label class="defer-manual">
+											<input type="checkbox" bind:checked={deferManual} />
+											{$t('dashboard.deferManual')}
+										</label>
+										{#if deferManual}
+											<span class="defer-hint">{$t('dashboard.deferManualHint')}</span>
+										{/if}
 										<input
 											type="text"
 											class="todo-input defer-note"
@@ -659,7 +722,7 @@
 										<button
 											class="btn-secondary"
 											onclick={() => handleDefer(row.id, row.title)}
-											disabled={deferBusy || !deferAt.trim() || !deferModel}
+											disabled={deferBusy || !deferAt.trim() || (!deferManual && !deferModel)}
 										>
 											{$t('dashboard.deferSubmit')}
 										</button>
@@ -1124,6 +1187,36 @@
 		color: var(--app-fg);
 		font-size: 0.8125rem;
 		max-width: 14rem;
+	}
+
+	/* The one control that changes what "Schedule" means. */
+	.defer-manual {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+		font-size: 0.8125rem;
+		color: var(--app-fg);
+		white-space: nowrap;
+		cursor: pointer;
+	}
+
+	.defer-manual input {
+		accent-color: var(--app-fg);
+		cursor: pointer;
+	}
+
+	/* A disabled select, drawn from the theme rather than the browser's greys. */
+	.defer-model:disabled {
+		opacity: 1;
+		color: var(--app-fg-muted);
+		border-color: var(--app-divider);
+		cursor: not-allowed;
+	}
+
+	.defer-hint {
+		flex-basis: 100%;
+		font-size: 0.6875rem;
+		color: var(--app-fg-muted);
 	}
 
 	.defer-error {

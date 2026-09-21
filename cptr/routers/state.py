@@ -514,45 +514,27 @@ def _collect_system_info(user_home: Path) -> dict:
     except Exception:
         pass
 
-    # Top processes (by CPU)
+    # Top processes (by CPU). `args` gives the full command line (comm strips
+    # the arguments), which is what identifies a runaway process as *this*
+    # command rather than as "python".
     processes = []
     try:
         if platform.system() == "Darwin":
             result = subprocess.run(
-                ["ps", "-Arco", "pid,pcpu,pmem,comm"],
+                ["ps", "-A", "-r", "-o", "pid,pcpu,pmem,args"],
                 capture_output=True,
                 text=True,
                 timeout=3,
             )
-            for line in result.stdout.strip().split("\n")[1:6]:
-                parts = line.split(None, 3)
-                if len(parts) >= 4:
-                    processes.append(
-                        {
-                            "pid": int(parts[0]),
-                            "cpu": float(parts[1]),
-                            "mem": float(parts[2]),
-                            "name": parts[3],
-                        }
-                    )
+            processes = _parse_ps_processes(result.stdout, limit=5)
         elif platform.system() == "Linux":
             result = subprocess.run(
-                ["ps", "-eo", "pid,pcpu,pmem,comm", "--sort=-pcpu", "--no-headers"],
+                ["ps", "-eo", "pid,pcpu,pmem,args", "--sort=-pcpu", "--no-headers"],
                 capture_output=True,
                 text=True,
                 timeout=3,
             )
-            for line in result.stdout.strip().split("\n")[:5]:
-                parts = line.split(None, 3)
-                if len(parts) >= 4:
-                    processes.append(
-                        {
-                            "pid": int(parts[0]),
-                            "cpu": float(parts[1]),
-                            "mem": float(parts[2]),
-                            "name": parts[3],
-                        }
-                    )
+            processes = _parse_ps_processes(result.stdout, limit=5, has_header=False)
         elif platform.system() == "Windows":
             result = subprocess.run(
                 ["tasklist", "/FO", "CSV", "/NH"],
@@ -588,8 +570,12 @@ def _collect_system_info(user_home: Path) -> dict:
                         pass
             # Sort by memory usage (best we can do without psutil)
             entries.sort(key=lambda e: e.get("_mem_kb", 0), reverse=True)
+            commands = _windows_command_lines()
             for e in entries[:5]:
                 e.pop("_mem_kb", None)
+                command = commands.get(e["pid"])
+                if command:
+                    e["cmd"] = command[:400]
                 processes.append(e)
     except Exception:
         pass
@@ -630,7 +616,213 @@ def _collect_system_info(user_home: Path) -> dict:
         "hostname": hostname,
         "platform": platform.system(),
         "version": app_version,
+        # The pid of this server: the UI needs it to tell "restarted" from
+        # "still the old process" while it polls /api/health.
+        "pid": os.getpid(),
         "system": system,
         "processes": processes,
         "suggestions": suggestions,
+    }
+
+
+# ── Processes and the server itself ──────────────────────────────
+#
+# The System info dialog reads processes from /welcome and drives two
+# destructive actions from here: killing one pid, and restarting this server.
+# Both are gated the same way the rest of the app is — any authenticated user,
+# who can already open a terminal in this workspace — with the machine's own
+# permissions as the real boundary (a process owned by another uid is refused).
+
+MAX_COMMAND_CHARS = 400
+
+
+class KillProcessBody(BaseModel):
+    pid: int
+    force: bool = False
+
+
+class RestartServerBody(BaseModel):
+    delay_seconds: float | None = None
+
+
+def _process_name(command: str) -> str:
+    """Short name for a process, given its full command line."""
+    text = command.strip()
+    if not text:
+        return ""
+    if text.startswith("["):
+        # Kernel thread or zombie: ps prints "[kworker/u8:2]", "[git] <defunct>".
+        return text.split()[0].strip("[]") or text
+    if text[0] in "\"'":
+        # A quoted executable can contain spaces, and Windows always quotes:
+        # '"C:\Program Files\x\svchost.exe" -k netsvcs'.
+        closing = text.find(text[0], 1)
+        first = text[1:closing] if closing > 0 else text.strip("\"'")
+    else:
+        first = text.split()[0]
+    return first.replace("\\", "/").rsplit("/", 1)[-1] or first
+
+
+def _parse_ps_processes(stdout: str, limit: int, has_header: bool = True) -> list[dict]:
+    """Rows of `ps -o pid,pcpu,pmem,args` → process dicts."""
+    lines = [line for line in stdout.strip().split("\n") if line.strip()]
+    if has_header and lines:
+        lines = lines[1:]
+    processes = []
+    for line in lines[:limit]:
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            pid = int(parts[0])
+            cpu = float(parts[1])
+            mem = float(parts[2])
+        except ValueError:
+            continue
+        command = parts[3].strip()[:MAX_COMMAND_CHARS]
+        processes.append(
+            {
+                "pid": pid,
+                "cpu": cpu,
+                "mem": mem,
+                "name": _process_name(command),
+                "cmd": command,
+            }
+        )
+    return processes
+
+
+def _windows_command_lines() -> dict[int, str]:
+    """Command lines for the running processes, via CIM (tasklist has none)."""
+    import subprocess
+
+    script = (
+        "Get-CimInstance Win32_Process | "
+        "Select-Object ProcessId,CommandLine | "
+        "ConvertTo-Csv -NoTypeInformation"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    import csv
+    from io import StringIO
+
+    commands: dict[int, str] = {}
+    for row in csv.reader(StringIO(result.stdout)):
+        if len(row) < 2:
+            continue
+        pid_text, command = row[0].strip(), row[1].strip()
+        if pid_text.isdigit() and command:
+            commands[int(pid_text)] = command
+    return commands
+
+
+def _process_uid(pid: int) -> int | None:
+    """Owning uid of a process, when the OS makes it cheap to ask (else None)."""
+    import subprocess
+
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text(errors="replace").splitlines():
+            if line.startswith("Uid:"):
+                return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "uid=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return int(result.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _kill_process(pid: int, force: bool) -> dict:
+    import signal
+    import subprocess
+
+    if pid <= 1:
+        raise HTTPException(status_code=400, detail=f"refusing to signal pid {pid}")
+    if pid == os.getpid():
+        raise HTTPException(
+            status_code=400, detail=f"pid {pid} is this cptr server — restart it instead"
+        )
+    if os.name == "posix" and hasattr(os, "getuid"):
+        owner = _process_uid(pid)
+        if owner is not None and owner != os.getuid() and os.getuid() != 0:
+            raise HTTPException(
+                status_code=403, detail=f"process {pid} is owned by uid {owner}"
+            )
+    sent = signal.SIGKILL if force else signal.SIGTERM
+    try:
+        os.kill(pid, sent)
+    except ProcessLookupError:
+        raise HTTPException(status_code=404, detail=f"no process with pid {pid}") from None
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"not permitted to signal pid {pid}") from None
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"could not signal pid {pid}: {exc}") from exc
+    return {"status": "signalled", "pid": pid, "signal": sent.name, "force": bool(force)}
+
+
+@router.post("/processes/kill")
+async def kill_process(request: Request, body: KillProcessBody):
+    """Signal one process, for the ✕ beside a row in System info."""
+    import asyncio
+
+    if not await _get_user_id(request):
+        raise HTTPException(status_code=403, detail="sign in required")
+    return await asyncio.to_thread(_kill_process, body.pid, body.force)
+
+
+# A restart takes seconds; a second one inside that window would race the first
+# worker for the port and leave two servers fighting over it.
+RESTART_GUARD_SECONDS = 60.0
+_restart_requested_at = 0.0
+
+
+@router.post("/server/restart")
+async def restart_server(request: Request, body: RestartServerBody | None = None):
+    """Stop this server and start it again — same command line, same port."""
+    import asyncio
+    import time
+
+    global _restart_requested_at
+
+    if not await _get_user_id(request):
+        raise HTTPException(status_code=403, detail="sign in required")
+
+    now = time.time()
+    if _restart_requested_at and now - _restart_requested_at < RESTART_GUARD_SECONDS:
+        raise HTTPException(status_code=409, detail="a restart is already in progress")
+    _restart_requested_at = now
+
+    from cptr.utils.restart import DEFAULT_DELAY, MAX_DELAY, MIN_DELAY, spawn_restart
+
+    requested = body.delay_seconds if body else None
+    delay = DEFAULT_DELAY if requested is None else float(requested)
+    delay = max(MIN_DELAY, min(delay, MAX_DELAY))
+
+    auth = getattr(request.state, "auth", None)
+    who = getattr(auth, "username", None) or "unknown"
+    try:
+        info = await asyncio.to_thread(spawn_restart, delay=delay, reason=f"api:{who}")
+    except Exception as exc:  # nothing to restart with: say so and clear the guard
+        _restart_requested_at = 0.0
+        raise HTTPException(status_code=500, detail=f"could not schedule the restart: {exc}") from exc
+
+    return {
+        "status": "restarting",
+        "pid": info["pid"],
+        "delay_seconds": info["delay"],
+        "port": info["port"],
+        "log": info["log"],
     }
