@@ -1039,7 +1039,8 @@ def snapshot_sqlite(src, dst):
     return 'RAW copy + wal/shm (' + '; '.join(errs) + ')', False
 
 
-ok = warn = 0
+ok = warn = 0          # every materialise operation (db snapshots + sidecar copies)
+db_ok = raw_ok = 0     # split out, so the headline number is databases, not operations
 for kind, rel in sorted(items):
     src, dst = os.path.join(HOME, rel), os.path.join(STAGE, rel)
     os.makedirs(os.path.dirname(dst) or STAGE, exist_ok=True)
@@ -1063,10 +1064,12 @@ for kind, rel in sorted(items):
                   f"{os.path.getsize(src)/1048576:.1f}MB -> {how}{note}", flush=True)
             ok += clean
             warn += (not clean)
+            db_ok += clean
         else:
             shutil.copy2(src, dst)
             print(f"OK   copy     {rel} (sqlite sidecar)", flush=True)
             ok += 1
+            raw_ok += 1
     except Exception as exc:                            # noqa: BLE001
         print(f"FAIL materialise {rel}: {exc}", flush=True)
         warn += 1
@@ -1110,7 +1113,10 @@ if missing:
         print("FAIL stage is materially incomplete — refusing to publish")
         sys.exit(1)
     print(f"WARN {len(missing)} file(s) vanished between scan and copy (deleted mid-run?)")
-print(f"sqlite snapshots: {ok} ok, {warn} degraded")
+# Headline number = databases; `ok` also counts staged -wal/-shm sidecars, which made this
+# line disagree with the manifest's database count. Report the split so the two agree.
+print(f"sqlite snapshots: {db_ok} ok, {warn} degraded"
+      f"{'' if not raw_ok else f' (+ {raw_ok} live -wal/-shm sidecar file(s))'}")
 sys.exit(0)
 PY
 [ "${PIPESTATUS[0]}" -eq 0 ] || die "database snapshot / stage verification failed"

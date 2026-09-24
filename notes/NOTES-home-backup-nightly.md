@@ -11,7 +11,7 @@ Whole-`$HOME` tar snapshots, separate from the cptr-data backup.
 | ignore file | `~/.backupignore` (2 active rules + 44 built-in defaults, all of them listed there) |
 | work dir | `~/.cache/home-backup` (`stage/`, scan lists, `report.txt`, `run.lock`, `current.log`, `backup.log`) |
 | compressor | `xz -T0 -6` (`HOME_BACKUP_COMPRESS=auto`; same wall clock as gzip, ~40% smaller) |
-| size | stage **14.8 GB** (235.7k non-dir entries, 51 live SQLite dbs) → **4.98 GB** as `.tar.gz`, **3.3 GB** as `.tar.xz` |
+| size | stage **14.8 GB** (235.7k non-dir entries, 37 live SQLite dbs) → **4.98 GB** as `.tar.gz`, **3.3 GB** as `.tar.xz` |
 
 ## Shape of a run
 
@@ -61,10 +61,47 @@ on a 687 MB slice of a real stage (460 MB of the live `atr.sqlite` plus staged s
 Measured on the first complete xz run (2026-09-24): **3.3 GB, 42 minutes** wall clock
 (08:44 → 09:26) for the same 14.8 GB stage that gzip wrote 4.98 GB from; the on-machine checks
 all passed — `stage check: expected 235663 non-dir entries, found 235663`,
-`sqlite snapshots: 51 ok, 0 degraded`, `verified: 238166 entries, staged tree == archive`,
-`run ended: exit=0`. Compression alone was ~20 min (xz at 1080% CPU), staging ~8 min,
-materialise ~11 min (142 s of it the `atr.sqlite` VACUUM INTO plus its `quick_check`), and the
-final cross-filesystem publish of 3.3 GB to `/mnt/e` another couple of minutes.
+`sqlite snapshots: 51 ok, 0 degraded` (the line as it read then — see "Two counts" below; it now
+prints `37 ok, 0 degraded (+ 14 live -wal/-shm sidecar file(s))`), `verified: 238166 entries,
+staged tree == archive`, `run ended: exit=0`. Compression alone was ~20 min (xz at 1080% CPU),
+staging ~8 min, materialise ~11 min (142 s of it the `atr.sqlite` VACUUM INTO plus its
+`quick_check`), and the final cross-filesystem publish of 3.3 GB to `/mnt/e` another couple of
+minutes.
+
+### Two counts that used to disagree, and now don't
+
+The 08:44 xz run reported **37 databases** in its report
+(`sqlite : 37 live database(s) snapshotted via VACUUM INTO / backup API (10 -wal/-shm folded in,
+not copied)`) but **51 ok** in the materialise pass's own summary. Both were right — the summary
+counted *operations*: 37 database snapshots plus one staged copy per live `-wal`/`-shm` sidecar
+(`ok = db_ok + raw_ok`). It is the sidecar count that wobbles between runs, because it depends on
+which databases happen to have a live WAL at that moment. Reconstructed from `backup.log`:
+
+| run (2026-09-24) | snapshots | sidecar copies | printed |
+|---|---|---|---|
+| 07:04 (died later, exit=1 — the dbdumps bug) | 37 | 12 | `49 ok, 0 degraded` |
+| 08:09 gzip publish | 37 | 10 | `47 ok, 0 degraded` |
+| 08:26 gzip publish | 37 | 10 | `47 ok, 0 degraded` |
+| 08:44 → 09:26 xz publish | 37 | 14 | `51 ok, 0 degraded` |
+
+So the headline moved 47 → 49 → 51 across runs in which the database count never changed, and the
+one number that *was* stable (37) was the one the summary did not print. The line now prints the
+split, databases first: `sqlite snapshots: 37 ok, 0 degraded (+ 14 live -wal/-shm sidecar
+file(s))`.
+
+Sidecars are staged *before* the snapshot (`raw` sorts before `sqlite`) and deleted again when the
+snapshot is clean, so they are not in the archive; they ship only if a database fell back to a raw
+copy, which the `stage check` line reports explicitly ("N sqlite sidecar(s) for raw copies"). The
+report's own "(10 -wal/-shm …)" is the *scan-time* list (`materialise.list` carries 10 `raw`
+entries), so it can legitimately be lower than the run's sidecar count — 4 more WALs existed by
+the time the snapshot pass ran, which is also why "folded in, not copied" is the report's intent
+rather than a guarantee. `db_ok`/`raw_ok` keep the two counts apart; the `ok`/`warn` totals still
+drive the "refusing to publish" check.
+
+The 04:15 automation's own prompt quotes these numbers as well (it is the `jobs` row
+`e102bc46-f978-4f05-a8c4-76887997fbe8`, editable in the Tasks UI, and it is what tells the
+nightly agent how to read the log), so it was updated in the same change — a count that lives in
+two places is a count that will disagree.
 
 ## The first deploy's two one-liners (both silent, one fatal)
 
@@ -218,7 +255,8 @@ The live clusters `~/AIjly/data/postgres-{prod,dev}` are `drwx------ 70:70` stal
 - No `zstd`, no `pigz` on this box — but `xz -T0` *is* installed, which makes that irrelevant
   (see the compressor section). Nothing left to install.
 - Sizes to expect: stage **14.8 GB / 235.7k staged non-dir entries / 238k archive entries /
-  51 live SQLite dbs (0 degraded)**.
+  37 live SQLite dbs (0 degraded)**, plus ~14 live `-wal`/`-shm` sidecars that are folded into
+  the snapshots rather than archived.
   `/mnt/e` reads run at only ~10 MB/s, so the cross-filesystem publish copy of a 3-5 GB archive
   takes minutes and a full `sha256sum -c` takes 8+ minutes — the script proves the archive
   against the staged tree *before* publishing, so the nightly check can stay cheap.
