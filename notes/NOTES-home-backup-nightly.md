@@ -319,3 +319,38 @@ Modes: `--dry-run` (scan + report only, writes nothing outside the work dir), `-
 (which rule decides a path), `--resume` (re-compress the stage an earlier run left behind — the
 fix for a run killed before compressing, saves re-staging 15 GB), `--init-ignore` (write a
 starter `~/.backupignore`).
+
+## Killing a run: the flock is inherited, so the wrapper is not the run (2026-09-25)
+
+Observed while relaunching a run that had been started by a plain `nohup … &` from a cptr
+tool call: `pkill -f 'bash /home/brendan/home-backup.sh'` matched **only the parent bash**. The
+scan `python3` child and its `tee -a backup.log` survived, were reparented to the cptr backend,
+and — because they had inherited the open `run.lock` fd — **kept holding the flock**. The
+script's `EXIT` trap had already fired in the dead parent (`run ended: exit=0`, i.e. the trap
+reports 0 for an externally SIGTERMed script), so nothing was left to build the stage, yet every
+relaunch printed only:
+
+    another home-backup run holds the lock — exiting (its own log is current.log)
+    run ended: exit=0
+
+So a "held lock" line with no live `bash home-backup.sh` process and no stage progress means an
+**orphaned scan child**, not a real overlapping run. Find it with
+
+    for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q run.lock && \
+      echo "$p: $(tr '\0' ' ' < $p/cmdline)"; done
+
+and kill those PIDs, not the wrapper. The scan lists (`include.list`, `materialise.list`,
+`report.txt`) are regenerated at the start of every run, so killing an orphaned scanner loses
+nothing — but a run killed *after* staging starts does need `--resume` (the stage is only in
+`.cache/home-backup/stage`, which is `.cache/`-excluded and deleted after a successful publish,
+so the scan never sees it).
+
+Launch recipe unchanged, and this is the one that works — the session leader must be the script
+itself (`ps -eo pid,sid,cmd` shows `SID == PID`, `Ss`):
+
+    setsid nohup /home/brendan/home-backup.sh </dev/null >/dev/null 2>&1 &
+
+Also worth knowing when reading a live run: `log()` writes `current.log`, but the scan and
+materialise passes are piped to `tee -a backup.log`, so the per-database `OK snapshot …` lines,
+`stage check: …` and `sqlite snapshots: … ok, … degraded` appear **only in `backup.log`**.
+`current.log` stays at ~11 lines until compression starts; grep `backup.log` for the summaries.
