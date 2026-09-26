@@ -1565,7 +1565,7 @@ async def run_command(
     """Run a shell command. Returns a task_id for status checks and input.
     :param command: The shell command to execute.
     :param cwd: Working directory relative to workspace root.
-    :param wait: Seconds to wait for the command to finish before returning (max 300). Returns early if done sooner. Null returns immediately. Use 30-60 for installs and builds, 5-10 for quick commands, null or 0 for long-lived servers.
+    :param wait: Seconds to wait for the command to finish before returning (max 300). Returns early if done sooner. Null returns immediately. Use 30-60 for installs and builds, 5-10 for quick commands. Do not use this for a declared workspace service or a server that is already running — use start_service.
     """
     workspace = __context__["workspace"]
     try:
@@ -1578,6 +1578,13 @@ async def run_command(
     work_dir = _resolve_path(cwd, workspace)
     if not work_dir.is_dir():
         return f"Error: not a directory: {cwd}"
+
+    if user_id:
+        from cptr.utils.services import refusal_for_command
+
+        blocked = await refusal_for_command(user_id, workspace, command, cwd=str(work_dir))
+        if blocked:
+            return blocked
 
     active = sum(
         1
@@ -1634,6 +1641,7 @@ async def run_command(
         "output": bytearray(),
         "total_bytes": 0,
         "command": command,
+        "cwd": str(work_dir),
         "workspace": workspace,
         "user_id": user_id,
         "identity": identity,
@@ -1754,6 +1762,245 @@ async def kill_task(task_id: str, force: bool = False, *, __context__: dict) -> 
     return f"{action} task {task_id}"
 
 
+async def _service_user(context: dict) -> tuple[str, str] | str:
+    workspace = str(context.get("workspace") or "")
+    if not workspace:
+        return "Error: tool requires an open workspace."
+    try:
+        identity = await identity_for_context(context)
+    except IdentityUnavailable as exc:
+        return f"Error: {exc}"
+    user_id = identity.app_user_id or context.get("user_id")
+    if not user_id:
+        return "Error: authentication required."
+    return user_id, workspace
+
+
+async def list_services(*, __context__: dict) -> str:
+    """List this workspace's declared start/stop processes (services) and any
+    servers a chat left running. A "service" is a long-lived process the human
+    starts and stops at will on the workspace dashboard (web/API/dev servers,
+    watchers, daemons). Call this before starting a dev server, API, or static
+    file server. These are distinct from scheduled automations and from todos.
+    """
+    from cptr.utils.services import format_services_prompt, snapshot
+
+    scope = await _service_user(__context__)
+    if isinstance(scope, str):
+        return scope
+    user_id, workspace = scope
+    view = await snapshot(user_id, workspace)
+    text = format_services_prompt(view)
+    return text or "No declared services. Add one on the workspace dashboard before starting a server."
+
+
+async def start_service(name: str = "", service_id: str = "", *, __context__: dict) -> str:
+    """Start a declared start/stop process (service), or return it when already
+    running. Do not shell out to uvicorn, vite, npm run dev, or http.server when
+    a service covers that command.
+    :param name: Service name from list_services, for example "api".
+    :param service_id: Service id from list_services (alternative to name).
+    """
+    from cptr.utils.services import ServiceError, start
+
+    scope = await _service_user(__context__)
+    if isinstance(scope, str):
+        return scope
+    user_id, workspace = scope
+    try:
+        view = await start(user_id, workspace, name=name, service_id=service_id)
+    except ServiceError as exc:
+        return f"Error: {exc.message}"
+    where = f" at {view['url']}" if view.get("url") else ""
+    return (
+        f"Service {view['name']}: {view['status']}{where}\n"
+        f"Command: {view['command']}\npid: {view.get('pid')}"
+    )
+
+
+async def stop_service(name: str = "", service_id: str = "", *, __context__: dict) -> str:
+    """Stop a declared start/stop process (service).
+    :param name: Service name from list_services.
+    :param service_id: Service id from list_services (alternative to name).
+    """
+    from cptr.utils.services import ServiceError, stop
+
+    scope = await _service_user(__context__)
+    if isinstance(scope, str):
+        return scope
+    user_id, workspace = scope
+    try:
+        view = await stop(user_id, workspace, name=name, service_id=service_id)
+    except ServiceError as exc:
+        return f"Error: {exc.message}"
+    return f"Service {view['name']}: {view['status']}"
+
+
+async def restart_service(name: str = "", service_id: str = "", *, __context__: dict) -> str:
+    """Stop then start a declared start/stop process (service).
+    :param name: Service name from list_services.
+    :param service_id: Service id from list_services (alternative to name).
+    """
+    from cptr.utils.services import ServiceError, restart, resolve_id
+
+    scope = await _service_user(__context__)
+    if isinstance(scope, str):
+        return scope
+    user_id, workspace = scope
+    try:
+        sid = await resolve_id(user_id, workspace, service_id=service_id, name=name)
+        view = await restart(user_id, workspace, sid)
+    except ServiceError as exc:
+        return f"Error: {exc.message}"
+    where = f" at {view['url']}" if view.get("url") else ""
+    return (
+        f"Service {view['name']}: {view['status']}{where}\n"
+        f"Command: {view['command']}\npid: {view.get('pid')}"
+    )
+
+
+async def create_service(
+    name: str,
+    command: str,
+    cwd: str = ".",
+    port: Optional[int] = None,
+    health_url: str = "",
+    *,
+    __context__: dict,
+) -> str:
+    """Save a new start/stop process (a "service") for the workspace dashboard — use this for "a process I can start and stop at will".
+
+    It adds an entry to the dashboard's Services (start/stop) panel. It does
+    NOT run the command — call start_service(name=...) afterwards to start it,
+    and stop_service/restart_service later.
+
+    Only for long-lived processes: web/API/dev servers, watchers, daemons.
+    For a recurring scheduled prompt run use create_automation, and for a plain
+    to-do use add_workspace_todo — those are different dashboard panels.
+
+    :param name: Short name for the dashboard, e.g. "api" or "dev server".
+    :param command: Exact command to run (argument list, no shell operators).
+    :param cwd: Directory to run in, relative to the workspace (default ".").
+    :param port: Port the process listens on, if any.
+    :param health_url: Optional http(s) health-check URL.
+    """
+    from cptr.utils.services import ServiceError, create_service as _create
+
+    scope = await _service_user(__context__)
+    if isinstance(scope, str):
+        return scope
+    user_id, workspace = scope
+    try:
+        spec = await _create(
+            user_id,
+            workspace,
+            {
+                "name": name,
+                "command": command,
+                "cwd": cwd,
+                "port": port,
+                "health_url": health_url,
+            },
+        )
+    except ServiceError as exc:
+        return f"Error: {exc.message}"
+    return (
+        f"Service '{spec['name']}' saved (id {spec['id']}), stopped.\n"
+        f"Command: {spec['command']}\ncwd: {spec['cwd']}\n"
+        f"Start it with start_service(name={spec['name']!r})."
+    )
+
+
+async def update_service(
+    service_id: str = "",
+    name: str = "",
+    command: Optional[str] = None,
+    cwd: Optional[str] = None,
+    port: Optional[int] = None,
+    health_url: Optional[str] = None,
+    *,
+    __context__: dict,
+) -> str:
+    """Change a saved start/stop process (service). Only provided fields change.
+
+    :param service_id: Service id from list_services (preferred).
+    :param name: Look up by this name when service_id is empty; otherwise,
+        rename the service to this name.
+    :param command: Replace the command (omit to keep).
+    :param cwd: Replace the working directory (omit to keep).
+    :param port: Replace the port (omit to keep).
+    :param health_url: Replace the health URL (pass "" to clear, omit to keep).
+    """
+    from cptr.utils.services import (
+        ServiceError,
+        definitions,
+        resolve_id,
+        update_service as _update,
+    )
+
+    scope = await _service_user(__context__)
+    if isinstance(scope, str):
+        return scope
+    user_id, workspace = scope
+    try:
+        sid = await resolve_id(user_id, workspace, service_id=service_id, name=name)
+        services = await definitions(user_id, workspace)
+        current = next((s for s in services if s.get("id") == sid), None)
+        if current is None:
+            return "Error: service not found"
+        merged = {
+            "name": (name or current.get("name") or "") if service_id else current.get("name") or "",
+            "command": command if command is not None else current.get("command") or "",
+            "cwd": cwd if cwd is not None else current.get("cwd") or ".",
+            "port": port if port is not None else current.get("port"),
+            "health_url": health_url if health_url is not None else current.get("health_url") or "",
+        }
+        spec = await _update(user_id, workspace, sid, merged)
+    except ServiceError as exc:
+        return f"Error: {exc.message}"
+    return (
+        f"Service '{spec['name']}' updated (id {spec['id']}).\n"
+        f"Command: {spec['command']}\ncwd: {spec['cwd']}\nport: {spec.get('port')}\n"
+        f"health_url: {spec.get('health_url') or ''}"
+    )
+
+
+async def delete_service(name: str = "", service_id: str = "", *, __context__: dict) -> str:
+    """Remove a start/stop process (service) from this workspace's dashboard.
+    Stops it first if it is running. This only removes the dashboard entry.
+    :param name: Service name from list_services.
+    :param service_id: Service id from list_services (alternative to name).
+    """
+    from cptr.utils.services import ServiceError, delete_service as _delete, resolve_id
+
+    scope = await _service_user(__context__)
+    if isinstance(scope, str):
+        return scope
+    user_id, workspace = scope
+    try:
+        sid = await resolve_id(user_id, workspace, service_id=service_id, name=name)
+        await _delete(user_id, workspace, sid)
+    except ServiceError as exc:
+        return f"Error: {exc.message}"
+    return f"Service deleted ({sid})."
+
+
+async def service_logs(name: str, *, __context__: dict) -> str:
+    """Recent output from a declared workspace service.
+    :param name: Service name from list_services.
+    """
+    from cptr.utils.services import ServiceError, logs
+
+    scope = await _service_user(__context__)
+    if isinstance(scope, str):
+        return scope
+    user_id, workspace = scope
+    try:
+        return await logs(user_id, workspace, name=name)
+    except ServiceError as exc:
+        return f"Error: {exc.message}"
+
+
 async def send_input(task_id: str, input: str, *, __context__: dict) -> str:
     """Send input to a running task's stdin. Use for interactive prompts, REPLs, or control characters.
     :param task_id: The task ID returned by run_command.
@@ -1831,6 +2078,16 @@ def _resolve_path(path: str, workspace: str) -> Path:
     return full
 
 
+async def _emit_board_changed(user_id: str, workspace: str) -> None:
+    """Tell every open board about a task write. Best effort: the row is durable."""
+    try:
+        from cptr.socket.main import emit_jobs_changed
+
+        await emit_jobs_changed(user_id, workspace)
+    except Exception:
+        pass
+
+
 async def create_automation(
     name: str,
     prompt: str,
@@ -1838,56 +2095,65 @@ async def create_automation(
     *,
     __context__: dict,
 ) -> str:
-    """Create a scheduled automation that runs a prompt on a recurring or one-time schedule.
+    """Schedule a prompt to run on a recurring/one-time schedule (an AUTOMATION, NOT a start/stop process — use create_service for those).
+
+    This tool is only for prompts that should fire on a timer. If the user
+    wants "a process I can start and stop at will" (a server/daemon), use
+    create_service. The automation shows on the workspace board's
+    scheduled-tasks panel, where the human can run, pause or delete it.
+
     The rrule parameter must be a valid iCalendar RRULE string. Common examples:
     - Every day at 9am: "DTSTART:20250101T090000\\nRRULE:FREQ=DAILY"
     - Every Monday at 8am: "DTSTART:20250106T080000\\nRRULE:FREQ=WEEKLY;BYDAY=MO"
     - Every hour: "RRULE:FREQ=HOURLY;INTERVAL=1"
     - Once at a specific time: "DTSTART:20250415T140000\\nRRULE:FREQ=DAILY;COUNT=1"
     - First day of every month: "DTSTART:20250101T090000\\nRRULE:FREQ=MONTHLY;BYMONTHDAY=1"
-    :param name: A short descriptive name for the automation.
+    :param name: A short descriptive name for the task.
     :param prompt: The instructions/prompt to execute on each run.
     :param rrule: An iCalendar RRULE string defining the schedule.
     """
     workspace = __context__["workspace"]
     user_id = __context__["user_id"]
-    model_id = __context__.get("model_id", "")
+    model_id = __context__.get("full_model_id") or __context__.get("model_id", "")
 
     try:
-        import time
-        from cptr.models.automations import Automation as AutomationModel
-        from cptr.utils.automations import next_run_ns, next_n_runs_ns, validate_rrule
+        from cptr.models.jobs import KIND_TASK, STATUS_OPEN, TRIGGER_RRULE, Job
+        from cptr.utils.automations import next_n_runs_ns, next_run_ns, validate_rrule
+        from cptr.utils.config import now_ms
 
-        # Validate RRULE
+        name = (name or "").strip()
+        if not name:
+            return json.dumps({"error": "name is required"})
         try:
             validate_rrule(rrule)
         except ValueError as e:
             return json.dumps({"error": f"Invalid schedule: {e}"})
-
         if not model_id:
             return json.dumps({"error": "Could not detect model from current chat context."})
 
-        now_ns = int(time.time() * 1_000_000_000)
-        nxt = next_run_ns(rrule)
-
-        automation = await AutomationModel.create(
+        job = await Job.create(
             user_id=user_id,
-            name=name,
-            prompt=prompt,
-            model_id=model_id,
             workspace=workspace,
+            title=name,
+            kind=KIND_TASK,
+            executor=model_id,
+            trigger=TRIGGER_RRULE,
+            status=STATUS_OPEN,
             rrule=rrule,
-            next_run_at=nxt,
-            is_active=True,
-            created_at=now_ns,
+            trigger_at=next_run_ns(rrule),
+            payload=prompt,
+            source="chat",
+            origin_chat=__context__.get("chat_id"),
+            created_at=now_ms(),
         )
+        await _emit_board_changed(user_id, workspace)
         return json.dumps(
             {
                 "status": "success",
-                "id": automation.id,
-                "name": automation.name,
-                "model_id": automation.model_id,
-                "is_active": automation.is_active,
+                "id": job.id,
+                "name": job.title,
+                "model_id": job.executor,
+                "is_active": True,
                 "next_runs": next_n_runs_ns(rrule),
             }
         )
@@ -1901,35 +2167,42 @@ async def list_automations(
     *,
     __context__: dict,
 ) -> str:
-    """List scheduled automations for the current workspace.
+    """List scheduled tasks, with their status, schedule and next few fires.
     :param status: Filter by status: "active", "paused", or empty for all.
-    :param count: Maximum number of automations to return (default: 10).
+    :param count: Maximum number of tasks to return (default: 10).
     """
     workspace = __context__["workspace"]
     user_id = __context__["user_id"]
 
     try:
-        from cptr.models.automations import Automation as AutomationModel
+        from cptr.models.jobs import STATUS_OPEN, STATUS_PAUSED, Job
         from cptr.utils.automations import next_n_runs_ns
 
-        items, total = await AutomationModel.get_by_workspace(
-            user_id=user_id,
-            workspace=workspace or None,
-            status=status or None,
-            limit=count,
-        )
+        statuses = {"active": [STATUS_OPEN], "paused": [STATUS_PAUSED]}.get(status)
+        tasks = await Job.list_tasks(user_id, workspace or None, statuses=statuses)
+        # Only recurring schedules: a deferred one-off is a todo, and a run row
+        # is history. `list_tasks` already drops runs.
+        tasks = [t for t in tasks if t.trigger == "rrule"]
+        total = len(tasks)
+
         automations = []
-        for item in items:
+        for item in tasks[:count]:
+            try:
+                upcoming = next_n_runs_ns(item.rrule, 5)
+            except ValueError:
+                upcoming = []  # the rule has run out (COUNT exhausted)
+            runs = await Job.list_runs(item.id, limit=1)
+            prompt = item.payload or ""
             automations.append(
                 {
                     "id": item.id,
-                    "name": item.name,
-                    "prompt_snippet": item.prompt[:100] + ("..." if len(item.prompt) > 100 else ""),
-                    "model_id": item.model_id,
+                    "name": item.title,
+                    "prompt_snippet": prompt[:100] + ("..." if len(prompt) > 100 else ""),
+                    "model_id": item.executor,
                     "rrule": item.rrule,
-                    "is_active": item.is_active,
-                    "last_run_at": item.last_run_at,
-                    "next_runs": next_n_runs_ns(item.rrule),
+                    "is_active": item.status == STATUS_OPEN,
+                    "last_run_at": runs[0].created_at if runs else None,
+                    "next_runs": upcoming,
                 }
             )
         return json.dumps({"automations": automations, "total": total})
@@ -1946,52 +2219,49 @@ async def update_automation(
     *,
     __context__: dict,
 ) -> str:
-    """Update an existing automation. Only provided fields are changed.
-    :param automation_id: The ID of the automation to update.
+    """Update an existing scheduled task. Only provided fields are changed.
+    :param automation_id: The ID of the task to update.
     :param name: New name (optional).
     :param prompt: New prompt/instructions (optional).
     :param rrule: New iCalendar RRULE schedule string (optional).
     :param model_id: New model ID (optional).
     """
     try:
-        import time
-        from cptr.models.automations import Automation as AutomationModel
-        from cptr.utils.automations import next_run_ns, next_n_runs_ns, validate_rrule
+        from cptr.models.jobs import Job
+        from cptr.utils.automations import next_n_runs_ns, next_run_ns, validate_rrule
 
-        automation = await AutomationModel.get_by_id(automation_id)
-        if not automation:
-            return json.dumps({"error": "Automation not found"})
+        job = await Job.get_by_id(automation_id)
+        if not job or job.user_id != __context__["user_id"]:
+            return json.dumps({"error": "Task not found"})
 
-        kwargs = {}
+        values: dict = {}
         if name:
-            kwargs["name"] = name
+            values["title"] = name
         if prompt:
-            kwargs["prompt"] = prompt
+            values["payload"] = prompt
         if model_id:
-            kwargs["model_id"] = model_id
+            values["executor"] = model_id
         if rrule:
             try:
                 validate_rrule(rrule)
             except ValueError as e:
                 return json.dumps({"error": f"Invalid schedule: {e}"})
-            kwargs["rrule"] = rrule
-            kwargs["next_run_at"] = next_run_ns(rrule)
+            values["rrule"] = rrule
+            values["trigger_at"] = next_run_ns(rrule)
 
-        if not kwargs:
+        if not values:
             return json.dumps({"error": "No fields to update"})
 
-        now_ns = int(time.time() * 1_000_000_000)
-        success = await AutomationModel.update_by_id(automation_id, updated_at=now_ns, **kwargs)
-        if not success:
-            return json.dumps({"error": "Failed to update automation"})
+        if not await Job.update_by_id(automation_id, **values):
+            return json.dumps({"error": "Failed to update task"})
 
-        final_rrule = rrule or automation.rrule
+        await _emit_board_changed(job.user_id, job.workspace)
         return json.dumps(
             {
                 "status": "success",
                 "id": automation_id,
-                "updated_fields": list(kwargs.keys()),
-                "next_runs": next_n_runs_ns(final_rrule),
+                "updated_fields": list(values.keys()),
+                "next_runs": next_n_runs_ns(rrule or job.rrule),
             }
         )
     except Exception as e:
@@ -2003,28 +2273,39 @@ async def toggle_automation(
     *,
     __context__: dict,
 ) -> str:
-    """Pause or resume a scheduled automation. If active, it will be paused. If paused, it will be resumed.
-    :param automation_id: The ID of the automation to toggle.
+    """Pause or resume a scheduled task. If active, it will be paused. If paused, it will be resumed.
+    :param automation_id: The ID of the task to toggle.
     """
     try:
-        from cptr.models.automations import Automation as AutomationModel
+        from cptr.models.jobs import STATUS_OPEN, STATUS_PAUSED, Job
         from cptr.utils.automations import next_run_ns
+        from cptr.utils.task_scheduler import sync_legacy_toggle
 
-        automation = await AutomationModel.get_by_id(automation_id)
-        if not automation:
-            return json.dumps({"error": "Automation not found"})
+        job = await Job.get_by_id(automation_id)
+        if not job or job.user_id != __context__["user_id"]:
+            return json.dumps({"error": "Task not found"})
 
-        nxt = next_run_ns(automation.rrule) if not automation.is_active else None
-        toggled = await AutomationModel.toggle(automation_id, next_run_at=nxt)
-        if not toggled:
-            return json.dumps({"error": "Failed to toggle automation"})
+        if job.status == STATUS_OPEN:
+            # Pausing clears the due time: the row stays, but nothing fires.
+            await Job.update_status(automation_id, STATUS_PAUSED, trigger_at=None)
+            is_active = False
+        else:
+            await Job.update_status(
+                automation_id,
+                STATUS_OPEN,
+                trigger_at=next_run_ns(job.rrule) if job.rrule else None,
+            )
+            is_active = True
 
+        toggled = await Job.get_by_id(automation_id)
+        await sync_legacy_toggle(toggled)
+        await _emit_board_changed(job.user_id, job.workspace)
         return json.dumps(
             {
                 "status": "success",
                 "id": toggled.id,
-                "name": toggled.name,
-                "is_active": toggled.is_active,
+                "name": toggled.title,
+                "is_active": is_active,
             }
         )
     except Exception as e:
@@ -2036,24 +2317,25 @@ async def delete_automation(
     *,
     __context__: dict,
 ) -> str:
-    """Delete a scheduled automation and all its run history.
-    :param automation_id: The ID of the automation to delete.
+    """Delete a scheduled task and all its run history.
+    :param automation_id: The ID of the task to delete.
     """
     try:
-        from cptr.models.automations import Automation as AutomationModel
+        from cptr.models.jobs import Job
 
-        automation = await AutomationModel.get_by_id(automation_id)
-        if not automation:
-            return json.dumps({"error": "Automation not found"})
+        job = await Job.get_by_id(automation_id)
+        if not job or job.user_id != __context__["user_id"]:
+            return json.dumps({"error": "Task not found"})
 
-        name = automation.name
-        success = await AutomationModel.delete(automation_id)
-        if not success:
-            return json.dumps({"error": "Failed to delete automation"})
+        name = job.title
+        if not await Job.delete(automation_id):
+            return json.dumps({"error": "Failed to delete task"})
 
-        return json.dumps({"status": "success", "message": f'Automation "{name}" deleted'})
+        await _emit_board_changed(job.user_id, job.workspace)
+        return json.dumps({"status": "success", "message": f'Task "{name}" deleted'})
     except Exception as e:
         return json.dumps({"error": str(e)})
+
 
 
 # ── Workspace todo tools ────────────────────────────────────
@@ -2074,20 +2356,36 @@ async def list_workspace_todos(
     user_id = __context__["user_id"]
 
     try:
-        from cptr.models.todos import WorkspaceTodo
+        from cptr.models.jobs import STATUS_DONE, STATUS_OPEN, Job
 
-        todos = await WorkspaceTodo.list_for_workspace(user_id, workspace)
+        # Read `jobs`, not the legacy `workspace_todos` mirror: a todo added in
+        # the dashboard is a job with no mirror row, and the agent must see it.
+        jobs = await Job.list_tasks(user_id, workspace)
+        todos = [
+            j
+            for j in jobs
+            # A deferred todo is still a todo; a recurring schedule is a task
+            # of its own kind and lives on the Scheduled tab.
+            if j.trigger in ("manual", "at")
+        ]
         return json.dumps(
             {
                 "workspace": workspace,
                 "todos": [
                     {
-                        "id": t.id,
-                        "title": t.title,
-                        "status": t.status,
-                        "source": t.source,
+                        "id": j.id,
+                        "title": j.title,
+                        "status": j.status if j.status == STATUS_DONE else STATUS_OPEN,
+                        "source": j.source,
+                        # Extras the old mirror could not express: whether the
+                        # todo is waiting on a model, and when.
+                        **(
+                            {"deferred_to": j.executor, "deferred_at": j.trigger_at}
+                            if j.trigger == "at"
+                            else {}
+                        ),
                     }
-                    for t in todos
+                    for j in todos
                 ],
             }
         )
@@ -3380,6 +3678,14 @@ TOOLS: dict[str, dict] = {
     "run_command": {"fn": run_command},
     "send_input": {"fn": send_input},
     "kill_task": {"fn": kill_task},
+    "list_services": {"fn": list_services, "approval": "allow"},
+    "service_logs": {"fn": service_logs, "approval": "allow"},
+    "start_service": {"fn": start_service},
+    "stop_service": {"fn": stop_service},
+    "restart_service": {"fn": restart_service},
+    "create_service": {"fn": create_service},
+    "update_service": {"fn": update_service},
+    "delete_service": {"fn": delete_service},
     "create_automation": {"fn": create_automation},
     "update_automation": {"fn": update_automation},
     "toggle_automation": {"fn": toggle_automation},
@@ -3587,6 +3893,7 @@ async def timer(
     `cancel_on` prevents launch when `chat.read` or `chat.user_message`
     happens first in this chat. Omit it when timed work must run regardless.
     """
+    from cptr.models.jobs import KIND_TASK, STATUS_OPEN, TRIGGER_AT, Job
     from cptr.utils.timers import parse_timer_at
 
     if not prompt.strip():
@@ -3604,30 +3911,47 @@ async def timer(
     selected_events = list(dict.fromkeys(selected_events))
 
     full_model_id = __context__.get("full_model_id") or __context__["model_id"]
-    chat, _, _ = await _create_subagent_chat(
-        __context__["request"],
-        task=prompt,
-        context="",
-        workspace=__context__["workspace"],
-        model=full_model_id,
+
+    # A timer is a `trigger='at'` job whose destination is this conversation, so
+    # it appears on the task board under the chat it belongs to, survives a
+    # restart without any recovery step, and fires through the same claim as
+    # every other scheduled thing (it used to be a dormant child chat with
+    # `meta.timer_at`, which only the timer loop could see).
+    job = await Job.create(
         user_id=__context__["user_id"],
-        parent_chat_id=__context__["chat_id"],
-        child_type="timer",
-        deferred=True,
-        extra_meta={
-            "timer_at": due_at,
+        workspace=__context__["workspace"],
+        title=prompt.strip()[:120],
+        kind=KIND_TASK,
+        executor=full_model_id,
+        trigger=TRIGGER_AT,
+        trigger_at=due_at,
+        status=STATUS_OPEN,
+        payload=prompt,
+        parent_chat=__context__["chat_id"],
+        source="chat",
+        origin_chat=__context__["chat_id"],
+        meta={
+            # Marks it a *message delivered late* rather than an unattended run:
+            # see `build_prompt`, which then sends the text unchanged.
+            "timer": True,
             "cancel_on": selected_events,
-            "status": "pending",
-            "timer_parent_message_id": __context__.get("message_id"),
-            "timer_model_id": full_model_id,
+            "origin_message_id": __context__.get("message_id"),
         },
     )
+
+    try:
+        from cptr.socket.main import emit_jobs_changed
+
+        await emit_jobs_changed(job.user_id, job.workspace)
+    except Exception:
+        pass  # the timer is already durable; the board can catch up on reload
 
     from datetime import datetime, timezone
 
     return json.dumps(
         {
             "status": "set",
+            "job_id": job.id,
             "at": datetime.fromtimestamp(due_at / 1_000_000_000, timezone.utc)
             .isoformat()
             .replace("+00:00", "Z"),
@@ -3811,7 +4135,20 @@ BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
         "multi_edit_file",
         "write_file",
     ),
-    "terminal": ("run_command", "send_input", "check_task", "kill_task"),
+    "terminal": (
+        "run_command",
+        "send_input",
+        "check_task",
+        "kill_task",
+        "list_services",
+        "start_service",
+        "stop_service",
+        "restart_service",
+        "create_service",
+        "update_service",
+        "delete_service",
+        "service_logs",
+    ),
     "git": ("git_status", "git_log", "git_show", "git_diff", "git_blame"),
     "web": ("web_search", "read_url"),
     "browser": (
