@@ -5,6 +5,16 @@ export type Theme = 'dark' | 'light' | 'system' | 'bw' | 'bw-dark';
 /** Every value `theme` may take, in the order Settings lists them. */
 export const THEMES: readonly Theme[] = ['light', 'dark', 'bw', 'bw-dark', 'system'];
 
+/**
+ * The theme a browser that has never chosen starts on: black on white.
+ *
+ * It is the one palette that is legible on anything — a projector, a phone in
+ * daylight, an e-ink panel — so it is what an unknown display gets. The same
+ * value is the fallback in the pre-paint script (`app.html`), which cannot
+ * import this file; keep the two in step.
+ */
+export const DEFAULT_THEME: Theme = 'bw';
+
 /** Guard for a theme that came from outside: a cookie, an imported file, prefs. */
 export function isTheme(value: unknown): value is Theme {
 	return typeof value === 'string' && (THEMES as readonly string[]).includes(value);

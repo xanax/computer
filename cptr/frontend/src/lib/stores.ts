@@ -38,6 +38,7 @@ import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
 import { localPage } from '$lib/utils/localPage';
 import {
 	applyAppearance,
+	DEFAULT_THEME,
 	isTheme,
 	normalizeBorderContrast,
 	normalizeTerminalFontSize,
@@ -356,12 +357,27 @@ if (typeof window !== 'undefined') {
 	});
 }
 export const sidebarWidth = writable(220);
+
+/**
+ * What the cookie said when the app started, before anything could write it.
+ *
+ * `subscribeForPersistence()` writes the cookie on every theme change, and a
+ * subscription fires immediately — so by the time `loadPreferences()` runs, the
+ * cookie may hold the value this app just wrote, which would answer "this
+ * browser has chosen" for a browser that never chose anything. Deciding it once,
+ * here, is what lets a browser with no cookie of its own adopt the theme saved
+ * on the server (otherwise a new device would silently keep refusing the
+ * account's theme) and fall back to `DEFAULT_THEME` when the server has none.
+ */
+const themeAtLoad = readThemeCookie();
+
 /**
  * The active theme. The initial value comes from the theme cookie, which is
  * readable synchronously — so the app starts on the user's own palette instead
- * of the default and never repaints when preferences load. See theme-cookie.ts.
+ * of the default and never repaints when preferences load. With no cookie it is
+ * `DEFAULT_THEME` (black on white). See theme-cookie.ts.
  */
-export const theme = writable<Theme>(readThemeCookie() ?? 'dark');
+export const theme = writable<Theme>(themeAtLoad ?? DEFAULT_THEME);
 export const toolApprovalMode = writable<ToolApprovalMode>('auto');
 export const appVersion = writable('');
 export const lastSeenVersion = writable('');
@@ -594,14 +610,15 @@ export async function loadPreferences(): Promise<void> {
 		) as AppearancePreferences;
 		// The cookie wins over the server's copy: it is what this browser last
 		// chose, and it is already the store's current value in the normal case.
-		// A browser with no cookie adopts the server's theme and seeds its own.
-		const cookieTheme = readThemeCookie();
+		// A browser with no cookie of its own adopts the server's theme (the
+		// theme subscription then seeds the cookie); if the server has nothing
+		// either, the default in the store stands. See themeAtLoad above for why
+		// this does not re-read the cookie.
 		const savedTheme = appearance.theme ?? prefs.theme;
-		if (cookieTheme) {
-			theme.set(cookieTheme);
+		if (themeAtLoad) {
+			theme.set(themeAtLoad);
 		} else if (isTheme(savedTheme)) {
 			theme.set(savedTheme);
-			writeThemeCookie(savedTheme);
 		}
 		themeConfig.set(sanitizeThemeConfig(appearance.themeConfig));
 		if (prefs.sidebarOpen !== undefined) sidebarOpen.set(prefs.sidebarOpen as boolean);

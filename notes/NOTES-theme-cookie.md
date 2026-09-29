@@ -24,11 +24,12 @@ profile, which is the granularity a display preference actually has.
 | file | change |
 |---|---|
 | `cptr/frontend/src/lib/utils/theme-cookie.ts` | **new**: `THEME_COOKIE = 'cptr_theme'`, `readThemeCookie()`, `writeThemeCookie()` |
-| `cptr/frontend/src/app.html:15-65` | inline **pre-paint**: read the cookie, apply `mono`/`bw`/`bw-dark`/`dark` + `--app-bg`/`--app-fg` + `color-scheme`, and correct the `theme-color` meta |
-| `cptr/frontend/src/lib/stores.ts:364` | `theme` starts as `readThemeCookie() ?? 'dark'` instead of `'dark'` |
+| `cptr/frontend/src/app.html:15-70` | inline **pre-paint**: read the cookie, apply `mono`/`bw`/`bw-dark`/`dark` + `--app-bg`/`--app-fg` + `color-scheme`, correct the `theme-color` meta, and fall back to the default (`bw`) for a cookie that is missing or unknown |
+| `cptr/frontend/src/lib/stores.ts:364-385` | `theme` starts as `themeAtLoad ?? DEFAULT_THEME` — the cookie, else `bw` |
 | `cptr/frontend/src/lib/stores.ts:534` | every change writes the cookie (so it is never stale, whatever caused the change) |
-| `cptr/frontend/src/lib/stores.ts:598-605` | `loadPreferences()`: the cookie wins over the server; no cookie → adopt the server's and seed one |
-| `cptr/frontend/src/lib/utils/appearance.ts:6-11` | `THEMES` + `isTheme()` guard, so "is this string a theme" has one answer |
+| `cptr/frontend/static/manifest.json:11-12` | `background_color` / `theme_color` follow the default: `#ffffff` |
+| `cptr/frontend/src/lib/stores.ts:598-610` | `loadPreferences()`: the cookie wins over the server; no cookie → adopt the server's and seed one; nothing either → the default stands |
+| `cptr/frontend/src/lib/utils/appearance.ts:6-22` | `THEMES` + `isTheme()` guard, so "is this string a theme" has one answer, and `DEFAULT_THEME = 'bw'`, so "which palette does an unknown display get" has one too |
 | `cptr/frontend/src/lib/components/Settings/Appearance.svelte:272` | the imported-theme check now uses `isTheme()` (it had its own copy of the list) |
 
 The server copy is **still written and still read** — it is the fallback for a browser that has
@@ -38,14 +39,55 @@ inherits. Only precedence changed.
 ### Precedence
 
 ```
+at module load:
+  themeAtLoad = readThemeCookie()  ← asked once, before anything can write the cookie
+
 loadPreferences():
-  cookie present and valid  → use it                      (and it is already the store's value)
-  cookie absent             → use the server's, write it  (first run seeds the browser)
-  cookie invalid            → ignore it, use the server's, rewrite it  (repairs a hand-edited one)
+  themeAtLoad valid    → use it                                  (and it is already the store's value)
+  themeAtLoad absent   → the server's if it has one, else DEFAULT_THEME (`bw`)
+  themeAtLoad invalid  → ignored, i.e. treated as absent: the server's, else the default
 ```
 
 `theme.set()` on a valid cookie is a no-op in the normal path; it is there so that
-`loadPreferences()` is self-consistent even if the store was changed before prefs arrived.
+`loadPreferences()` is self-consistent even if the store was changed before prefs arrived. Whatever
+ends up in the store is then written back to the cookie by the theme subscription — including the
+default, so the *next* load of a fresh browser is painted from the cookie before the server has
+answered and the two cannot disagree.
+
+## The default is black on white
+
+A browser that has never chosen, on an account that has never saved a theme, is the one case where a
+palette has to come from nowhere. It is now `bw`: `DEFAULT_THEME` in `lib/utils/appearance.ts`,
+mirrored as a literal in the pre-paint script (an inline script cannot import the module — same
+duplication as the palette values, see below).
+
+It is the only palette with an argument for being the default rather than a taste: ink on paper
+reads on a projector, a phone in daylight and an e-ink panel alike. Until now the fallback was
+whatever `:root` in `app.css` happened to say — `#ffffff` background with a `#525252` foreground,
+i.e. "light" with washed-out text — so an unknown display got a half-way palette that is nobody's
+choice. The pre-paint now paints `bw` explicitly when the cookie is missing *or* names a theme this
+build does not know (classes `mono bw`, `#ffffff`/`#000000`, `color-scheme: light`) instead of
+leaving the first frame to `:root`, and `theme-color` (`#ffffff`) plus the manifest's
+`background_color`/`theme_color` follow it so the PWA splash and the browser chrome match the page.
+
+Nothing already chosen changes — a cookie, or a saved preference on an account with no cookie,
+still wins — so this only answers "and what if nothing has been chosen?".
+
+### "Has this browser chosen?" is asked once
+
+`subscribeForPersistence()` writes the cookie on every theme change, and a Svelte subscription fires
+immediately on subscribe, so `readThemeCookie()` returns the app's *own* last write once that has
+run. `loadPreferences()` used to re-read the cookie at call time, which is only safe while
+`initState()` keeps `loadPreferences()` before `subscribeForPersistence()` — and `initState()` is
+called again after login and after setup (`+layout.svelte`), by which time the cookie exists because
+this app wrote it. In a fresh browser that logs in after the first load, the account's saved theme
+would have been treated as "the browser has chosen" and never adopted. `themeAtLoad` is read at
+module load, before any writer exists, which makes the question well-posed instead of
+order-dependent.
+
+The earlier probe run could not tell the two apart: the server copy and the default were both
+`dark`, so a browser that ignored the server looked identical to one that adopted it. The runs below
+use a server value *different* from the default, which is the only way that case is visible.
 
 ## Evidence
 
@@ -61,8 +103,28 @@ is where the app ended up.
 | `light` | dark | nothing to apply, theme-color `#ffffff` | light | `light` |
 | `system` | dark | `dark`, bg `#0a0a0a` | `dark` | `system` |
 | `system` | light | nothing to apply, theme-color `#ffffff` | light | `system` |
-| `purple` | dark | **nothing applied** (`bg`/`fg`/class unset), theme-color left `#000000` | `dark` (server's), cookie **repaired** to `dark` | `dark` |
-| *(absent)* | dark | nothing to apply | `dark` (server's), cookie **seeded** `dark` | `dark` |
+| `purple` | dark | `mono bw`, bg `#ffffff`, fg `#000000` (the default: an unknown name is not a choice) | `dark` (server's), cookie **repaired** to `dark` | `dark` |
+| *(absent)* | dark | `mono bw`, bg `#ffffff`, fg `#000000`, theme-color `#ffffff` | `dark` (server's), cookie **seeded** `dark` | `dark` |
+
+The default itself, run against a server that has been told nothing (`PUT` with `theme: null`), so
+that the default is the only thing left to settle on — five runs, fresh Chrome each time
+(`.cptr/harness/verify-theme-default.sh`; the live preferences are copied first and restored after,
+because changing them is the point):
+
+| server pref | `cptr_theme` | first frame | settled |
+|---|---|---|---|
+| `dark` | *(absent)* | `mono bw`, `#ffffff`/`#000000` | `dark`, cookie seeded `dark` |
+| *(none)* | *(absent)* | `mono bw`, `#ffffff`/`#000000` | **`mono bw`**, bg `rgb(255,255,255)`, `--app-fg` `#000000`, theme-color `#ffffff`, cookie `bw` |
+| `dark` | `purple` | `mono bw` (default, *not* the server's — the pre-paint cannot know it) | `dark`, cookie repaired to `dark` |
+| *(none)* | `bw-dark` | `mono bw-dark`, `#000000`/`#ffffff` | `mono bw-dark`, bg `rgb(0,0,0)` |
+| `bw-dark` | *(absent)* | `mono bw` (default) | `mono bw-dark`, cookie seeded `bw-dark` |
+
+A screenshot of row 2 (`.cptr/harness/shots/theme-default-bw.png`) is the visual check that the
+default is ink on paper rather than a grey wash.
+
+The two `mono bw` rows against a `dark` server are the interesting ones: the first frame is painted
+before the server has been asked, so it shows the default and the app then adopts the saved theme —
+a repaint on that one load, once, after which the cookie is seeded and the first frame is right.
 
 Also verified in the same harness, before the pre-paint existed:
 
@@ -75,12 +137,16 @@ Harness additions (all in the gitignored `.cptr/harness/`, so nothing here is co
 `--cookie name=value` (edits the cookie before anything loads), `--pre <file>` (runs in
 `Page.addScriptToEvaluateOnNewDocument`, i.e. before the document exists), `--color-scheme`.
 Probes: `pre-record-prepaint.js`, `probe-theme-prepaint.js`, `probe-theme-cookie.js`,
-`probe-theme-ui-write.js`.
+`probe-theme-ui-write.js`, `verify-theme-default.sh`, `shot-default-theme.sh`.
 
-`root.dataset.themePrepaint` is set by the pre-paint script and is *deliberately* left in: the app
-re-applies the real appearance immediately, so it is the only record of what the first frame used —
-and for an ignored value (`purple`) it is the only way to see that the script ran at all and
-declined. It is one attribute on `<html>` per load.
+The pre-paint script sets two attributes on `<html>`, *deliberately* left in: `data-theme-cookie`
+is what the cookie held (`''` when the browser has never chosen) and `data-theme-prepaint` is the
+theme it painted. The app re-applies the real appearance immediately, so these are the only record
+of what the first frame used, and they are how a run tells "the default was painted" apart from
+"the server's theme was painted" when the repaint lands moments later. Two attributes per load.
+
+`pkill -f 'remote-debugging-port=9333'` run from `run_command` kills the shell that typed it (the
+pattern is in that shell's own command line). Put it in a script file, or the pkill never returns.
 
 ## Decisions, including the ones not taken
 
