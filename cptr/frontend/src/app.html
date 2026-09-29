@@ -12,6 +12,57 @@
 		<link rel="shortcut icon" href="/favicon.ico" />
 		<link rel="manifest" href="/manifest.json" />
 		<meta name="theme-color" content="#000000" />
+		<script>
+			/* Paint the first frame in the user's own theme.
+			   The theme lives in the `cptr_theme` cookie (utils/theme-cookie.ts), so it
+			   is readable synchronously here — before the bundle is even fetched.
+			   Without this the page shows the default paper palette and then repaints
+			   once the app applies the theme, which is a visible flash of the wrong
+			   theme on every load. The app re-applies the full appearance (colours,
+			   borders, text scale) from the real preference; this only has to be right
+			   about the page background and the browser's own chrome. Anything
+			   unexpected in the cookie is ignored rather than allowed to break the
+			   first paint. Kept after the `theme-color` meta so that it can correct it:
+			   a paper theme whose first frame is right but whose status bar is still
+			   black is only half painted. */
+			(function () {
+				try {
+					var match = document.cookie.match(/(?:^|;\s*)cptr_theme=([^;]*)/);
+					var declared = match ? decodeURIComponent(match[1]) : '';
+					var theme = declared;
+					var root = document.documentElement;
+					var bg = null;
+					if (theme === 'system') {
+						theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+					}
+					if (theme === 'bw' || theme === 'bw-dark') {
+						var ink = theme === 'bw-dark';
+						bg = ink ? '#000000' : '#ffffff';
+						root.classList.add('mono', theme);
+						root.style.setProperty('--app-bg', bg);
+						root.style.setProperty('--app-fg', ink ? '#ffffff' : '#000000');
+						root.style.colorScheme = ink ? 'dark' : 'light';
+					} else if (theme === 'dark') {
+						bg = '#0a0a0a';
+						root.classList.add('dark');
+						root.style.setProperty('--app-bg', bg);
+						root.style.setProperty('--app-fg', '#d4d4d4');
+						root.style.colorScheme = 'dark';
+					} else if (theme === 'light') {
+						bg = '#ffffff';
+					}
+					if (bg) {
+						var meta = document.querySelector('meta[name="theme-color"]');
+						if (meta) meta.setAttribute('content', bg);
+					}
+					// What the cookie said, for probes: the app re-applies the real
+					// preference, so this is the only record of what the first paint used.
+					root.dataset.themePrepaint = declared;
+				} catch (e) {
+					/* a broken cookie is not worth a broken first paint */
+				}
+			})();
+		</script>
 		<meta name="mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

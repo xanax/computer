@@ -2,6 +2,14 @@ import { setTextScale } from '$lib/utils/text-scale';
 
 export type Theme = 'dark' | 'light' | 'system' | 'bw' | 'bw-dark';
 
+/** Every value `theme` may take, in the order Settings lists them. */
+export const THEMES: readonly Theme[] = ['light', 'dark', 'bw', 'bw-dark', 'system'];
+
+/** Guard for a theme that came from outside: a cookie, an imported file, prefs. */
+export function isTheme(value: unknown): value is Theme {
+	return typeof value === 'string' && (THEMES as readonly string[]).includes(value);
+}
+
 /**
  * Monochrome (e-ink) themes. Each is a fixed ink/paper palette — `bw` is
  * black-on-white, `bw-dark` is white-on-black — with no grey tones at all:

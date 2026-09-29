@@ -25,6 +25,7 @@
 		normalizeTerminalFontSize,
 		deriveMutedTextColor,
 		isMonoResolved,
+		isTheme,
 		resolveThemeMode,
 		resolveThemeConfig,
 		sanitizeThemeConfig
@@ -268,11 +269,7 @@
 			if (!source || typeof source !== 'object') throw new Error('invalid theme');
 			validateImportedColors(source);
 			const importedConfig = sanitizeThemeConfig(source);
-			const importedTheme = ['system', 'light', 'dark', 'bw', 'bw-dark'].includes(
-				parsed?.theme
-			)
-				? (parsed.theme as Theme)
-				: null;
+			const importedTheme = isTheme(parsed?.theme) ? parsed.theme : null;
 			const importedScale =
 				typeof parsed?.textScale === 'number' && Number.isFinite(parsed.textScale)
 					? normalizeTextScale(parsed.textScale)

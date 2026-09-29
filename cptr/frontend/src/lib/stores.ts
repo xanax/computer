@@ -38,6 +38,7 @@ import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
 import { localPage } from '$lib/utils/localPage';
 import {
 	applyAppearance,
+	isTheme,
 	normalizeBorderContrast,
 	normalizeTerminalFontSize,
 	sanitizeThemeConfig,
@@ -45,6 +46,7 @@ import {
 	type Theme,
 	type ThemeConfig
 } from '$lib/utils/appearance';
+import { readThemeCookie, writeThemeCookie } from '$lib/utils/theme-cookie';
 
 export type { AppearancePreferences, Theme, ThemeConfig };
 
@@ -354,7 +356,12 @@ if (typeof window !== 'undefined') {
 	});
 }
 export const sidebarWidth = writable(220);
-export const theme = writable<Theme>('dark');
+/**
+ * The active theme. The initial value comes from the theme cookie, which is
+ * readable synchronously — so the app starts on the user's own palette instead
+ * of the default and never repaints when preferences load. See theme-cookie.ts.
+ */
+export const theme = writable<Theme>(readThemeCookie() ?? 'dark');
 export const toolApprovalMode = writable<ToolApprovalMode>('auto');
 export const appVersion = writable('');
 export const lastSeenVersion = writable('');
@@ -519,7 +526,12 @@ function subscribeForPersistence() {
 	homeState.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
-	theme.subscribe(() => {
+	theme.subscribe((value) => {
+		// The cookie is this browser's own copy, written on every change so a
+		// reload (or a second tab, or an offline start) gets the right palette
+		// without waiting for the server. The server copy is still kept as the
+		// fallback for a browser that has never set the cookie.
+		writeThemeCookie(value);
 		if (get(stateLoaded)) persistPreferences();
 	});
 	themeConfig.subscribe(() => {
@@ -580,7 +592,17 @@ export async function loadPreferences(): Promise<void> {
 		const appearance = (
 			prefs.appearance && typeof prefs.appearance === 'object' ? prefs.appearance : {}
 		) as AppearancePreferences;
-		if (appearance.theme || prefs.theme) theme.set((appearance.theme ?? prefs.theme) as Theme);
+		// The cookie wins over the server's copy: it is what this browser last
+		// chose, and it is already the store's current value in the normal case.
+		// A browser with no cookie adopts the server's theme and seeds its own.
+		const cookieTheme = readThemeCookie();
+		const savedTheme = appearance.theme ?? prefs.theme;
+		if (cookieTheme) {
+			theme.set(cookieTheme);
+		} else if (isTheme(savedTheme)) {
+			theme.set(savedTheme);
+			writeThemeCookie(savedTheme);
+		}
 		themeConfig.set(sanitizeThemeConfig(appearance.themeConfig));
 		if (prefs.sidebarOpen !== undefined) sidebarOpen.set(prefs.sidebarOpen as boolean);
 		if (prefs.sidebarWidth !== undefined) sidebarWidth.set(prefs.sidebarWidth as number);
@@ -651,10 +673,7 @@ export async function loadPreferences(): Promise<void> {
 								tab.type !== 'browser' ||
 								(tab.browserSessionId !== undefined && aliveBrowsers.has(tab.browserSessionId))
 						)
-						.filter(
-							(tab) =>
-								tab.type !== 'chat' || !tab.path || !closedChatIds.has(tab.path)
-						);
+						.filter((tab) => tab.type !== 'chat' || !tab.path || !closedChatIds.has(tab.path));
 					const liveIds = new Set(liveTabs.map((tab) => tab.id));
 					return {
 						...group,
