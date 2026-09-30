@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 
@@ -15,6 +16,23 @@ from cptr.utils.db import get_db
 
 def _uuid() -> str:
     return str(uuid.uuid4())
+
+
+def normalize_path(path: str) -> str:
+    """Absolute, symlink-free form of a workspace path ("" when unusable).
+
+    Rows outlive the code that wrote them: older ones kept the path exactly as
+    the client sent it, so `~`, a relative path and a symlinked prefix can all
+    point at the same workspace. Comparing normalised forms is what makes a
+    lookup by chat workspace path land on the row the dashboard edits.
+    """
+    raw = (path or "").strip()
+    if not raw:
+        return ""
+    try:
+        return os.path.realpath(os.path.expanduser(raw))
+    except (OSError, ValueError):
+        return ""
 
 
 class Workspace(Base):
@@ -54,6 +72,36 @@ class Workspace(Base):
                 )
             )
             return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_user_path(user_id: str, path: str) -> Workspace | None:
+        """Newest row for a user whose path resolves to `path` (or None)."""
+        target = normalize_path(path)
+        if not target:
+            return None
+        matches = [
+            workspace
+            for workspace in await Workspace.get_by_user(user_id)
+            if normalize_path(workspace.path) == target
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda ws: ws.updated_at or ws.created_at or 0)
+
+    @staticmethod
+    def prompt_from(row: Workspace | None) -> str:
+        """The workspace's dashboard description, if it has one."""
+        data = (row.data if row else None) or {}
+        prompt = data.get("prompt") if isinstance(data, dict) else None
+        return prompt.strip() if isinstance(prompt, str) else ""
+
+    @staticmethod
+    async def get_prompt(user_id: str, path: str) -> str:
+        """The short description a workspace injects at the start of its chats."""
+        if not user_id or not path:
+            return ""
+        row = await Workspace.get_by_user_path(user_id, path)
+        return Workspace.prompt_from(row)
 
     @staticmethod
     async def upsert(user_id: str, path: str, name: str, data: dict) -> Workspace:

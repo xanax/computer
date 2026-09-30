@@ -71,6 +71,7 @@
 		staged_status?: string;
 		unstaged_status?: string;
 		binary?: boolean;
+		large?: boolean;
 		additions?: number;
 		deletions?: number;
 	};
@@ -136,6 +137,10 @@
 	let selectedPr = $state<GitPr | null>(null);
 	let selectedPrDetail = $state<GitPr | null>(null);
 	let fileDiff = $state<DiffFile[]>([]);
+	let diffTruncated = $state(false);
+	// Bumped whenever the visible diff changes so a late response cannot
+	// paint a file the user has already navigated away from.
+	let diffToken = 0;
 	let prCapabilities = $state<GitPrCapabilities | null>(null);
 	let currentPr = $state<GitPr | null>(null);
 	let prs = $state<GitPr[]>([]);
@@ -271,6 +276,7 @@
 			if (!stillExists) {
 				selectedFile = null;
 				fileDiff = [];
+				diffTruncated = false;
 				showDiff = false;
 			}
 		}
@@ -344,7 +350,7 @@
 			!selectedFile &&
 			window.innerWidth >= 768
 		) {
-			const f = [...stagedFiles, ...unstagedFiles][0];
+			const f = [...stagedFiles, ...unstagedFiles].find((file) => !file.large && !file.binary);
 			if (f) selectFile(f.path, f.staged, f.status === 'untracked');
 		}
 	});
@@ -353,10 +359,18 @@
 		await gitStatusStore.refresh({ force });
 	}
 
+	function applyDiff(token: number, files: DiffFile[] | undefined, truncated: boolean) {
+		if (token !== diffToken) return;
+		fileDiff = files ?? [];
+		diffTruncated = truncated || fileDiff.some((file) => file.truncated);
+	}
+
 	async function selectFile(path: string, staged: boolean, untracked: boolean = false) {
+		const token = ++diffToken;
 		selectedFile = path;
 		selectedCommit = null;
 		showDiff = true;
+		diffTruncated = false;
 		try {
 			const params = new URLSearchParams({
 				root: workspacePath,
@@ -365,24 +379,29 @@
 				ignore_whitespace: String($hideWhitespaceChanges)
 			});
 			if (untracked) params.set('untracked', 'true');
-			const d = (await getGitDiff(params.toString())) as { files?: DiffFile[] };
-			fileDiff = d.files ?? [];
+			const d = (await getGitDiff(params.toString())) as {
+				files?: DiffFile[];
+				truncated?: boolean;
+			};
+			applyDiff(token, d.files, Boolean(d.truncated));
 		} catch {
-			fileDiff = [];
+			applyDiff(token, [], false);
 		}
 	}
 
 	async function selectCommit(c: Commit) {
+		const token = ++diffToken;
 		selectedCommit = c;
 		selectedFile = null;
 		showDiff = true;
+		diffTruncated = false;
 		try {
 			const d = (await getGitShow(workspacePath, c.hash, $hideWhitespaceChanges)) as {
-				diff?: { files?: DiffFile[] };
+				diff?: { files?: DiffFile[]; truncated?: boolean };
 			};
-			fileDiff = d.diff?.files ?? [];
+			applyDiff(token, d.diff?.files, Boolean(d.diff?.truncated));
 		} catch {
-			fileDiff = [];
+			applyDiff(token, [], false);
 		}
 	}
 
@@ -515,7 +534,9 @@
 		selectedCommit = null;
 		if (v !== 'pullRequests') selectedPr = null;
 		if (v !== 'pullRequests') selectedPrDetail = null;
+		diffToken += 1;
 		fileDiff = [];
+		diffTruncated = false;
 		if (v === 'history') loadHistory();
 		if (v === 'pullRequests') {
 			if (!branchData) loadBranches();
@@ -566,6 +587,7 @@
 			flash($t('git.committed'));
 			selectedFile = null;
 			fileDiff = [];
+			diffTruncated = false;
 		} catch (e) {
 			flash(e instanceof Error ? e.message : 'Commit failed');
 		} finally {
@@ -768,8 +790,10 @@
 				files?: DiffFile[];
 			};
 			fileDiff = d.files ?? [];
+			diffTruncated = false;
 		} catch (e) {
 			fileDiff = [];
+			diffTruncated = false;
 			flash(e instanceof Error ? e.message : 'Could not load pull request diff');
 		} finally {
 			prDiffLoading = false;
@@ -804,6 +828,7 @@
 		selectedCommit = null;
 		selectedFile = null;
 		fileDiff = [];
+		diffTruncated = false;
 		prChecks = [];
 		showDiff = true;
 		if (!pr) return;
@@ -818,6 +843,7 @@
 		selectedCommit = null;
 		selectedFile = null;
 		fileDiff = [];
+		diffTruncated = false;
 		prChecks = [];
 		if (!branchData) await loadBranches();
 		seedCreatePullRequest();
@@ -831,6 +857,7 @@
 		selectedPr = null;
 		selectedPrDetail = null;
 		fileDiff = [];
+		diffTruncated = false;
 		prChecks = [];
 		loadPullRequests();
 	}
@@ -1254,6 +1281,7 @@
 		if (selectedFile === path) {
 			selectedFile = null;
 			fileDiff = [];
+			diffTruncated = false;
 		}
 		flash($t('git.discarded'));
 		await refresh();
@@ -2062,7 +2090,11 @@
 												}}>{fp.name}</span
 											>
 										</span>
-										{#if file.binary}
+										{#if file.large}
+											<span class="shrink-0 text-[0.625rem] text-gray-400 dark:text-gray-600"
+												>{$t('git.largeFile')}</span
+											>
+										{:else if file.binary}
 											<span class="shrink-0 text-[0.625rem] font-mono font-bold {sc.color}"
 												>{sc.char}</span
 											>
@@ -2661,7 +2693,7 @@
 										</div>
 								{/if}
 							</div>
-						{:else if fileDiff.length}
+						{:else if (fileDiff.length || diffTruncated) && (view !== 'history' || selectedCommit)}
 							<div
 								class="hidden md:flex items-center h-6 px-2 border-b border-gray-100 dark:border-white/4 shrink-0"
 							>
@@ -2682,19 +2714,28 @@
 								>
 							</div>
 							<div class="flex-1 overflow-auto">
-								<div class="diff-content" class:diff-content-split={$diffDisplayMode === 'split'}>
-									{#each fileDiff as df}
-										{#if fileDiff.length > 1}
-											<div
-												class="px-2 py-1 text-[0.625rem] text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-white/4 sticky top-0 z-10 font-medium"
-												style="background: var(--app-bg); border-color: var(--app-border);"
-											>
-												{df.path}
-											</div>
-										{/if}
-										<DiffHunkList hunks={df.hunks} path={df.path} />
-									{/each}
-								</div>
+								{#if fileDiff.some((df) => df.hunks.length > 0)}
+									<div class="diff-content" class:diff-content-split={$diffDisplayMode === 'split'}>
+										{#each fileDiff as df}
+											{#if fileDiff.length > 1}
+												<div
+													class="px-2 py-1 text-[0.625rem] text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-white/4 sticky top-0 z-10 font-medium"
+													style="background: var(--app-bg); border-color: var(--app-border);"
+												>
+													{df.path}
+												</div>
+											{/if}
+											<DiffHunkList hunks={df.hunks} path={df.path} />
+										{/each}
+									</div>
+								{/if}
+								{#if diffTruncated}
+									<div
+										class="px-3 py-6 text-center text-[0.6875rem] text-gray-400 dark:text-gray-600"
+									>
+										{$t('git.diffTooLarge')}
+									</div>
+								{/if}
 							</div>
 						{:else}
 							<div class="flex items-center justify-center h-full">

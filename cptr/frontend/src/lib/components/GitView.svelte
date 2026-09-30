@@ -25,6 +25,7 @@
 		status: string;
 		staged: boolean;
 		binary: boolean;
+		truncated: boolean;
 		diffFiles: DiffFile[];
 		additions: number;
 		deletions: number;
@@ -108,6 +109,22 @@
 			const previousExpansion = new Map(reviewFiles.map((file) => [file.key, file.expanded]));
 			const nextFiles = await Promise.all(
 				(status.files ?? []).map(async (file) => {
+					const key = fileKey(file);
+					if (file.large) {
+						return {
+							key,
+							path: file.path,
+							status: file.status,
+							staged: file.staged,
+							binary: false,
+							truncated: true,
+							diffFiles: [],
+							additions: 0,
+							deletions: 0,
+							expanded: previousExpansion.get(key) ?? false
+						};
+					}
+
 					const params = new URLSearchParams({
 						root,
 						file: file.path,
@@ -117,25 +134,30 @@
 					if (file.status === 'untracked') params.set('untracked', 'true');
 
 					let diffFiles: DiffFile[] = [];
+					let truncated = false;
 					try {
-						const diff = (await getGitDiff(params.toString())) as { files?: DiffFile[] };
+						const diff = (await getGitDiff(params.toString())) as {
+							files?: DiffFile[];
+							truncated?: boolean;
+						};
 						diffFiles = diff.files ?? [];
+						truncated = Boolean(diff.truncated) || diffFiles.some((item) => item.truncated);
 					} catch {
 						diffFiles = [];
 					}
 
 					const counts = countDiffStats(diffFiles);
-					const key = fileKey(file);
 					return {
 						key,
 						path: file.path,
 						status: file.status,
 						staged: file.staged,
 						binary: file.binary ?? false,
+						truncated,
 						diffFiles,
 						additions: counts.additions,
 						deletions: counts.deletions,
-						expanded: previousExpansion.get(key) ?? true
+						expanded: previousExpansion.get(key) ?? !truncated
 					};
 				})
 			);
@@ -176,7 +198,8 @@
 					path: diffFile.path,
 					status: 'modified',
 					staged: false,
-					binary: diffFile.hunks.length === 0,
+					binary: diffFile.hunks.length === 0 && !diffFile.truncated,
+					truncated: Boolean(diffFile.truncated),
 					diffFiles: [diffFile],
 					additions: counts.additions,
 					deletions: counts.deletions,
@@ -525,7 +548,11 @@
 										>
 									{/if}
 								</div>
-								{#if file.binary}
+								{#if file.truncated && file.diffFiles.every((diffFile) => diffFile.hunks.length === 0)}
+									<span class="shrink-0 text-[0.6875rem] text-gray-400 dark:text-gray-600"
+										>{$t('git.largeFile')}</span
+									>
+								{:else if file.binary}
 									<span
 										class="shrink-0 font-mono text-[0.6875rem] font-medium text-gray-500 dark:text-gray-400"
 										>{statusChar(file.status)}</span
@@ -555,7 +582,13 @@
 									class="mb-1 overflow-x-auto border-y border-gray-100 bg-white font-mono text-[0.6875rem] leading-[1.125rem] dark:border-white/4 dark:bg-black"
 								>
 									<div class="diff-content" class:diff-content-split={$diffDisplayMode === 'split'}>
-										{#if file.diffFiles.some((diffFile) => diffFile.hunks.length > 0)}
+										{#if file.truncated && file.diffFiles.every((diffFile) => diffFile.hunks.length === 0)}
+											<div
+												class="px-3 py-8 text-center text-[0.6875rem] text-gray-400 dark:text-gray-600"
+											>
+												{$t('git.diffTooLarge')}
+											</div>
+										{:else if file.diffFiles.some((diffFile) => diffFile.hunks.length > 0)}
 											{#each file.diffFiles as diffFile}
 												{#if file.diffFiles.length > 1}
 													<div

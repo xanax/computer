@@ -218,9 +218,14 @@ class AutomationRun(Base):
         chat_id: str | None = None,
         error: str | None = None,
         created_at: int = 0,
+        run_id: str | None = None,
     ) -> AutomationRun:
+        """Record a run. ``run_id`` lets the caller reuse the ``jobs`` row's id,
+        which is what makes the two tables reconcilable during the one-release
+        dual-write (migration 0010)."""
         async with await get_db() as db:
             run = AutomationRun(
+                id=run_id or _uuid(),
                 automation_id=automation_id,
                 chat_id=chat_id,
                 status=status,
@@ -231,6 +236,24 @@ class AutomationRun(Base):
             await db.commit()
             await db.refresh(run)
             return run
+
+    @staticmethod
+    async def settle(
+        run_id: str,
+        status: str,
+        chat_id: str | None = None,
+        error: str | None = None,
+    ) -> bool:
+        """Close a run record opened by :meth:`create`."""
+        async with await get_db() as db:
+            values: dict = {"status": status, "error": error}
+            if chat_id:
+                values["chat_id"] = chat_id
+            result = await db.execute(
+                update(AutomationRun).where(AutomationRun.id == run_id).values(**values)
+            )
+            await db.commit()
+            return result.rowcount > 0
 
     @staticmethod
     async def get_latest(automation_id: str) -> AutomationRun | None:

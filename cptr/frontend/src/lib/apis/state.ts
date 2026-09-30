@@ -57,6 +57,118 @@ export const saveWorkspaceToolServers = (path: string, toolServers: string[]) =>
 		{ ...jsonBody({ toolServers }), method: 'PUT' }
 	);
 
+// ── Workspace prompt ────────────────────────────────────────────
+
+/**
+ * The short description of what a workspace is for. It is shown on the
+ * workspace's dashboard and injected at the start of every chat started in it.
+ */
+export interface WorkspacePrompt {
+	path: string;
+	prompt: string;
+}
+
+export const getWorkspacePrompt = (path: string) =>
+	fetchJSON<WorkspacePrompt>(`/api/state/workspace/prompt?path=${encodeURIComponent(path)}`);
+
+export const saveWorkspacePrompt = (path: string, prompt: string) =>
+	fetchJSON<WorkspacePrompt & { status: string }>(
+		`/api/state/workspace/prompt?path=${encodeURIComponent(path)}`,
+		{ ...jsonBody({ prompt }), method: 'PUT' }
+	);
+
+// ── Workspace services ──────────────────────────────────────────
+
+export interface WorkspaceService {
+	id: string;
+	name: string;
+	command: string;
+	cwd: string;
+	port: number | null;
+	health_url: string;
+	status: 'running' | 'stopped' | 'unhealthy';
+	pid: number | null;
+	url: string;
+	healthy: boolean | null;
+}
+
+export interface UnmanagedService {
+	command_session_id: string;
+	command: string;
+	cwd: string;
+	pid: number;
+	created_at: number;
+}
+
+export interface WorkspaceServices {
+	path: string;
+	services: WorkspaceService[];
+	unmanaged: UnmanagedService[];
+}
+
+export interface WorkspaceServiceInput {
+	name: string;
+	command: string;
+	cwd: string;
+	port: number | null;
+	health_url: string;
+}
+
+const servicesPath = (path: string) =>
+	`/api/state/workspace/services?path=${encodeURIComponent(path)}`;
+
+export const getWorkspaceServices = (path: string) =>
+	fetchJSON<WorkspaceServices>(servicesPath(path));
+
+export const createWorkspaceService = (path: string, body: WorkspaceServiceInput) =>
+	fetchJSON<WorkspaceService>(servicesPath(path), { ...jsonBody(body), method: 'POST' });
+
+export const updateWorkspaceService = (path: string, id: string, body: WorkspaceServiceInput) =>
+	fetchJSON<WorkspaceService>(
+		`/api/state/workspace/services/${encodeURIComponent(id)}?path=${encodeURIComponent(path)}`,
+		{ ...jsonBody(body), method: 'PUT' }
+	);
+
+export const deleteWorkspaceService = (path: string, id: string) =>
+	fetchJSON<{ status: string }>(
+		`/api/state/workspace/services/${encodeURIComponent(id)}?path=${encodeURIComponent(path)}`,
+		{ method: 'DELETE' }
+	);
+
+export const startWorkspaceService = (path: string, id: string) =>
+	fetchJSON<WorkspaceService>(
+		`/api/state/workspace/services/${encodeURIComponent(id)}/start?path=${encodeURIComponent(path)}`,
+		{ method: 'POST' }
+	);
+
+export const stopWorkspaceService = (path: string, id: string) =>
+	fetchJSON<WorkspaceService>(
+		`/api/state/workspace/services/${encodeURIComponent(id)}/stop?path=${encodeURIComponent(path)}`,
+		{ method: 'POST' }
+	);
+
+export const restartWorkspaceService = (path: string, id: string) =>
+	fetchJSON<WorkspaceService>(
+		`/api/state/workspace/services/${encodeURIComponent(id)}/restart?path=${encodeURIComponent(path)}`,
+		{ method: 'POST' }
+	);
+
+export const stopUnmanagedService = (path: string, sessionId: string) =>
+	fetchJSON<{ status: string }>(
+		`/api/state/workspace/services/unmanaged/${encodeURIComponent(sessionId)}/stop?path=${encodeURIComponent(path)}`,
+		{ method: 'POST' }
+	);
+
+export const adoptUnmanagedService = (
+	path: string,
+	sessionId: string,
+	body: { name: string; port: number | null; health_url: string }
+) =>
+	fetchJSON<WorkspaceService>(
+		`/api/state/workspace/services/unmanaged/${encodeURIComponent(sessionId)}/adopt?path=${encodeURIComponent(path)}`,
+		{ ...jsonBody(body), method: 'POST' }
+	);
+
 // ── Welcome page ────────────────────────────────────────────────
 
 export const getWelcome = () => fetchJSON<Record<string, unknown>>('/api/state/welcome');

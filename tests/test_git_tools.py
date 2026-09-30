@@ -107,6 +107,32 @@ def test_log_with_path_and_grep_filters(git_repo):
     assert [e["message"] for e in log_grep] == ["fix b"]
 
 
+def test_parse_diff_caps_huge_patch():
+    lines = ["diff --git a/big b/big", "@@ -0,0 +1,5000 @@"]
+    lines += [f"+line {i}" for i in range(5000)]
+    parsed = gitlib._parse_diff("\n".join(lines))
+    assert parsed["truncated"] is True
+    total = sum(len(hunk["lines"]) for item in parsed["files"] for hunk in item["hunks"])
+    assert total == gitlib._MAX_DIFF_LINES
+    assert parsed["files"][0]["truncated"] is True
+
+
+def test_large_untracked_file_is_not_inlined(git_repo):
+    root = str(git_repo.path)
+    payload = b"x\n" * ((gitlib._MAX_TEXT_COUNT_BYTES // 2) + 100)
+    (git_repo.path / "big.txt").write_bytes(payload)
+
+    status = _run(gitlib.status(root))
+    entry = next(item for item in status["files"] if item["path"] == "big.txt")
+    assert entry["large"] is True
+    assert "additions" not in entry
+    assert entry.get("binary") is not True
+
+    diff = _run(gitlib.diff(root, "big.txt", untracked=True))
+    assert diff["truncated"] is True
+    assert diff["files"] == [{"path": "big.txt", "hunks": [], "truncated": True}]
+
+
 def test_diff_text_and_ref(git_repo):
     root = str(git_repo.path)
     git_repo.commit("a.txt", "one\n", "first")

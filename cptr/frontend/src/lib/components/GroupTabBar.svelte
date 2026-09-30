@@ -16,6 +16,7 @@
 		splitCurrentTab,
 		setSplitDirection,
 		sidebarOpen,
+		orderWorkspaceTabs,
 		type EditorGroup,
 		type Tab
 	} from '$lib/stores';
@@ -92,7 +93,17 @@
 	type TabDragPayload = { tabId: string; groupId: string };
 
 	// Chats are surfaced in the sidebar (under each workspace), not as tabs.
-	const displayTabs = $derived((group?.tabs ?? []).filter((tab) => tab.type !== 'chat'));
+	// In a workspace the bar is Dash, Files, then open files and other editors.
+	const displayTabs = $derived.by(() => {
+		const tabs = (group?.tabs ?? []).filter((tab) => tab.type !== 'chat');
+		return home ? tabs : orderWorkspaceTabs(tabs);
+	});
+	const pinnedTabs = $derived(
+		home ? [] : displayTabs.filter((tab) => tab.type === 'dash' || tab.type === 'files')
+	);
+	const movableTabs = $derived(
+		home ? displayTabs : displayTabs.filter((tab) => tab.type !== 'dash' && tab.type !== 'files')
+	);
 
 	const isActiveGroup = $derived(home ? homeActive : $activeWorkspace?.activeGroupId === group?.id);
 
@@ -100,6 +111,8 @@
 		switch (tab.type) {
 			case 'home':
 				return 'spark';
+			case 'dash':
+				return 'table';
 			case 'files':
 				return 'folder';
 			case 'terminal':
@@ -115,6 +128,12 @@
 			default:
 				return 'page';
 		}
+	}
+
+	function tabLabel(tab: Tab): string {
+		if (tab.type === 'dash') return 'dash';
+		if (tab.type === 'files') return 'files';
+		return tab.label;
 	}
 
 	function handleTabClick(tab: Tab) {
@@ -377,6 +396,40 @@
 	});
 </script>
 
+{#snippet tabButton(tab: Tab)}
+	{@const isActive = tab.id === group.activeTabId}
+	<button
+		class="flex items-center gap-1.5 px-2.5 h-7 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-all duration-100
+			{isActive
+			? 'bg-gray-200/50 text-gray-900 dark:bg-white/8 dark:text-white'
+			: 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}"
+		data-tab-id={tab.id}
+		onpointerdown={() => handleTabClick(tab)}
+		onclick={() => handleTabClick(tab)}
+		oncontextmenu={(e) => handleContextMenu(e, tab)}
+	>
+		<Icon name={tabIconName(tab)} size={14} />
+		<span class="max-w-30 overflow-hidden text-ellipsis">{tabLabel(tab)}</span>
+		{#if tab.unsaved}<span class="w-1.5 h-1.5 rounded-full bg-gray-400 shrink-0"></span>{/if}
+		{#if !tab.permanent}
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<span
+				class="flex items-center justify-center w-4 h-4 rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 dark:hover:bg-white/10 dark:hover:text-white"
+				onpointerdown={(e) => e.stopPropagation()}
+				onclick={(e) => handleClose(e, tab.id)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') handleClose(e, tab.id);
+				}}
+				role="button"
+				tabindex="-1"
+				aria-label={$t('bar.closeTab')}
+			>
+				<Icon name="xmark" size={12} />
+			</span>
+		{/if}
+	</button>
+{/snippet}
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="flex items-center h-9 px-1.5 gap-1 shrink-0 select-none border-b transition-colors duration-100
@@ -399,43 +452,14 @@
 		</button>
 	{/if}
 
-	<!-- Tabs -->
+	<!-- Tabs. Dash and Files stay pinned; the rest can be reordered. -->
 	<div class="flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto group-tabs-row py-0.5">
+		{#each pinnedTabs as tab (tab.id)}
+			{@render tabButton(tab)}
+		{/each}
 		<div bind:this={tabsEl} class="flex items-center gap-0.5 shrink-0">
-			{#each displayTabs as tab (tab.id)}
-				{@const isActive = tab.id === group.activeTabId}
-				<button
-					class="flex items-center gap-1.5 px-2.5 h-7 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-all duration-100
-						{isActive
-						? 'bg-gray-200/50 text-gray-900 dark:bg-white/8 dark:text-white'
-						: 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}"
-					data-tab-id={tab.id}
-					onpointerdown={() => handleTabClick(tab)}
-					onclick={() => handleTabClick(tab)}
-					oncontextmenu={(e) => handleContextMenu(e, tab)}
-				>
-					<Icon name={tabIconName(tab)} size={14} />
-					<span class="max-w-30 overflow-hidden text-ellipsis">
-						{tab.type === 'files' ? ($activeWorkspace?.name ?? $t('bar.files')) : tab.label}
-					</span>
-					{#if tab.unsaved}<span class="w-1.5 h-1.5 rounded-full bg-gray-400 shrink-0"></span>{/if}
-					{#if !tab.permanent}
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<span
-							class="flex items-center justify-center w-4 h-4 rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 dark:hover:bg-white/10 dark:hover:text-white"
-							onpointerdown={(e) => e.stopPropagation()}
-							onclick={(e) => handleClose(e, tab.id)}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') handleClose(e, tab.id);
-							}}
-							role="button"
-							tabindex="-1"
-							aria-label={$t('bar.closeTab')}
-						>
-							<Icon name="xmark" size={12} />
-						</span>
-					{/if}
-				</button>
+			{#each movableTabs as tab (tab.id)}
+				{@render tabButton(tab)}
 			{/each}
 		</div>
 

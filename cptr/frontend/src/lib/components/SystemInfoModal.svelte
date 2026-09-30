@@ -105,9 +105,9 @@
 	}
 </script>
 
-<Modal {onclose} class="w-full max-w-[26.25rem] mx-4">
-	<div class="px-4 py-3.5">
-		<div class="mb-3 flex items-baseline justify-between gap-3">
+<Modal {onclose} full class="flex flex-col">
+	<div class="flex min-h-0 flex-1 flex-col px-4 py-3.5 md:px-6 md:py-5">
+		<div class="mb-3 flex shrink-0 items-start justify-between gap-3">
 			<div class="min-w-0">
 				<h2 class="text-sm font-medium text-gray-900 dark:text-white">{$t('system.infoTitle')}</h2>
 				{#if welcomeData?.hostname}
@@ -116,28 +116,41 @@
 					</p>
 				{/if}
 			</div>
+			<button
+				type="button"
+				class="shrink-0 rounded-lg border border-gray-300 px-2 py-0.5 font-mono text-[0.6875rem] leading-4 text-gray-500 transition-colors hover:border-gray-400 hover:bg-gray-200/60 hover:text-gray-700 dark:border-white/20 dark:text-gray-500 dark:hover:bg-white/6 dark:hover:text-gray-300"
+				title={$t('common.close')}
+				aria-label={$t('common.close')}
+				onclick={onclose}
+			>
+				✕
+			</button>
 		</div>
 
-		{#if loading}
-			<div class="flex h-28 items-center justify-center">
-				<Spinner size={18} />
-			</div>
-		{:else if welcomeData?.system}
-			<SystemInfo
-				system={welcomeData.system}
-				processes={welcomeData.processes ?? []}
-				serverPid={welcomeData.pid}
-				onchanged={refresh}
-				defaultOpen
-			/>
-		{:else}
-			<div class="py-8 text-center text-xs text-gray-400 dark:text-gray-600">
-				{$t('system.unavailable')}
-			</div>
-		{/if}
+		<!-- The body is the only scrolling region, so the process list can run
+		     past the fold on a phone without pushing the restart controls away. -->
+		<div class="-mx-4 min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 md:-mx-6 md:px-6">
+			{#if loading}
+				<div class="flex h-28 items-center justify-center">
+					<Spinner size={18} />
+				</div>
+			{:else if welcomeData?.system}
+				<SystemInfo
+					system={welcomeData.system}
+					processes={welcomeData.processes ?? []}
+					serverPid={welcomeData.pid}
+					onchanged={refresh}
+					defaultOpen
+				/>
+			{:else}
+				<div class="py-8 text-center text-xs text-gray-400 dark:text-gray-600">
+					{$t('system.unavailable')}
+				</div>
+			{/if}
+		</div>
 
 		<div
-			class="mt-4 flex items-center justify-between gap-3 border-t border-gray-100 pt-3 dark:border-white/6"
+			class="mt-4 flex shrink-0 items-center justify-between gap-3 border-t border-gray-100 pt-3 dark:border-white/6"
 		>
 			<span class="min-w-0 text-[0.625rem] leading-snug text-gray-400 dark:text-gray-600">
 				{#if restarting}

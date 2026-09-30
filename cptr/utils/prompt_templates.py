@@ -46,6 +46,27 @@ HOME_SYSTEM_PROMPT = (
 )
 
 
+def format_workspace_prompt(text: str) -> str:
+    """The block a workspace's own description is injected as ("" when unset)."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    return f"[WORKSPACE PROMPT]\n{text}"
+
+
+async def load_workspace_prompt(user_id: str | None, workspace: str) -> str:
+    """The short 'what is this workspace' description set on its dashboard."""
+    if not user_id or not workspace:
+        return ""
+    try:
+        from cptr.models import Workspace
+
+        return await Workspace.get_prompt(user_id, workspace)
+    except Exception:
+        logger.debug("[workspace_prompt] lookup failed", exc_info=True)
+        return ""
+
+
 def _get_file_tree(workspace: str, max_entries: int = 200) -> str:
     """Generate a compact file tree listing for the workspace."""
     ws = Path(workspace)
@@ -214,6 +235,9 @@ def _format_cptr_context(
             "- When you build or start something the user can look at (a web app, a dev or "
             "static server, any page), open it with open_browser instead of handing over a URL "
             "or a link to click: it puts the page in front of them automatically.",
+            "- Long-lived servers belong to the workspace. Use list_services, start_service, "
+            "and stop_service. Do not start a second uvicorn, vite, npm run dev, or "
+            "http.server with run_command when a service already covers it.",
             "- If the user asks to download, save or send a file to their own computer, use "
             "create_download_link with its workspace path (write the file first if it does not "
             "exist yet): it returns a download card the user can click in their own browser.",
@@ -263,6 +287,8 @@ def _build_template_variables(
     skills_enabled: bool = True,
     home: str | None = None,
     shell: str | None = None,
+    workspace_prompt: str = "",
+    workspace_services: str = "",
 ) -> dict[str, str]:
     """Build the dict of template variable values for the current context."""
     ws_path = Path(workspace) if workspace else None
@@ -286,6 +312,8 @@ def _build_template_variables(
     return {
         "WORKSPACE_NAME": _workspace_name(ws_path),
         "WORKSPACE_PATH": str(ws_path) if ws_path else "",
+        "WORKSPACE_PROMPT": format_workspace_prompt(workspace_prompt),
+        "WORKSPACE_SERVICES": workspace_services,
         "FILE_TREE": _get_file_tree(workspace) if workspace else "",
         "INSTRUCTIONS": instructions_block,
         "MEMORY": memory,
@@ -375,6 +403,27 @@ async def load_system_prompt(
     if memory and "{{MEMORY}}" not in template:
         template = template.rstrip() + "\n\n{{MEMORY}}"
 
+    # The workspace's own description opens every conversation here. A template
+    # that already places it keeps its own position; otherwise it leads the
+    # prompt, ahead of instructions and memory, so the model knows where it is
+    # before it reads anything else.
+    workspace_prompt = await load_workspace_prompt(user_id, workspace)
+    if workspace_prompt and "{{WORKSPACE_PROMPT}}" not in template:
+        template = "{{WORKSPACE_PROMPT}}\n\n" + template.lstrip()
+
+    from cptr.utils.services import services_prompt
+
+    workspace_services = await services_prompt(user_id, workspace)
+    if workspace_services and "{{WORKSPACE_SERVICES}}" not in template:
+        if "{{WORKSPACE_PROMPT}}" in template:
+            template = template.replace(
+                "{{WORKSPACE_PROMPT}}",
+                "{{WORKSPACE_PROMPT}}\n\n{{WORKSPACE_SERVICES}}",
+                1,
+            )
+        else:
+            template = "{{WORKSPACE_SERVICES}}\n\n" + template.lstrip()
+
     try:
         skills_enabled = (await Config.get("skills.enabled")) not in (False, "false", "0")
     except Exception:
@@ -390,5 +439,14 @@ async def load_system_prompt(
         except Exception:
             logger.debug("[system_prompt] Failed to resolve user identity", exc_info=True)
 
-    variables = _build_template_variables(workspace, model, memory, skills_enabled, home, shell)
+    variables = _build_template_variables(
+        workspace,
+        model,
+        memory,
+        skills_enabled,
+        home,
+        shell,
+        workspace_prompt,
+        workspace_services,
+    )
     return _render_system_template(template, variables)

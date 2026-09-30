@@ -1,14 +1,26 @@
-"""Durable one-shot timers backed by dormant internal child chats."""
+"""Timers: `at` parsing, and the fold for timers that predate the job queue.
+
+A timer used to be a *dormant internal child chat*: a `Chat` row carrying
+`meta.type='timer'`, woken by its own worker loop (`timer_worker_loop`), which
+polled every second and wrote a user message plus an assistant placeholder into
+the parent chat. As of the unified job queue, `timer()` writes a `trigger='at'`
+job instead (`cptr/utils/tools.py`), so there is nothing left to poll and that
+loop is gone.
+
+What remains here:
+
+- `parse_timer_at` — the `at` grammar (`10s`, `in 5 minutes`, RFC 3339), shared
+  by the `timer` tool and `defer_workspace_todo`;
+- `fold_legacy_timers` — a boot sweep that moves any child chat that was already
+  waiting into `jobs`, so a pre-0010 timer still fires.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import time
 from datetime import datetime
-
-from cptr.env import TIMER_POLL_INTERVAL
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +34,6 @@ _TIME_UNITS_NS = {
     "h": 60 * 60 * 1_000_000_000,
     "d": 24 * 60 * 60 * 1_000_000_000,
 }
-_manager_lock = asyncio.Lock()
 
 
 def parse_timer_at(value: str) -> int:
@@ -57,31 +68,6 @@ def parse_timer_at(value: str) -> int:
     return due_at
 
 
-async def cancel_timers_for_event(event) -> None:
-    """Cancel matching dormant children after a committed parent-chat event."""
-    subject = event.subject or {}
-    if subject.get("type") != "chat" or not subject.get("id"):
-        return
-
-    from cptr.models import Chat
-    from cptr.utils.config import now_ms
-
-    async with _manager_lock:
-        timers = await Chat.get_pending_timers(str(subject["id"]))
-        for timer in timers:
-            meta = dict(timer.meta or {})
-            if event.event not in (meta.get("cancel_on") or []):
-                continue
-            meta.update(
-                {
-                    "status": "cancelled",
-                    "timer_cancelled_at": time.time_ns(),
-                    "timer_cancelled_by": event.event,
-                }
-            )
-            await Chat.update_meta(timer.id, meta, now_ms())
-
-
 async def _set_timer_status(chat_id: str, status: str, **fields) -> None:
     from cptr.models import Chat
     from cptr.utils.config import now_ms
@@ -95,131 +81,79 @@ async def _set_timer_status(chat_id: str, status: str, **fields) -> None:
     await Chat.update_meta(chat_id, meta, now_ms())
 
 
-async def _launch_timer(timer, app) -> None:
+async def fold_legacy_timers() -> int:
+    """Move pre-0010 timers that are still waiting into the job queue.
+
+    Old timers survive as dormant child chats, but nothing creates or polls
+    those any more, so one left mid-wait would never wake. Each pending row
+    becomes the job it would have become anyway: same instant, same model, same
+    destination chat, same `cancel_on` semantics (`Job.cancel_cancellable` now
+    enforces those on the job row). The chat is then marked `folded` so a second
+    boot does not duplicate the work, and rows caught mid-launch by a restart
+    are settled as errors, as `recover_timers` used to do.
+
+    Returns how many timers were folded, for the boot log.
+    """
     from cptr.models import Chat, ChatMessage
-    from cptr.socket.main import emit_to_user
-    from cptr.utils.chat_export import export_chat_to_file
-    from cptr.utils.chat_task import get_pending_input_lock, start_task
+    from cptr.models.jobs import KIND_TASK, STATUS_OPEN, TRIGGER_AT, Job
+
     from cptr.utils.config import now_ms
-    from cptr.utils.identity import internal_request_for_user
-    from cptr.utils.model_targets import resolve_model_target
 
-    async with _manager_lock:
-        timer = await Chat.get_by_id(timer.id)
-        if not timer:
-            return
+    folded = 0
+    for timer in await Chat.get_timers("pending"):
         meta = dict(timer.meta or {})
-        status = meta.get("status") or meta.get("timer_status")
-        if status != "pending" or int(meta.get("timer_at") or 0) > time.time_ns():
-            return
-        request = await internal_request_for_user(app, timer.user_id)
-
-        parent = await Chat.get_by_id(meta.get("parent_chat_id", ""))
-        if not parent:
-            await _set_timer_status(timer.id, "error", timer_error="parent chat no longer exists")
-            return
-
-        task_message = await ChatMessage.get_by_id(timer.current_message_id)
-        if not task_message:
-            await _set_timer_status(timer.id, "error", timer_error="timer task message is missing")
-            return
-
-        async with get_pending_input_lock(parent.id):
-            parent_messages = await ChatMessage.get_all_by_chat(parent.id)
-            active = any(
-                message.role == "assistant" and not message.done for message in parent_messages
+        due_at = int(meta.get("timer_at") or 0)
+        parent_chat = meta.get("parent_chat_id") or ""
+        message = await ChatMessage.get_by_id(timer.current_message_id or "")
+        if message is not None and message.role != "user":
+            # A launch interrupted by a restart left the child chat pointing at
+            # an empty assistant placeholder; the prompt is its parent, and the
+            # placeholder is dropped so the chat does not look mid-thought.
+            prompt_message = await ChatMessage.get_by_id(message.parent_id or "")
+            if not message.done:
+                await ChatMessage.delete(message.id)
+                await Chat.update_current_message(
+                    timer.id, message.parent_id or "", now_ms()
+                )
+            message = prompt_message
+        content = (message.content or "") if message else ""
+        if not due_at or not parent_chat or not content.strip():
+            await _set_timer_status(
+                timer.id,
+                "error",
+                timer_error="folded at boot: timer is missing its time, chat or prompt",
             )
-            if active:
-                return
+            continue
 
-            try:
-                target = await resolve_model_target(meta["timer_model_id"], app.state)
-            except Exception as exc:  # model configuration can change while a timer waits
-                await _set_timer_status(timer.id, "error", timer_error=f"model unavailable: {exc}")
-                return
-
-            done_assistants = [
-                message
-                for message in parent_messages
-                if message.role == "assistant" and message.done
-            ]
-            parent_id = (
-                done_assistants[-1].id if done_assistants else meta.get("timer_parent_message_id")
-            )
-            prompt_msg = await ChatMessage.create(
-                chat_id=parent.id,
-                role="user",
-                content=task_message.content,
-                parent_id=parent_id,
-                model=target.full_model_id,
-                meta={"internal": True, "type": "timer"},
-                created_at=now_ms(),
-            )
-            assistant_msg = await ChatMessage.create(
-                chat_id=parent.id,
-                role="assistant",
-                content="",
-                parent_id=prompt_msg.id,
-                model=target.full_model_id,
-                done=False,
-                created_at=now_ms(),
-            )
-            await Chat.update_current_message(parent.id, assistant_msg.id, now_ms())
-
-            meta.update(
-                {
-                    "status": "completed",
-                    "timer_completed_at": time.time_ns(),
-                }
-            )
-            await Chat.update_meta(timer.id, meta, now_ms())
-
-        await export_chat_to_file(request, timer.id)
-        await export_chat_to_file(request, parent.id)
-
-        await emit_to_user(
-            timer.user_id,
-            {
-                "chat_id": parent.id,
-                "message_id": assistant_msg.id,
-                "pending_inputs_processed": True,
+        job = await Job.create(
+            user_id=timer.user_id,
+            workspace=meta.get("workspace") or "",
+            title=content.strip()[:120],
+            kind=KIND_TASK,
+            executor=meta.get("timer_model_id") or "human",
+            trigger=TRIGGER_AT,
+            trigger_at=due_at,
+            status=STATUS_OPEN,
+            payload=content,
+            parent_chat=parent_chat,
+            source="chat",
+            origin_chat=parent_chat,
+            meta={
+                # Same markers the `timer` tool writes, so this behaves as a
+                # late message to the parent chat rather than a fresh run.
+                "timer": True,
+                "cancel_on": list(meta.get("cancel_on") or []),
+                "origin_message_id": meta.get("timer_parent_message_id"),
+                "folded_from_timer_chat": timer.id,
             },
         )
-        start_task(
-            request,
-            message_id=assistant_msg.id,
-            chat_id=parent.id,
-            user_id=timer.user_id,
-            workspace=meta.get("workspace", ""),
-            target=target,
+        await _set_timer_status(
+            timer.id,
+            "folded",
+            folded_into_job=job.id,
+            timer_folded_at=time.time_ns(),
         )
-
-
-async def timer_worker_loop(app) -> None:
-    """Poll durable pending timers and wake their parent chats."""
-    from cptr.models import Chat
-
-    logger.info("Timer worker started (poll interval: %ds)", TIMER_POLL_INTERVAL)
-    while True:
-        try:
-            due = await Chat.get_due_timers(time.time_ns())
-            for timer in due:
-                await _launch_timer(timer, app)
-        except Exception:
-            logger.exception("Timer worker error")
-        await asyncio.sleep(TIMER_POLL_INTERVAL)
-
-
-async def recover_timers() -> None:
-    """Do not replay work that was already launched before a process restart."""
-    from cptr.models import Chat, ChatMessage
-    from cptr.utils.config import now_ms
-
-    for timer in await Chat.get_timers("pending"):
-        current = await ChatMessage.get_by_id(timer.current_message_id)
-        if current and current.role == "assistant":
-            await ChatMessage.delete(current.id)
-            await Chat.update_current_message(timer.id, current.parent_id, now_ms())
+        folded += 1
 
     for timer in await Chat.get_timers("running"):
         await _set_timer_status(
@@ -228,3 +162,7 @@ async def recover_timers() -> None:
             timer_completed_at=time.time_ns(),
             timer_error="interrupted by restart",
         )
+
+    if folded:
+        logger.info("Folded %d legacy timer(s) into the job queue", folded)
+    return folded

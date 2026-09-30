@@ -18,6 +18,7 @@ export interface GitFile {
 	staged_status?: string;
 	unstaged_status?: string;
 	binary?: boolean;
+	large?: boolean;
 	additions?: number;
 	deletions?: number;
 }

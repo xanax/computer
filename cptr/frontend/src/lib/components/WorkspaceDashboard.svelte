@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { onDestroy, onMount } from 'svelte';
-	import { getAutomations, type AutomationData } from '$lib/apis/automations';
 	import { getChats, type ChatInfo } from '$lib/apis/chat';
 	import {
 		addTodo,
@@ -18,10 +17,13 @@
 		deferJob,
 		deleteJob,
 		getJobs,
+		patchJob,
 		type JobData,
 		type JobStatus
 	} from '$lib/apis/jobs';
-	import { openChatTab } from '$lib/stores';
+	import { getWorkspacePrompt, saveWorkspacePrompt } from '$lib/apis/state';
+	import { get } from 'svelte/store';
+	import { currentWorkspace, openChatTab, setActiveTab } from '$lib/stores';
 	import { chatModels, defaultModel, refreshChatState } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { t } from '$lib/i18n';
@@ -30,6 +32,7 @@
 	import DeferWhenPicker from './DeferWhenPicker.svelte';
 	import Icon from './Icon.svelte';
 	import Spinner from './common/Spinner.svelte';
+	import WorkspaceServices from './WorkspaceServices.svelte';
 
 	interface Props {
 		workspace: string;
@@ -37,15 +40,34 @@
 
 	let { workspace }: Props = $props();
 
-	let upcoming = $state<AutomationData[]>([]);
 	let chats = $state<ChatInfo[]>([]);
 	let todos = $state<TodoData[]>([]);
 	let jobs = $state<JobData[]>([]);
 	let pendingRequests = $state<TodoRequestData[]>([]);
+
+	// ── Workspace prompt ────────────────────────────────────────
+	//
+	// What this workspace is, in the user's words. It is read back here and
+	// prepended to the system prompt of every chat started in this workspace,
+	// so the one place to change "what this project is" is this box.
+	let workspacePrompt = $state('');
+	let promptEditing = $state(false);
+	let promptDraft = $state('');
+	let promptBusy = $state(false);
+	let promptSaved = $state(false);
 	let newTodoTitle = $state('');
 	let todosBusy = $state(false);
 	let loading = $state(true);
 	let failed = $state(false);
+
+	/**
+	 * Row titles are ellipsised to a single line, which is exactly the wrong
+	 * trade for an approval: the half of the sentence that says what is being
+	 * asked for is the half that gets cut. One row open at a time, keyed by id —
+	 * clicking a label drops its full text open in place.
+	 */
+	let expandedRowId = $state<string | null>(null);
+	let expandedRequestId = $state<string | null>(null);
 
 	// ── Deferred / agent-run state ──────────────────────────────
 
@@ -150,26 +172,54 @@
 		await Promise.allSettled([loadTodos(ws), loadJobs(ws)]);
 	}
 
+	// ── Workspace prompt ────────────────────────────────────────
+
+	function startPromptEdit() {
+		promptDraft = workspacePrompt;
+		promptSaved = false;
+		promptEditing = true;
+	}
+
+	function cancelPromptEdit() {
+		promptDraft = workspacePrompt;
+		promptEditing = false;
+		promptSaved = false;
+	}
+
+	async function handleSavePrompt() {
+		if (promptBusy) return;
+		promptBusy = true;
+		try {
+			const res = await saveWorkspacePrompt(workspace, promptDraft.trim());
+			workspacePrompt = res.prompt ?? '';
+			promptDraft = workspacePrompt;
+			promptEditing = false;
+			promptSaved = true;
+			setTimeout(() => (promptSaved = false), 2000);
+		} catch {
+			// Keep the box open with the user's text so the save can be retried.
+		} finally {
+			promptBusy = false;
+		}
+	}
+
 	$effect(() => {
 		const ws = workspace;
 		if (!ws) return;
 		loading = true;
 		failed = false;
 
+		// One read for the whole board: the schedules are rows of it too, so the
+		// dashboard no longer needs the automations API it used to call.
 		void Promise.allSettled([
-			getAutomations(ws),
 			getChats(ws, 8, 0, 'updated_at', 'desc', false),
 			getTodos(ws),
-			getJobs(ws)
-		]).then(([autosResult, chatsResult, todosResult, jobsResult]) => {
-			const autos = autosResult.status === 'fulfilled' ? autosResult.value.items : [];
+			getJobs(ws),
+			getWorkspacePrompt(ws)
+		]).then(([chatsResult, todosResult, jobsResult, promptResult]) => {
 			const chatList = chatsResult.status === 'fulfilled' ? chatsResult.value.chats : [];
-			failed =
-				autosResult.status === 'rejected' && chatsResult.status === 'rejected';
+			failed = chatsResult.status === 'rejected' && jobsResult.status === 'rejected';
 
-			upcoming = autos
-				.filter((a) => a.is_active && a.next_run_at != null)
-				.sort((a, b) => (a.next_run_at ?? 0) - (b.next_run_at ?? 0));
 			chats = chatList;
 			if (todosResult.status === 'fulfilled') {
 				todos = todosResult.value.todos;
@@ -177,6 +227,12 @@
 			}
 			if (jobsResult.status === 'fulfilled') {
 				jobs = jobsResult.value.jobs;
+			}
+			// A half-typed edit survives a reload of the board; only a read that
+			// disagrees with what is on screen replaces it.
+			if (promptResult.status === 'fulfilled') {
+				workspacePrompt = promptResult.value.prompt ?? '';
+				if (!promptEditing) promptDraft = workspacePrompt;
 			}
 			loading = false;
 		});
@@ -291,7 +347,6 @@
 		if (tickTimer) clearInterval(tickTimer);
 	});
 
-
 	/**
 	 * "Sep 20, 19:08 · in 4 hours", worded once for the whole app so a pick and the
 	 * row it lands on read identically. The board mixes units: timestamps are ms,
@@ -301,10 +356,12 @@
 		return formatWhenAt(ms, $t);
 	}
 
-	/** Automations carry ns timestamps, like a job's trigger. */
-	function formatNextRun(ns: number): string {
-		return formatWhen(nsToMs(ns));
-	}
+	/** A schedule on the board: open, with a next occurrence to show. */
+	const upcoming = $derived(
+		jobs
+			.filter((job) => job.trigger === 'rrule' && job.status === 'open' && job.trigger_at != null)
+			.sort((a, b) => (a.trigger_at ?? 0) - (b.trigger_at ?? 0))
+	);
 
 	function formatChatTime(ts: number): string {
 		const diffSec = Math.floor((Date.now() - ts) / 1000);
@@ -319,6 +376,16 @@
 	}
 
 	function openWorkspace() {
+		const ws = get(currentWorkspace);
+		if (ws) {
+			for (const group of ws.groups) {
+				const files = group.tabs.find((tab) => tab.type === 'files');
+				if (files) {
+					setActiveTab(files.id, group.id);
+					return;
+				}
+			}
+		}
 		goto(`/?workspace=${encodeURIComponent(workspace)}`);
 	}
 
@@ -332,8 +399,13 @@
 		goto(`/?workspace=${encodeURIComponent(workspace)}`);
 	}
 
+	/** The Tasks tab, unscoped: every workspace's board on one page. */
 	function manageScheduled() {
 		goto('/scheduled');
+	}
+
+	function openTask(id: string) {
+		goto(`/scheduled/${id}`);
 	}
 
 	/** One row action at a time: every board write shares this latch. */
@@ -434,9 +506,7 @@
 		// bare date reads like a deadline the user set.
 		if (job.status === 'open' && job.trigger === 'at') {
 			// A human row is not a run waiting to happen: it waits for the user.
-			bits.push(
-				$t(isManualReminder(job) ? 'dashboard.reminderWaiting' : 'dashboard.jobScheduled')
-			);
+			bits.push($t(isManualReminder(job) ? 'dashboard.reminderWaiting' : 'dashboard.jobScheduled'));
 		} else {
 			const label = statusLabel(job.status);
 			if (label) bits.push(label);
@@ -537,6 +607,14 @@
 		});
 	}
 
+	function toggleRow(rowId: string) {
+		expandedRowId = expandedRowId === rowId ? null : rowId;
+	}
+
+	function toggleRequest(id: string) {
+		expandedRequestId = expandedRequestId === id ? null : id;
+	}
+
 	function requestLabel(req: TodoRequestData): string {
 		if (req.action === 'add') return req.title || $t('dashboard.newChat');
 		const title = req.title || req.todo_id || '';
@@ -565,7 +643,7 @@
 		<div class="dashboard-actions">
 			<button class="btn-secondary" onclick={manageScheduled}>
 				<Icon name="clock" size={14} />
-				{$t('dashboard.manageScheduled')}
+				{$t('tasks.manage')}
 			</button>
 			<button class="btn-primary" onclick={newChat}>
 				<Icon name="plus" size={14} />
@@ -582,6 +660,54 @@
 		{:else if failed}
 			<p class="dashboard-empty">{$t('dashboard.noUpcoming')}</p>
 		{:else}
+			<!-- What this workspace is. Read here, and prepended to the system
+			     prompt of every chat started in this workspace. -->
+			<section class="dashboard-section">
+				<div class="prompt-head">
+					<h2 class="section-title">
+						<Icon name="quote" size={15} />
+						{$t('dashboard.promptTitle')}
+					</h2>
+					<div class="prompt-head-actions">
+						{#if promptSaved}
+							<span class="prompt-saved">{$t('settings.saved')}</span>
+						{/if}
+						{#if !promptEditing}
+							<button class="inline-link" onclick={startPromptEdit}>
+								{workspacePrompt ? $t('common.edit') : $t('common.add')}
+							</button>
+						{/if}
+					</div>
+				</div>
+
+				{#if promptEditing}
+					<textarea
+						class="prompt-input"
+						rows="4"
+						bind:value={promptDraft}
+						placeholder={$t('dashboard.promptPlaceholder')}
+					></textarea>
+					<div class="prompt-actions">
+						<button class="btn-primary" onclick={handleSavePrompt} disabled={promptBusy}>
+							{$t('common.save')}
+						</button>
+						<button class="btn-secondary" onclick={cancelPromptEdit} disabled={promptBusy}>
+							{$t('common.cancel')}
+						</button>
+					</div>
+				{:else}
+					<div class="prompt-card" class:empty={!workspacePrompt}>
+						<p class="prompt-text">
+							{workspacePrompt || $t('dashboard.promptEmpty')}
+						</p>
+					</div>
+				{/if}
+
+				<p class="prompt-hint">{$t('dashboard.promptHint')}</p>
+			</section>
+
+			<WorkspaceServices {workspace} />
+
 			<section class="dashboard-section">
 				<h2 class="section-title">
 					<Icon name="list" size={15} />
@@ -633,9 +759,7 @@
 										<button
 											class="todo-check {row.done ? 'done' : ''}"
 											onclick={() => handleToggleTodo(row)}
-											aria-label={row.done
-												? $t('dashboard.reopen')
-												: $t('dashboard.complete')}
+											aria-label={row.done ? $t('dashboard.reopen') : $t('dashboard.complete')}
 											title={row.done ? $t('dashboard.reopen') : $t('dashboard.complete')}
 										>
 											{#if row.done}
@@ -644,14 +768,28 @@
 										</button>
 									{/if}
 									<div class="row-main">
-										<span
-											class="row-label {row.done ? 'done' : ''}"
-											class:todo-chat={row.source === 'chat'}
+										<button
+											class="row-title-btn"
+											onclick={() => toggleRow(row.id)}
+											aria-expanded={expandedRowId === row.id}
+											title={row.title}
 										>
-											{row.title}
-										</span>
+											<Icon
+												name={expandedRowId === row.id ? 'chevron-down' : 'chevron-right'}
+												size={11}
+											/>
+											<span
+												class="row-label {row.done ? 'done' : ''}"
+												class:todo-chat={row.source === 'chat'}
+												class:expanded={expandedRowId === row.id}
+											>
+												{row.title}
+											</span>
+										</button>
 										{#if detail}
-											<span class="row-detail">{detail}</span>
+											<span class="row-detail" class:expanded={expandedRowId === row.id}>
+												{detail}
+											</span>
 										{/if}
 									</div>
 									{#if chatId}
@@ -746,9 +884,20 @@
 					</h3>
 					<ul class="card-list">
 						{#each pendingRequests as req (req.id)}
+							{@const open = expandedRequestId === req.id}
 							<li>
-								<div class="todo-row">
-									<span class="row-label pending">{requestLabel(req)}</span>
+								<div class="todo-row" class:expanded={open}>
+									<button
+										class="row-title-btn"
+										onclick={() => toggleRequest(req.id)}
+										aria-expanded={open}
+										title={requestLabel(req)}
+									>
+										<Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
+										<span class="row-label pending" class:expanded={open}>
+											{requestLabel(req)}
+										</span>
+									</button>
 									<button
 										class="btn-approve"
 										onclick={() => handleResolveRequest(req.id, true)}
@@ -786,10 +935,10 @@
 					<ul class="card-list">
 						{#each upcoming as task (task.id)}
 							<li>
-								<button class="row" onclick={manageScheduled}>
+								<button class="row" onclick={() => openTask(task.id)}>
 									<Icon name="clock" size={15} />
-									<span class="row-label">{task.name}</span>
-									<span class="row-meta">{formatNextRun(task.next_run_at!)}</span>
+									<span class="row-label">{task.title}</span>
+									<span class="row-meta">{formatWhen(nsToMs(task.trigger_at!))}</span>
 								</button>
 							</li>
 						{/each}
@@ -1034,6 +1183,15 @@
 		color: var(--app-fg-muted);
 	}
 
+	/* Dropped open: the single-line ellipsis is what hid the request, so once the
+	   user asks for the whole thing, wrap it and let the row grow. */
+	.row-label.expanded {
+		white-space: normal;
+		overflow: visible;
+		text-overflow: clip;
+		overflow-wrap: anywhere;
+	}
+
 	.row-label.pending {
 		font-size: 0.8125rem;
 	}
@@ -1075,6 +1233,80 @@
 		color: var(--app-fg-muted);
 	}
 
+	/* ── Workspace prompt ──────────────────────────────────── */
+
+	.prompt-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+
+	.prompt-saved {
+		font-size: 0.75rem;
+		color: var(--app-fg-muted);
+	}
+
+	.prompt-head-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	/* Paper, with an ink edge — no wash behind the text in any theme, so the
+	   mono themes stay ink-on-paper. */
+	.prompt-card {
+		border: 1px solid var(--app-border);
+		border-radius: 0.625rem;
+		padding: 0.75rem 1rem;
+	}
+
+	.prompt-card.empty {
+		border-style: dashed;
+	}
+
+	.prompt-text {
+		margin: 0;
+		font-size: 0.8125rem;
+		line-height: 1.5;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+
+	.prompt-card.empty .prompt-text {
+		color: var(--app-fg-muted);
+	}
+
+	.prompt-input {
+		width: 100%;
+		min-height: 5rem;
+		resize: vertical;
+		padding: 0.6rem 0.75rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--app-border);
+		background: transparent;
+		color: var(--app-fg);
+		font-family: inherit;
+		font-size: 0.8125rem;
+		line-height: 1.5;
+	}
+
+	.prompt-input::placeholder {
+		color: var(--app-fg-muted);
+	}
+
+	.prompt-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.prompt-hint {
+		margin: 0;
+		font-size: 0.6875rem;
+		color: var(--app-fg-muted);
+	}
+
 	/* ── Todos ─────────────────────────────────────────────── */
 
 	.todo-add {
@@ -1104,6 +1336,39 @@
 		width: 100%;
 		padding: 0.625rem 0.875rem;
 		background: transparent;
+	}
+
+	/* An open row is a paragraph, not a line: keep the buttons level with the
+	   first line instead of floating them down the middle of the text. */
+	.todo-row.expanded {
+		align-items: flex-start;
+	}
+
+	/* The whole label is the disclosure control: click it and the title drops
+	   open in place, complete, instead of staying cut off at one ellipsised line. */
+	.row-title-btn {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		width: 100%;
+		min-width: 0;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
+	}
+
+	.row-title-btn:hover .row-label {
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.row-title-btn > :global(svg) {
+		flex-shrink: 0;
+		color: var(--app-fg-muted);
 	}
 
 	.todo-check {
@@ -1146,6 +1411,15 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	/* Same deal as the title: the status line can carry a job's last_error, and a
+	   clipped error message is no use to anyone. */
+	.row-detail.expanded {
+		white-space: normal;
+		overflow: visible;
+		text-overflow: clip;
+		overflow-wrap: anywhere;
 	}
 
 	/* A run landed and is waiting on a human. An ink bar, never a grey wash. */

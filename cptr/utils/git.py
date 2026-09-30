@@ -16,6 +16,13 @@ from cptr.utils.identity import ExecutionIdentity, env_for, preexec_for
 
 logger = logging.getLogger(__name__)
 
+# A full unified diff of a multi-megabyte untracked log is one hunk of hundreds
+# of thousands of lines. The history pane renders every line, and pairing those
+# lines is quadratic, which locks the browser tab. Refuse to build that payload.
+_MAX_TEXT_COUNT_BYTES = 256 * 1024
+_MAX_DIFF_BYTES = 350_000
+_MAX_DIFF_LINES = 2_000
+
 
 async def _run(
     *args: str,
@@ -187,12 +194,22 @@ async def status(root: str, identity: ExecutionIdentity | None = None) -> dict[s
             path = line[2:]
             add_file(path, "untracked", unstaged=True)
             entry = files_by_path[path]
-            line_count = _count_text_lines(os.path.join(root, path))
-            if line_count is None:
-                entry["binary"] = True
+            full = os.path.join(root, path)
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                size = 0
+            if size > _MAX_TEXT_COUNT_BYTES:
+                # Skip reading the body. Counting lines in a multi-megabyte log
+                # blocks the event loop on every status refresh.
+                entry["large"] = True
             else:
-                entry["additions"] = line_count
-                entry["deletions"] = 0
+                line_count = _count_text_lines(full)
+                if line_count is None:
+                    entry["binary"] = True
+                else:
+                    entry["additions"] = line_count
+                    entry["deletions"] = 0
         elif line.startswith("u "):
             # Unmerged
             parts = line.split(" ", 10)
@@ -327,6 +344,14 @@ async def diff_text(
     return out
 
 
+def _truncated_diff(path: str) -> dict[str, Any]:
+    """A diff the UI can show without rendering the file."""
+    return {
+        "files": [{"path": path, "hunks": [], "truncated": True}],
+        "truncated": True,
+    }
+
+
 async def diff(
     root: str,
     file: str | None = None,
@@ -336,6 +361,14 @@ async def diff(
     identity: ExecutionIdentity | None = None,
 ) -> dict[str, Any]:
     """Get diff output as structured data."""
+    if untracked and file:
+        full = os.path.join(root, file)
+        try:
+            size = os.path.getsize(full)
+        except OSError:
+            size = 0
+        if size > _MAX_TEXT_COUNT_BYTES:
+            return _truncated_diff(file)
     out = await diff_text(root, file, staged, untracked, ignore_whitespace, identity)
     return _parse_diff(out)
 
@@ -375,15 +408,35 @@ async def staged_diff(
 
 
 def _parse_diff(raw: str) -> dict[str, Any]:
-    """Parse unified diff into structured format."""
+    """Parse unified diff into structured format.
+
+    Stops after ``_MAX_DIFF_LINES`` content lines or ``_MAX_DIFF_BYTES`` of
+    patch text and sets ``truncated`` so the client can say the preview is
+    incomplete instead of mounting the rest.
+    """
     files: list[dict] = []
     current_file: dict | None = None
     current_hunk: dict | None = None
+    truncated = len(raw) > _MAX_DIFF_BYTES
+    if truncated:
+        raw = raw[:_MAX_DIFF_BYTES]
+        newline = raw.rfind("\n")
+        if newline >= 0:
+            raw = raw[:newline]
+    content_lines = 0
+
+    def flush_hunk() -> None:
+        nonlocal current_hunk
+        if current_file is not None and current_hunk is not None:
+            current_file["hunks"].append(current_hunk)
+        current_hunk = None
 
     for line in raw.splitlines():
+        if content_lines >= _MAX_DIFF_LINES:
+            truncated = True
+            break
         if line.startswith("diff --git"):
-            if current_file and current_hunk:
-                current_file["hunks"].append(current_hunk)
+            flush_hunk()
             if current_file:
                 files.append(current_file)
             # Extract path from "diff --git a/foo b/foo"
@@ -392,26 +445,29 @@ def _parse_diff(raw: str) -> dict[str, Any]:
             current_file = {"path": path, "hunks": []}
             current_hunk = None
         elif line.startswith("@@ "):
-            if current_file and current_hunk:
-                current_file["hunks"].append(current_hunk)
+            flush_hunk()
             current_hunk = {"header": line, "lines": []}
         elif current_hunk is not None:
             if line.startswith("+"):
                 current_hunk["lines"].append({"type": "added", "content": line[1:]})
+                content_lines += 1
             elif line.startswith("-"):
                 current_hunk["lines"].append({"type": "removed", "content": line[1:]})
+                content_lines += 1
             elif line.startswith(" "):
                 current_hunk["lines"].append({"type": "context", "content": line[1:]})
+                content_lines += 1
             elif line.startswith("\\"):
                 # "\ No newline at end of file"
                 pass
 
-    if current_file and current_hunk:
-        current_file["hunks"].append(current_hunk)
+    flush_hunk()
     if current_file:
+        if truncated:
+            current_file["truncated"] = True
         files.append(current_file)
 
-    return {"files": files}
+    return {"files": files, "truncated": truncated}
 
 
 # git emits this when a pathspec matches nothing in the worktree or the index.

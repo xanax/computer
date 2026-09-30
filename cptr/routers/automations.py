@@ -1,9 +1,22 @@
-"""Automations router: CRUD + run for scheduled automations."""
+"""Legacy `/api/automations` — a translation layer over the task board.
+
+An automation is a `jobs` row with `trigger='rrule'` as of migration 0010, and
+its id survives the move (which is why saved webhook URLs still resolve). This
+router keeps the old URLs and the old JSON shape so nothing outside the app
+breaks, but every read and write lands on the one table the one scheduler polls
+(`cptr.utils.task_scheduler`).
+
+Nothing in the frontend calls it any more — the routes are redirects to
+`/scheduled` and the panel is gone — so this exists for bookmarks, webhooks and
+any stale client. New work belongs in `cptr/routers/jobs.py`.
+
+Webhook tokens live in the job's `meta.webhook_token` (SHA-256, as before).
+"""
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
+import json
 import logging
 import secrets
 from typing import Optional
@@ -11,7 +24,18 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from cptr.models.automations import Automation, AutomationRun
+from cptr.models.jobs import (
+    EXECUTOR_HUMAN,
+    KIND_RUN,
+    STATUS_FAILED,
+    STATUS_NEEDS_REVIEW,
+    STATUS_OPEN,
+    STATUS_PAUSED,
+    STATUS_QUEUED,
+    STATUS_RUNNING,
+    TRIGGER_RRULE,
+    Job,
+)
 from cptr.utils.automations import next_n_runs_ns, next_run_ns, validate_rrule
 from cptr.utils.config import check_access, now_ms
 
@@ -38,49 +62,74 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+# ── Serialization: a job, in the shape this API always returned ──
+
+
+def _run_status(job: Job) -> str:
+    """Old run vocabulary: `running` | `success` | `error`."""
+    if job.status == STATUS_FAILED:
+        return "error"
+    if job.status in (STATUS_NEEDS_REVIEW, STATUS_OPEN):
+        # The old scheme had no review step: a run that produced a reply passed.
+        return "success"
+    if job.status in (STATUS_QUEUED, STATUS_RUNNING):
+        return "running"
+    return "success"
+
+
+def _run_dict(run: Job) -> dict:
+    return {
+        "id": run.id,
+        "automation_id": run.parent_job,
+        "chat_id": (run.meta or {}).get("run_chat_id") or run.parent_chat,
+        "status": _run_status(run),
+        "error": run.last_error,
+        "created_at": run.created_at,
+    }
+
+
 def _automation_dict(
-    a: Automation,
-    last_run: AutomationRun | None = None,
+    job: Job,
+    last_run: Job | None = None,
     next_runs: list[int] | None = None,
     webhook_url: str | None = None,
 ) -> dict:
-    """Serialize an Automation to a response dict."""
-    meta = a.meta or {}
-    has_webhook = bool(meta.get("webhook_token"))
-
+    """Serialize a recurring job the way an Automation used to be serialized."""
+    meta = job.meta or {}
     return {
-        "id": a.id,
-        "user_id": a.user_id,
-        "name": a.name,
-        "prompt": a.prompt,
-        "model_id": a.model_id,
-        "workspace": a.workspace,
-        "rrule": a.rrule,
-        "is_active": a.is_active,
-        "last_run_at": a.last_run_at,
-        "next_run_at": a.next_run_at,
-        "meta": a.meta,
-        "created_at": a.created_at,
-        "updated_at": a.updated_at,
+        "id": job.id,
+        "user_id": job.user_id,
+        "name": job.title,
+        "prompt": job.payload or "",
+        "model_id": "" if job.executor == EXECUTOR_HUMAN else job.executor,
+        "workspace": job.workspace,
+        "rrule": job.rrule,
+        "is_active": job.status == STATUS_OPEN,
+        "last_run_at": last_run.created_at if last_run else None,
+        "next_run_at": job.trigger_at,
+        "meta": job.meta,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
         "last_run": _run_dict(last_run) if last_run else None,
         "next_runs": next_runs,
-        "has_webhook": has_webhook,
+        "has_webhook": bool(meta.get("webhook_token")),
         "webhook_url": webhook_url,
     }
 
 
-def _run_dict(r: AutomationRun) -> dict:
-    return {
-        "id": r.id,
-        "automation_id": r.automation_id,
-        "chat_id": r.chat_id,
-        "status": r.status,
-        "error": r.error,
-        "created_at": r.created_at,
-    }
+async def _get_task(job_id: str, user_id: str) -> Job:
+    job = await Job.get_by_id(job_id)
+    if job is None or job.user_id != user_id or job.kind == KIND_RUN:
+        raise HTTPException(404, "automation not found")
+    return job
 
 
-# ── List automations ────────────────────────────────────────
+async def _last_run(job: Job) -> Job | None:
+    runs = await Job.list_runs(job.id, limit=1)
+    return runs[0] if runs else None
+
+
+# ── List ────────────────────────────────────────────────────
 
 
 @router.get("")
@@ -92,28 +141,44 @@ async def list_automations(
     page: int = Query(1, ge=1),
 ):
     user_id = _get_user(request)
+
+    statuses: list[str] | None = None
+    if status == "active":
+        statuses = [STATUS_OPEN]
+    elif status == "paused":
+        statuses = [STATUS_PAUSED]
+
+    tasks = await Job.list_tasks(user_id, workspace, statuses=statuses, limit=None)
+    tasks = [t for t in tasks if t.kind == "task"]
+    if query:
+        needle = query.lower()
+        tasks = [t for t in tasks if needle in (t.title or "").lower()]
+
+    total = len(tasks)
     skip = (page - 1) * PAGE_SIZE
+    page_items = tasks[skip : skip + PAGE_SIZE]
 
-    items, total = await Automation.get_by_workspace(
-        user_id=user_id,
-        workspace=workspace,
-        status=status,
-        query=query,
-        skip=skip,
-        limit=PAGE_SIZE,
-    )
+    items = []
+    for task in page_items:
+        try:
+            validate_rrule(task.rrule or "")
+        except ValueError:
+            # A rule that has run out (COUNT exhausted) is not an error here:
+            # the row is simply finished. Serialize it without next_runs.
+            items.append(_automation_dict(task, last_run=await _last_run(task)))
+            continue
+        items.append(
+            _automation_dict(
+                task,
+                last_run=await _last_run(task),
+                next_runs=next_n_runs_ns(task.rrule or "", 5),
+            )
+        )
 
-    # Batch-fetch latest runs
-    ids = [a.id for a in items]
-    latest_runs = await AutomationRun.get_latest_batch(ids) if ids else {}
-
-    return {
-        "items": [_automation_dict(a, last_run=latest_runs.get(a.id)) for a in items],
-        "total": total,
-    }
+    return {"items": items, "total": total}
 
 
-# ── Create automation ───────────────────────────────────────
+# ── Create ──────────────────────────────────────────────────
 
 
 class CreateAutomationRequest(BaseModel):
@@ -134,102 +199,103 @@ async def create_automation(request: Request, body: CreateAutomationRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-    nxt = next_run_ns(body.rrule)
-    now = now_ms()
-
-    automation = await Automation.create(
+    job = await Job.create(
         user_id=user_id,
-        name=body.name.strip(),
-        prompt=body.prompt.strip(),
-        model_id=body.model_id.strip(),
         workspace=body.workspace,
+        title=body.name,
+        executor=body.model_id or EXECUTOR_HUMAN,
+        trigger=TRIGGER_RRULE,
+        kind="task",
+        status=STATUS_OPEN if body.is_active else STATUS_PAUSED,
         rrule=body.rrule,
-        next_run_at=nxt,
-        is_active=body.is_active,
-        created_at=now,
+        trigger_at=next_run_ns(body.rrule) if body.is_active else None,
+        payload=body.prompt,
+        created_at=now_ms(),
     )
+    return _automation_dict(job, next_runs=next_n_runs_ns(body.rrule, 5))
 
-    return _automation_dict(automation, next_runs=next_n_runs_ns(body.rrule))
 
-
-# ── Get automation by ID ────────────────────────────────────
+# ── Read one ────────────────────────────────────────────────
 
 
 @router.get("/{automation_id}")
 async def get_automation(request: Request, automation_id: str):
     user_id = _get_user(request)
-    automation = await Automation.get_by_id(automation_id)
-    if not automation or automation.user_id != user_id:
-        raise HTTPException(404, "automation not found")
-
-    last_run = await AutomationRun.get_latest(automation_id)
-    return _automation_dict(
-        automation,
-        last_run=last_run,
-        next_runs=next_n_runs_ns(automation.rrule),
-    )
+    job = await _get_task(automation_id, user_id)
+    runs = next_n_runs_ns(job.rrule, 5) if job.rrule else None
+    return _automation_dict(job, last_run=await _last_run(job), next_runs=runs)
 
 
-# ── Update automation ───────────────────────────────────────
+# ── Update ──────────────────────────────────────────────────
 
 
 class UpdateAutomationRequest(BaseModel):
-    name: str
-    prompt: str
-    model_id: str
-    workspace: str
-    rrule: str
-    is_active: bool = True
+    name: Optional[str] = None
+    prompt: Optional[str] = None
+    model_id: Optional[str] = None
+    workspace: Optional[str] = None
+    rrule: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 @router.post("/{automation_id}")
 async def update_automation(request: Request, automation_id: str, body: UpdateAutomationRequest):
     user_id = _get_user(request)
-    automation = await Automation.get_by_id(automation_id)
-    if not automation or automation.user_id != user_id:
-        raise HTTPException(404, "automation not found")
+    job = await _get_task(automation_id, user_id)
 
-    try:
-        validate_rrule(body.rrule)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    values: dict = {}
+    if body.name is not None:
+        values["title"] = body.name
+    if body.prompt is not None:
+        values["payload"] = body.prompt
+    if body.model_id is not None and body.model_id:
+        values["executor"] = body.model_id
+    if body.workspace is not None:
+        values["workspace"] = body.workspace
+    if body.rrule is not None:
+        try:
+            validate_rrule(body.rrule)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        values["rrule"] = body.rrule
+        values["trigger_at"] = next_run_ns(body.rrule)
+    if body.is_active is not None:
+        values["status"] = STATUS_OPEN if body.is_active else STATUS_PAUSED
+        if not body.is_active:
+            values["trigger_at"] = None
+        elif body.rrule is None and job.rrule:
+            values["trigger_at"] = next_run_ns(job.rrule)
 
-    nxt = next_run_ns(body.rrule)
-    now = now_ms()
+    if values:
+        await Job.update_by_id(automation_id, **values)
 
-    await Automation.update_by_id(
-        automation_id,
-        updated_at=now,
-        name=body.name.strip(),
-        prompt=body.prompt.strip(),
-        model_id=body.model_id.strip(),
-        workspace=body.workspace,
-        rrule=body.rrule,
-        is_active=body.is_active,
-        next_run_at=nxt,
-    )
-
-    updated = await Automation.get_by_id(automation_id)
-    last_run = await AutomationRun.get_latest(automation_id)
-    return _automation_dict(updated, last_run=last_run, next_runs=next_n_runs_ns(body.rrule))
+    updated = await Job.get_by_id(automation_id)
+    return _automation_dict(updated, next_runs=next_n_runs_ns(updated.rrule, 5))
 
 
-# ── Toggle active/paused ───────────────────────────────────
+# ── Pause / resume ──────────────────────────────────────────
 
 
 @router.post("/{automation_id}/toggle")
 async def toggle_automation(request: Request, automation_id: str):
     user_id = _get_user(request)
-    automation = await Automation.get_by_id(automation_id)
-    if not automation or automation.user_id != user_id:
-        raise HTTPException(404, "automation not found")
+    job = await _get_task(automation_id, user_id)
 
-    nxt = next_run_ns(automation.rrule) if not automation.is_active else None
-    toggled = await Automation.toggle(automation_id, nxt, now_ms())
+    if job.status == STATUS_OPEN:
+        await Job.update_status(automation_id, STATUS_PAUSED, trigger_at=None)
+    else:
+        nxt = next_run_ns(job.rrule) if job.rrule else None
+        await Job.update_status(automation_id, STATUS_OPEN, trigger_at=nxt)
+
+    toggled = await Job.get_by_id(automation_id)
+
+    from cptr.utils.task_scheduler import sync_legacy_toggle
+
+    await sync_legacy_toggle(toggled)
     return _automation_dict(toggled)
 
 
-# ── Run now ─────────────────────────────────────────────────
+# ── Run now / webhook ───────────────────────────────────────
 
 
 @router.post("/{automation_id}/run")
@@ -238,40 +304,39 @@ async def run_automation_now(
     request: Request,
     token: Optional[str] = Query(None, description="Webhook token for unauthenticated access"),
 ):
+    """Queue one run now. A webhook call is the same request, token instead of session."""
+    from cptr.utils.task_scheduler import run_task_now
+
     if token:
-        # Webhook path: validate token, no session required
-        automation = await Automation.get_by_id(automation_id)
-        if not automation:
+        # Webhook path: validate the token, no session required.
+        job = await Job.get_by_id(automation_id)
+        if job is None:
             raise HTTPException(404, "automation not found")
-        meta = automation.meta or {}
-        expected_hash = meta.get("webhook_token", "")
+        expected_hash = (job.meta or {}).get("webhook_token", "")
         if not expected_hash or _hash_token(token) != expected_hash:
             raise HTTPException(403, "invalid token")
-        if not automation.is_active:
+        if job.status != STATUS_OPEN:
             raise HTTPException(409, "automation is paused")
 
-        # Inject webhook payload into prompt if request has a body
+        # A webhook body is not reproducible, so it rides along with the run.
         webhook_payload = None
         try:
             body = await request.json()
             if body:
-                import json
-
                 webhook_payload = json.dumps(body, indent=2)
         except Exception:
             pass
     else:
-        # Normal path: require session auth
         user_id = _get_user(request)
-        automation = await Automation.get_by_id(automation_id)
-        if not automation or automation.user_id != user_id:
-            raise HTTPException(404, "automation not found")
+        job = await _get_task(automation_id, user_id)
         webhook_payload = None
 
-    from cptr.utils.automations import execute_automation
+    if job.executor == EXECUTOR_HUMAN:
+        raise HTTPException(400, "automation has no model to run")
 
-    asyncio.create_task(execute_automation(request.app, automation, webhook_payload=webhook_payload))
-    return _automation_dict(automation)
+    run = await run_task_now(request.app, job, webhook_payload=webhook_payload)
+    logger.info("Queued run %s for '%s'", run.id[:8], (job.title or "")[:60])
+    return _automation_dict(job, last_run=run, next_runs=next_n_runs_ns(job.rrule or "", 5))
 
 
 # ── Delete ──────────────────────────────────────────────────
@@ -280,11 +345,8 @@ async def run_automation_now(
 @router.delete("/{automation_id}")
 async def delete_automation(request: Request, automation_id: str):
     user_id = _get_user(request)
-    automation = await Automation.get_by_id(automation_id)
-    if not automation or automation.user_id != user_id:
-        raise HTTPException(404, "automation not found")
-
-    await Automation.delete(automation_id)
+    await _get_task(automation_id, user_id)
+    await Job.delete(automation_id)
     return {"ok": True}
 
 
@@ -299,12 +361,9 @@ async def get_automation_runs(
     limit: int = 50,
 ):
     user_id = _get_user(request)
-    automation = await Automation.get_by_id(automation_id)
-    if not automation or automation.user_id != user_id:
-        raise HTTPException(404, "automation not found")
-
-    runs = await AutomationRun.get_by_automation(automation_id, skip=skip, limit=limit)
-    return [_run_dict(r) for r in runs]
+    await _get_task(automation_id, user_id)
+    runs = await Job.list_runs(automation_id, limit=skip + limit)
+    return [_run_dict(r) for r in runs[skip:]]
 
 
 # ── Webhook management ──────────────────────────────────────
@@ -312,39 +371,34 @@ async def get_automation_runs(
 
 @router.post("/{automation_id}/webhook")
 async def generate_webhook(request: Request, automation_id: str):
-    """Generate or regenerate a webhook token for this automation.
+    """Generate or regenerate this task's webhook token.
 
-    Returns the plaintext webhook URL once. The token is stored as a
-    SHA-256 hash — the URL cannot be recovered after this response.
+    The plaintext URL is returned once; only its SHA-256 hash is stored.
     """
     user_id = _get_user(request)
-    automation = await Automation.get_by_id(automation_id)
-    if not automation or automation.user_id != user_id:
-        raise HTTPException(404, "automation not found")
+    job = await _get_task(automation_id, user_id)
 
     plaintext = f"wh_{secrets.token_hex(20)}"
-    meta = dict(automation.meta or {})
+    meta = dict(job.meta or {})
     meta["webhook_token"] = _hash_token(plaintext)
-    await Automation.update_by_id(automation_id, updated_at=now_ms(), meta=meta)
+    await Job.update_by_id(automation_id, meta=meta)
 
     base = str(request.base_url).rstrip("/")
     webhook_url = f"{base}/api/automations/{automation_id}/run?token={plaintext}"
 
-    updated = await Automation.get_by_id(automation_id)
+    updated = await Job.get_by_id(automation_id)
     return _automation_dict(updated, webhook_url=webhook_url)
 
 
 @router.delete("/{automation_id}/webhook")
 async def revoke_webhook(request: Request, automation_id: str):
-    """Revoke the webhook token for this automation."""
+    """Revoke this task's webhook token."""
     user_id = _get_user(request)
-    automation = await Automation.get_by_id(automation_id)
-    if not automation or automation.user_id != user_id:
-        raise HTTPException(404, "automation not found")
+    job = await _get_task(automation_id, user_id)
 
-    meta = dict(automation.meta or {})
+    meta = dict(job.meta or {})
     meta.pop("webhook_token", None)
-    await Automation.update_by_id(automation_id, updated_at=now_ms(), meta=meta)
+    await Job.update_by_id(automation_id, meta=meta)
 
-    updated = await Automation.get_by_id(automation_id)
+    updated = await Job.get_by_id(automation_id)
     return _automation_dict(updated)

@@ -9,7 +9,7 @@
 
 	let searchShortcut = $derived(formatChord($keybindings.quickOpen));
 
-	function openAutomations(e: MouseEvent) {
+	function openTasks(e: MouseEvent) {
 		e.preventDefault();
 		goto('/scheduled');
 		if (typeof window !== 'undefined' && window.innerWidth < 768) sidebarOpen.set(false);
@@ -37,11 +37,11 @@
 		<a
 			href="/scheduled"
 			class="flex items-center gap-1.5 w-full h-7 px-2 rounded-lg text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-100 no-underline"
-			onclick={openAutomations}
+			onclick={openTasks}
 		>
-			<Icon name="clock" size={14} />
+			<Icon name="list" size={14} />
 			<span class="flex-1 text-left overflow-hidden text-ellipsis whitespace-nowrap"
-				>{$t('automations.title')}</span
+				>{$t('tasks.title')}</span
 			>
 		</a>
 	</div>

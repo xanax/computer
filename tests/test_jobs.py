@@ -204,6 +204,41 @@ def test_list_and_counts(jobs_db):
     _run(main())
 
 
+def test_kind_filter_decides_what_the_list_is(jobs_db):
+    """`kind` is the Tasks tab's Runs view: an explicit filter must win.
+
+    Run rows are hidden from the default list (they are history, and the board
+    shows them under their template), but asking for ``kind="run"`` by name has
+    to return exactly those rows — otherwise "Runs" lists the tasks instead.
+    """
+    from cptr.models.jobs import Job, create_human_todo
+
+    async def main():
+        task = await create_human_todo(USER, WS, "nightly report", created_at=1000)
+        run = await Job.create(
+            USER,
+            WS,
+            "nightly report",
+            kind="run",
+            trigger="rrule",
+            parent_job=task.id,
+            created_at=2000,
+        )
+        note = await Job.create(USER, WS, "a note", kind="note", created_at=3000)
+
+        default = await Job.list_tasks(USER, WS)
+        assert [j.id for j in default] == [task.id, note.id]  # the run stays out
+
+        runs = await Job.list_tasks(USER, WS, kinds=("run",))
+        assert [j.id for j in runs] == [run.id]
+
+        named = await Job.list_tasks(USER, WS, kinds=("task", "note"))
+        assert run.id not in [j.id for j in named]
+        assert {j.kind for j in named} == {"task", "note"}
+
+    _run(main())
+
+
 # ---------------------------------------------------------------------------
 # The clock
 # ---------------------------------------------------------------------------
@@ -1039,6 +1074,74 @@ def test_migration_backfills_every_todo(tmp_path, monkeypatch):
     assert todos_after == 2  # nothing dropped
 
 
+def test_migration_converts_automation_stamps_to_milliseconds(tmp_path):
+    """0010 lands `automations`/`automation_runs` in the job queue's unit.
+
+    The queue stamps `created_at` in milliseconds (like `chats`); the older
+    automation tables stamped theirs in nanoseconds. Both kinds of row share the
+    one column after 0010, so an unconverted row would sort decades away from
+    its neighbours and print as 1970 in the task list.
+    """
+    NS = 1_790_005_213_562_331_648  # an automation stamp, in nanoseconds
+    RUN_NS = 1_790_065_203_469_802_249
+
+    db_file = _migrated_db(tmp_path)
+    conn = sqlite3.connect(db_file)
+    conn.executemany(
+        "INSERT INTO automations (id, user_id, name, prompt, model_id, workspace,"
+        " rrule, is_active, last_run_at, next_run_at, meta, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            (
+                "autom-1",
+                USER,
+                "nightly backup",
+                "back it up",
+                "deepseek-flash",
+                WS,
+                "FREQ=DAILY;BYHOUR=3",
+                1,
+                NS,
+                NS,
+                "{}",
+                NS,
+                NS,
+            ),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO automation_runs (id, automation_id, chat_id, status, error, created_at)"
+        " VALUES ('run-1','autom-1',NULL,'success',NULL,?)",
+        (RUN_NS,),
+    )
+    conn.commit()
+    conn.close()
+
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(dbmod.__file__).parent.parent / "migrations"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_file}")
+    command.upgrade(cfg, "0010")
+
+    conn = sqlite3.connect(db_file)
+    rows = conn.execute(
+        "SELECT id, kind, trigger_at, created_at, updated_at FROM jobs ORDER BY id"
+    ).fetchall()
+    conn.close()
+
+    assert rows == [
+        # `trigger_at` stays in nanoseconds: it is compared against the
+        # scheduler's `time.time_ns()`, unlike the wall-clock stamps.
+        ("autom-1", "task", NS, NS // 1_000_000, NS // 1_000_000),
+        ("run-1", "run", None, RUN_NS // 1_000_000, RUN_NS // 1_000_000),
+    ]
+    for _id, _kind, _trigger, created, updated in rows:
+        assert created < 100_000_000_000_000, "a millisecond stamp is ~1.8e12"
+        assert updated < 100_000_000_000_000
+
+
 def test_migration_indexes_exist(tmp_path):
     db_file = _migrated_db(tmp_path)
 
@@ -1083,3 +1186,329 @@ def test_migration_downgrade_leaves_todos_alone(tmp_path):
 
     assert "jobs" not in tables
     assert todos == 1
+
+
+# ---------------------------------------------------------------------------
+# The legacy mirror (rollback safety, design note §8.4)
+# ---------------------------------------------------------------------------
+
+
+def _legacy_template(automation_id: str, rrule: str = "FREQ=DAILY;BYHOUR=3"):
+    """Write an ``automations`` row the way pre-0010 cptr would have."""
+    from cptr.models.automations import Automation
+
+    return Automation(
+        id=automation_id,
+        user_id=USER,
+        name="nightly backup",
+        prompt="run the backup",
+        model_id="deepseek-flash",
+        workspace=WS,
+        rrule=rrule,
+        is_active=True,
+        created_at=1,
+        updated_at=1,
+    )
+
+
+def test_running_a_migrated_template_mirrors_into_automation_runs(jobs_db):
+    """A run of a *migrated* task must still be visible to the old table.
+
+    The mirror is what makes a rollback land on working data, so the pair has
+    to stay reconcilable: same id, and the legacy run closed when ours settles.
+    """
+    from cptr.models.automations import Automation, AutomationRun
+    from cptr.models.jobs import Job
+    from cptr.utils.task_scheduler import sync_legacy_run_status, sync_legacy_template
+    from cptr.utils.db import get_db
+
+    async def main():
+        async with await get_db() as db:
+            db.add(_legacy_template("autom-1"))
+            await db.commit()
+        template = await Job.create(
+            USER,
+            WS,
+            "nightly backup",
+            job_id="autom-1",
+            kind="task",
+            executor="deepseek-flash",
+            trigger="rrule",
+            trigger_at=1_000_000,
+            rrule="FREQ=DAILY;BYHOUR=3",
+            payload="run the backup",
+            created_at=1,
+        )
+        run = await Job.create(
+            USER,
+            WS,
+            "nightly backup",
+            kind="run",
+            executor="deepseek-flash",
+            trigger="at",
+            status="queued",
+            parent_job=template.id,
+            created_at=2,
+        )
+        await sync_legacy_template(run)
+
+        # The legacy run record reuses our run's id, so the two are the same run.
+        mirrored = await AutomationRun.get_latest(template.id)
+        assert mirrored is not None
+        assert mirrored.id == run.id
+        assert mirrored.status == "running"
+
+        legacy = await Automation.get_by_id(template.id)
+        assert legacy.last_run_at is not None
+        assert legacy.next_run_at == template.trigger_at
+
+        # Ours settles as needs_review; theirs reads as the success it was.
+        await Job.update_status(run.id, "needs_review", 5)
+        await sync_legacy_run_status(run.id)
+        settled = await AutomationRun.get_latest(template.id)
+        assert settled.status == "success"
+        assert settled.error is None
+
+    _run(main())
+
+
+def test_a_failed_run_mirrors_its_error(jobs_db):
+    from cptr.models.automations import Automation, AutomationRun
+    from cptr.models.jobs import Job
+    from cptr.utils.task_scheduler import sync_legacy_run_status, sync_legacy_template
+    from cptr.utils.db import get_db
+
+    async def main():
+        async with await get_db() as db:
+            db.add(_legacy_template("autom-2"))
+            await db.commit()
+        template = await Job.create(
+            USER, WS, "nightly backup", job_id="autom-2", kind="task", created_at=1
+        )
+        run = await Job.create(
+            USER,
+            WS,
+            "nightly backup",
+            kind="run",
+            trigger="at",
+            status="running",
+            parent_job=template.id,
+            created_at=2,
+        )
+        await Job.update_by_id(run.id, status="failed", last_error="model exploded")
+        await sync_legacy_template(run)
+        await sync_legacy_run_status(run.id)
+
+        settled = await AutomationRun.get_latest(template.id)
+        assert (settled.status, settled.error) == ("error", "model exploded")
+
+        # Still running: nothing to close yet.
+        assert (await Automation.get_by_id(template.id)) is not None
+
+    _run(main())
+
+
+def test_a_task_that_was_never_legacy_is_not_invented_into_one(jobs_db):
+    """A task made in the new UI has no ``automations`` row — and stays that way."""
+    from cptr.models.automations import Automation, AutomationRun
+    from cptr.models.jobs import Job
+    from cptr.utils.task_scheduler import sync_legacy_run_status, sync_legacy_template
+
+    async def main():
+        template = await Job.create(
+            USER,
+            WS,
+            "water the plants",
+            kind="task",
+            executor="deepseek-flash",
+            trigger="rrule",
+            rrule="FREQ=DAILY",
+            created_at=1,
+        )
+        run = await Job.create(
+            USER,
+            WS,
+            "water the plants",
+            kind="run",
+            trigger="at",
+            status="queued",
+            parent_job=template.id,
+            created_at=2,
+        )
+        await sync_legacy_template(run)
+        await sync_legacy_run_status(run.id)
+
+        assert await Automation.get_by_id(template.id) is None
+        assert await AutomationRun.get_latest(template.id) is None
+
+    _run(main())
+
+
+def test_pausing_a_migrated_task_clears_legacy_is_active(jobs_db):
+    """Were `is_active` left true, a rollback would fire a task the human stopped."""
+    from cptr.models.automations import Automation
+    from cptr.models.jobs import Job
+    from cptr.utils.task_scheduler import sync_legacy_toggle
+    from cptr.utils.db import get_db
+
+    async def main():
+        async with await get_db() as db:
+            db.add(_legacy_template("autom-3"))
+            await db.commit()
+        template = await Job.create(
+            USER,
+            WS,
+            "nightly backup",
+            job_id="autom-3",
+            kind="task",
+            executor="deepseek-flash",
+            trigger="rrule",
+            trigger_at=1_000_000,
+            rrule="FREQ=DAILY;BYHOUR=3",
+            created_at=1,
+        )
+
+        await Job.update_status(template.id, "paused", 2)
+        paused = await Job.get_by_id(template.id)
+        await sync_legacy_toggle(paused)
+
+        legacy = await Automation.get_by_id(template.id)
+        assert legacy.is_active is False
+
+        await Job.update_status(template.id, "open", 3)
+        resumed = await Job.get_by_id(template.id)
+        await sync_legacy_toggle(resumed)
+        legacy = await Automation.get_by_id(template.id)
+        assert legacy.is_active is True
+
+    _run(main())
+
+
+# ---------------------------------------------------------------------------
+# Timers: the pre-0010 fold
+# ---------------------------------------------------------------------------
+
+
+def _legacy_timer(chat_id: str, parent_id: str, due_ns: int, **meta_over):
+    """Write the shape `timer()` used to leave behind: a dormant child chat."""
+    from cptr.models import Chat, ChatMessage
+
+    async def main():
+        prompt = await ChatMessage.create(
+            chat_id=chat_id,
+            role="user",
+            content="check the deploy",
+            done=True,
+            created_at=1,
+        )
+        meta = {
+            "internal": True,
+            "type": "timer",
+            "status": "pending",
+            "timer_at": due_ns,
+            "timer_model_id": "deepseek-flash",
+            "timer_parent_message_id": "msg-parent",
+            "parent_chat_id": parent_id,
+            "workspace": WS,
+            "cancel_on": ["chat.read"],
+        }
+        meta.update(meta_over)
+        chat = await Chat.create(USER, "timer", meta=meta, created_at=1)
+        return chat, prompt
+
+    chat, prompt = _run(main())
+    return chat, prompt
+
+
+def test_legacy_pending_timer_folds_into_a_job(jobs_db):
+    from cptr.models.jobs import Job
+    from cptr.models import Chat
+    from cptr.utils.timers import fold_legacy_timers
+
+    due = 1_700_000_000_000_000_000
+    chat, prompt = _legacy_timer("timer-1", "parent-chat", due)
+
+    async def main():
+        # The tool left the child chat's current message at its prompt.
+        await Chat.update_current_message(chat.id, prompt.id, 1)
+        return await fold_legacy_timers()
+
+    assert _run(main()) == 1
+
+    async def check():
+        jobs = [j for j in await Job.list_tasks(USER) if j.parent_chat == "parent-chat"]
+        assert len(jobs) == 1
+        job = jobs[0]
+        assert (job.trigger, job.trigger_at, job.executor) == ("at", due, "deepseek-flash")
+        assert job.payload == "check the deploy"
+        assert job.workspace == WS
+        assert job.meta["timer"] is True
+        assert job.meta["cancel_on"] == ["chat.read"]
+
+        folded = await Chat.get_by_id(chat.id)
+        assert folded.meta["status"] == "folded"
+        assert folded.meta["folded_into_job"] == job.id
+        return job
+
+    job = _run(check())
+
+    # Idempotent: a second boot must not schedule the same timer twice.
+    assert _run(fold_legacy_timers()) == 0
+
+    async def once():
+        jobs = [j for j in await Job.list_tasks(USER) if j.parent_chat == "parent-chat"]
+        assert [j.id for j in jobs] == [job.id]
+
+    _run(once())
+
+
+def test_fold_recovers_an_interrupted_launch(jobs_db):
+    """A restart mid-launch left an empty assistant placeholder as the tip."""
+    from cptr.models import Chat, ChatMessage
+    from cptr.models.jobs import Job
+    from cptr.utils.timers import fold_legacy_timers
+
+    chat, prompt = _legacy_timer("timer-2", "parent-chat", 1_700_000_000_000_000_000)
+
+    async def main():
+        placeholder = await ChatMessage.create(
+            chat_id=chat.id,
+            role="assistant",
+            content="",
+            parent_id=prompt.id,
+            done=False,
+            created_at=2,
+        )
+        await Chat.update_current_message(chat.id, placeholder.id, 2)
+        return placeholder.id, await fold_legacy_timers()
+
+    placeholder_id, folded = _run(main())
+    assert folded == 1
+
+    async def check():
+        assert await ChatMessage.get_by_id(placeholder_id) is None
+        timer = await Chat.get_by_id(chat.id)
+        assert timer.current_message_id == prompt.id
+        job = (await Job.list_tasks(USER))[0]
+        assert job.payload == "check the deploy"
+
+    _run(check())
+
+
+def test_fold_settles_a_timer_it_cannot_use(jobs_db):
+    from cptr.models import Chat
+    from cptr.models.jobs import Job
+    from cptr.utils.timers import fold_legacy_timers
+
+    # No time set: nothing safe to schedule, so it is closed rather than lost.
+    chat, _ = _legacy_timer("timer-3", "parent-chat", 0, timer_at=0)
+
+    assert _run(fold_legacy_timers()) == 0
+
+    async def check():
+        settled = await Chat.get_by_id(chat.id)
+        assert settled.meta["status"] == "error"
+        assert "timer_error" in settled.meta
+        assert await Job.list_tasks(USER) == []
+
+    _run(check())

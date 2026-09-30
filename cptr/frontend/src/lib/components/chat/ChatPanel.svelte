@@ -1016,8 +1016,9 @@
 	// ── Scrolled-past question line ─────────────────────────────
 	// The first line of the question whose answer currently fills the top of
 	// the transcript, shown under the title. It appears only once that question
-	// has scrolled out from under the header, so it never just repeats text
-	// already on screen.
+	// has scrolled out above the header, so it never just repeats text
+	// already on screen. The line is in normal flow: it takes its own row
+	// instead of painting over the transcript.
 
 	// The two file-mention forms a user message can carry: `[label](file://path)`
 	// and TipTap's `[@ id="path" label="name"]`.
@@ -1044,20 +1045,19 @@
 		return questionLine(msg.content) || undefined;
 	}
 
-	// The bar's scrim paints over the transcript: a fade in the normal themes, a
-	// solid plate in mono (a fade would dither to grey). Its bottom edge is
-	// therefore the top of the readable transcript, and reading it off the element
-	// keeps the bar height, its negative margin and the transcript's own padding
-	// out of this file's arithmetic. One rect read per measure, which is
-	// rAF-coalesced anyway.
-	let headerVeilEl: HTMLDivElement | undefined = $state();
+	// The header is a real row above the transcript (title, and the question
+	// line once one has scrolled away). Its bottom edge is the top of the
+	// readable transcript. Reading it off the element keeps the title row and
+	// the question line's own height out of this file's arithmetic. One rect
+	// read per measure, which is rAF-coalesced anyway.
+	let headerEl: HTMLDivElement | undefined = $state();
 
 	function readableTop(): number {
-		const veil = headerVeilEl?.getBoundingClientRect().bottom;
+		const edge = headerEl?.getBoundingClientRect().bottom;
 		// Before the ref lands there is nothing to measure against, so the top of
 		// the scroll box is the only honest guess.
-		if (veil === undefined) return messagesEl?.getBoundingClientRect().top ?? 0;
-		return veil;
+		if (edge === undefined) return messagesEl?.getBoundingClientRect().top ?? 0;
+		return edge;
 	}
 
 	let scrolledQuestion = $state('');
@@ -1084,8 +1084,16 @@
 			current = el.dataset.question ?? '';
 			currentEl = el;
 		}
+		const lineChanged = scrolledQuestion !== current;
 		scrolledQuestion = current;
 		scrolledQuestionEl = currentEl;
+		// The question row grows and shrinks the header. While the reader is
+		// pinned to the tail, keep that tail in view after the row settles.
+		if (lineChanged && autoScroll) {
+			requestAnimationFrame(() => {
+				if (autoScroll) scrollToBottom();
+			});
+		}
 		// This walk forces a synchronous layout per question row, and it reruns on
 		// every transcript mutation — i.e. on every streamed token. Recording only
 		// the slow ones keeps the store legible while exposing the cost that grows
@@ -1101,8 +1109,8 @@
 		});
 	}
 
-	// How far below the readable top a jumped-to question lands, so that it is
-	// plainly in view rather than balanced on the header's edge.
+	// How far below the header a jumped-to question lands, so that it is
+	// plainly in view rather than tucked against the header's edge.
 	const QUESTION_LANDING_PAD = 8;
 
 	// Clicking the line walks one question further back. The jump lands that
@@ -1115,8 +1123,7 @@
 		if (!el || !messagesEl) return;
 		// Instant rather than smooth: this is a navigation jump, and an e-ink panel
 		// repaints a smooth scroll as a smear.
-		messagesEl.scrollTop +=
-			el.getBoundingClientRect().top - (readableTop() + QUESTION_LANDING_PAD);
+		messagesEl.scrollTop += el.getBoundingClientRect().top - (readableTop() + QUESTION_LANDING_PAD);
 		// Scrolling upward disengages auto-scroll (see handleMessagesScroll), so the
 		// transcript stays where the jump put it. The scroll event re-measures too;
 		// this covers the case where it does not fire.
@@ -1979,27 +1986,48 @@
 >
 	{#if !isLanding}
 		<div
-			class="relative z-30 -mb-12 flex h-7 shrink-0 items-center gap-2 pl-3 pr-2 dark:border-white/6"
-			style="border-color: var(--app-bar-border, color-mix(in oklab, var(--app-fg) 8%, transparent));"
+			bind:this={headerEl}
+			class="relative z-30 flex shrink-0 flex-col border-b"
+			style="background: var(--app-bg); border-color: var(--app-bar-border, color-mix(in oklab, var(--app-fg) 8%, transparent));"
 		>
-			<div
-				aria-hidden="true"
-				bind:this={headerVeilEl}
-				class="pointer-events-none absolute inset-0 -bottom-10 -z-10"
-				style="background: var(--app-bar-scrim, linear-gradient(to bottom, var(--app-bg), color-mix(in oklab, var(--app-bg) 95%, transparent) 40%, transparent 97%));"
-			></div>
-			<div
-				class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-gray-600 dark:text-gray-400"
-			>
-				{displayChatTitle}
+			<div class="flex h-7 items-center gap-2 pl-3 pr-2">
+				<div
+					class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-gray-600 dark:text-gray-400"
+				>
+					{displayChatTitle}
+				</div>
+				<div class="flex shrink-0 items-center gap-0.5">
+					<button
+						type="button"
+						class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
+						aria-label={$t('bar.newChat')}
+						title={$t('bar.newChat')}
+						use:tooltip={$t('bar.newChat')}
+						onclick={handleNewChatCommand}
+					>
+						<Icon name="chat-plus" size={14} />
+					</button>
+					<button
+						bind:this={statusButtonEl}
+						type="button"
+						class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
+						aria-label={statusTitle}
+						title={statusTitle}
+						use:tooltip={statusTitle}
+						onclick={handleStatusCommand}
+					>
+						<Icon name="list" size={13} />
+					</button>
+				</div>
 			</div>
 			<!-- The question the visible answer belongs to, once its own text has
-			     scrolled in under the header. Clicking walks to that question and
-			     shows the one before it, so repeated clicks climb back up the chat. -->
+			     scrolled above the header. It takes a row of its own so it does not
+			     cover the transcript. Clicking walks to that question and shows the
+			     one before it, so repeated clicks climb back up the chat. -->
 			{#if scrolledQuestion}
 				<button
 					type="button"
-					class="absolute left-2 right-2 top-full flex items-center gap-1 rounded-md px-1 py-0.5 text-left text-[0.6875rem] leading-4 text-gray-600 transition-colors duration-75 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+					class="mx-2 mb-1 flex items-center gap-1 rounded-md px-1 py-0.5 text-left text-[0.6875rem] leading-4 text-gray-600 transition-colors duration-75 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
 					title={scrolledQuestion}
 					aria-label={$t('chat.previousQuestion', { question: scrolledQuestion })}
 					use:tooltip={scrolledQuestion}
@@ -2009,29 +2037,6 @@
 					<Icon name="chevron-up" size={11} class="shrink-0" />
 				</button>
 			{/if}
-			<div class="flex shrink-0 items-center gap-0.5">
-				<button
-					type="button"
-					class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
-					aria-label={$t('bar.newChat')}
-					title={$t('bar.newChat')}
-					use:tooltip={$t('bar.newChat')}
-					onclick={handleNewChatCommand}
-				>
-					<Icon name="chat-plus" size={14} />
-				</button>
-				<button
-					bind:this={statusButtonEl}
-					type="button"
-					class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
-					aria-label={statusTitle}
-					title={statusTitle}
-					use:tooltip={statusTitle}
-					onclick={handleStatusCommand}
-				>
-					<Icon name="list" size={13} />
-				</button>
-			</div>
 		</div>
 	{/if}
 
@@ -2106,7 +2111,7 @@
 				<div
 					class="{$widescreenMode
 						? 'max-w-full'
-						: 'max-w-2xl'} mx-auto w-full px-4 pt-16 pb-16 flex flex-col gap-4"
+						: 'max-w-2xl'} mx-auto w-full px-4 pt-4 pb-16 flex flex-col gap-4"
 				>
 					{#if hasHiddenMessages}
 						<div bind:this={loadSentinelEl} class="h-1 w-full" aria-hidden="true"></div>

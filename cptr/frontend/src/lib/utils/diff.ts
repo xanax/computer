@@ -1,7 +1,7 @@
 export type DiffLineType = 'added' | 'removed' | 'context';
 export type DiffLine = { type: DiffLineType; content: string };
 export type DiffHunk = { header: string; lines: DiffLine[] };
-export type DiffFile = { path: string; hunks: DiffHunk[] };
+export type DiffFile = { path: string; hunks: DiffHunk[]; truncated?: boolean };
 export type NumberedDiffLine = DiffLine & { oldNumber: number | null; newNumber: number | null };
 export type InlineDiffSegment = { text: string; changed: boolean };
 export type InlineDiffLine = NumberedDiffLine & { segments: InlineDiffSegment[] };
@@ -120,18 +120,17 @@ export function withInlineDiffSegments(lines: NumberedDiffLine[]): InlineDiffLin
 				: unchangedSegments(item.content)
 		);
 
+		// Index counters, not indexOf. A new untracked file is one added-block
+		// of every line, and indexOf on that block is quadratic — a 266k-line
+		// log locked the tab when History applied the diff.
+		let removedIndex = 0;
+		let addedIndex = 0;
 		for (const item of block) {
-			const index =
-				item.type === 'removed'
-					? removed.indexOf(item)
-					: item.type === 'added'
-						? added.indexOf(item)
-						: -1;
 			const segments =
 				item.type === 'removed'
-					? removedSegments[index]
+					? removedSegments[removedIndex++]
 					: item.type === 'added'
-						? addedSegments[index]
+						? addedSegments[addedIndex++]
 						: [{ text: item.content || ' ', changed: false }];
 			result.push({ ...item, segments });
 		}

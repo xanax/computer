@@ -117,11 +117,10 @@ STREAM_CONNECT_TIMEOUT_SECONDS = float(os.environ.get("CPTR_STREAM_CONNECT_TIMEO
 STREAM_READ_TIMEOUT_SECONDS = float(os.environ.get("CPTR_STREAM_READ_TIMEOUT", "300"))
 STREAM_WRITE_TIMEOUT_SECONDS = float(os.environ.get("CPTR_STREAM_WRITE_TIMEOUT", "600"))
 
-# ── Automation scheduler ────────────────────────────────────
-AUTOMATION_POLL_INTERVAL = int(os.environ.get("AUTOMATION_POLL_INTERVAL", "10"))
-TIMER_POLL_INTERVAL = int(os.environ.get("TIMER_POLL_INTERVAL", "1"))
-
 # ── Job scheduler ───────────────────────────────────────────
+# The automation and timer intervals that used to live here are gone with their
+# loops: automations and timers are rows in `jobs` now, so JOB_POLL_INTERVAL is
+# the only clock (see cptr/utils/task_scheduler.py).
 # Jobs fire `trigger='at'` work: deferred todos run by an agent.
 JOB_POLL_INTERVAL = int(os.environ.get("CPTR_JOB_POLL_INTERVAL", "2"))
 # A job with no parent chat gets its own chat; this is its tool approval mode.

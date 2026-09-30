@@ -197,7 +197,7 @@
 				</div>
 				<div>
 					<label class="text-xs text-gray-600 dark:text-gray-400" for="stt-model"
-						>{$t('automations.model')}</label
+						>{$t('tasks.model')}</label
 					>
 					<input
 						id="stt-model"
@@ -287,7 +287,7 @@
 					</div>
 					<div>
 						<label class="text-xs text-gray-600 dark:text-gray-400" for="tts-model"
-							>{$t('automations.model')}</label
+							>{$t('tasks.model')}</label
 						>
 						<input
 							id="tts-model"

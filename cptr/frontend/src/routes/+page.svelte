@@ -6,6 +6,7 @@
 		workspaceList,
 		addWorkspace,
 		loadWorkspace,
+		focusDashTab,
 		gitReviewOpen,
 		setActiveGroup,
 		setSplitRatio,
@@ -525,11 +526,16 @@
 					lastLoadedPath = canonicalWorkspacePath;
 					await goto(`/?${params.toString()}`, { replaceState: true });
 				}
+				if (get(page).url.searchParams.get('view') === 'dashboard') focusDashTab();
 				processIntentParams();
 			});
 		} else if (workspacePath && workspacePath === lastLoadedPath) {
-			// Same workspace — process intents immediately
-			if (get(currentWorkspace)?.path === workspacePath) processIntentParams();
+			// Same workspace — process intents immediately. `view=dashboard`
+			// (the workspace heading) opens the Dash tab instead of a bare page.
+			if (get(currentWorkspace)?.path === workspacePath) {
+				if ($page.url.searchParams.get('view') === 'dashboard') focusDashTab();
+				processIntentParams();
+			}
 		} else if (!workspacePath) {
 			lastLoadedPath = null;
 			currentWorkspace.set(null);
@@ -1045,7 +1051,11 @@
 			/>
 			<div class="pane-content">
 				{#each homePane.tabs.filter((tab) => tab.type === 'chat') as tab (tab.id)}
-					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId} use:perfMount={{ label: tab.type, active: tab.id === homePane.activeTabId }}>
+					<div
+						class="persisted-tab"
+						class:persisted-tab-hidden={tab.id !== homePane.activeTabId}
+						use:perfMount={{ label: tab.type, active: tab.id === homePane.activeTabId }}
+					>
 						<ChatPanel
 							chatId={tab.path?.startsWith('new-') || tab.path?.startsWith('pending-')
 								? undefined
@@ -1059,7 +1069,11 @@
 					</div>
 				{/each}
 				{#each homePane.tabs.filter((tab) => tab.type === 'file' && tab.filePath) as tab (tab.id)}
-					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId} use:perfMount={{ label: tab.type, active: tab.id === homePane.activeTabId }}>
+					<div
+						class="persisted-tab"
+						class:persisted-tab-hidden={tab.id !== homePane.activeTabId}
+						use:perfMount={{ label: tab.type, active: tab.id === homePane.activeTabId }}
+					>
 						<FileEditor
 							filePath={tab.filePath!}
 							tabId={tab.id}
@@ -1069,12 +1083,20 @@
 					</div>
 				{/each}
 				{#each homePane.tabs.filter((tab) => tab.type === 'terminal' && tab.sessionId) as tab (tab.id)}
-					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId} use:perfMount={{ label: tab.type, active: tab.id === homePane.activeTabId }}>
+					<div
+						class="persisted-tab"
+						class:persisted-tab-hidden={tab.id !== homePane.activeTabId}
+						use:perfMount={{ label: tab.type, active: tab.id === homePane.activeTabId }}
+					>
 						<Terminal sessionId={tab.sessionId!} />
 					</div>
 				{/each}
 				{#each homePane.tabs.filter((tab) => tab.type === 'browser' && tab.browserSessionId) as tab (tab.id)}
-					<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== homePane.activeTabId} use:perfMount={{ label: tab.type, active: tab.id === homePane.activeTabId }}>
+					<div
+						class="persisted-tab"
+						class:persisted-tab-hidden={tab.id !== homePane.activeTabId}
+						use:perfMount={{ label: tab.type, active: tab.id === homePane.activeTabId }}
+					>
 						<BrowserPreview
 							sessionId={tab.browserSessionId!}
 							groupId={homePane.id}
@@ -1354,8 +1376,6 @@
 			{@render renderHomePane(activeHomeGroup)}
 		{/if}
 	</div>
-{:else if $page.url.searchParams.get('view') === 'dashboard'}
-	<WorkspaceDashboard workspace={$currentWorkspace!.path} />
 {:else}
 	<!-- Editor groups layout -->
 	<div class="split-container" class:is-dragging={resizingSplit !== null} role="presentation">
@@ -1417,13 +1437,26 @@
 			}}
 		/>
 		<div class="pane-content">
+			{#if groupTab?.type === 'dash'}
+				<div class="persisted-tab">
+					<WorkspaceDashboard workspace={$currentWorkspace!.path} />
+				</div>
+			{/if}
 			{#each group.tabs.filter((tab) => tab.type === 'files') as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}>
+				<div
+					class="persisted-tab"
+					class:persisted-tab-hidden={tab.id !== group.activeTabId}
+					use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}
+				>
 					<FileBrowser />
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'file' && tab.filePath) as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}>
+				<div
+					class="persisted-tab"
+					class:persisted-tab-hidden={tab.id !== group.activeTabId}
+					use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}
+				>
 					<FileEditor
 						filePath={tab.filePath!}
 						tabId={tab.id}
@@ -1433,7 +1466,11 @@
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'chat') as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}>
+				<div
+					class="persisted-tab"
+					class:persisted-tab-hidden={tab.id !== group.activeTabId}
+					use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}
+				>
 					<ChatPanel
 						workspace={$currentWorkspace!.path}
 						chatId={tab.path?.startsWith('new-') || tab.path?.startsWith('pending-')
@@ -1446,12 +1483,20 @@
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'terminal' && tab.sessionId) as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}>
+				<div
+					class="persisted-tab"
+					class:persisted-tab-hidden={tab.id !== group.activeTabId}
+					use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}
+				>
 					<Terminal sessionId={tab.sessionId!} />
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'browser' && tab.browserSessionId) as tab (tab.id)}
-				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId} use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}>
+				<div
+					class="persisted-tab"
+					class:persisted-tab-hidden={tab.id !== group.activeTabId}
+					use:perfMount={{ label: tab.type, active: tab.id === group.activeTabId }}
+				>
 					<BrowserPreview
 						sessionId={tab.browserSessionId!}
 						groupId={group.id}

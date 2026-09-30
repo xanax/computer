@@ -69,21 +69,28 @@ async def lifespan(app: FastAPI):
 
     await warm_model_cache(app.state)
 
-    # Start automation scheduler
-    from cptr.utils.automations import scheduler_worker_loop
+    # One scheduler for every kind of task. Before this there were three loops
+    # ticking on their own clocks (automations, timers, deferred jobs) and none
+    # could see the others' work; migration 0010 put them in one table, and this
+    # is the one loop over it. The automations loop in particular *must* not run
+    # any more: those rows are now templates in `jobs`, and it would fire each
+    # one a second time.
+    from cptr.utils.task_scheduler import recover_tasks, task_scheduler_loop
 
-    app.state.scheduler_task = asyncio.create_task(scheduler_worker_loop(app))
+    await recover_tasks()
+    app.state.task_task = asyncio.create_task(task_scheduler_loop(app))
 
-    from cptr.utils.timers import recover_timers, timer_worker_loop
+    # Legacy drain, one shot: pre-0010 timers were dormant child chats and
+    # nothing writes those any more (`timer()` creates a `trigger='at'` job), so
+    # there is no loop to run — anything still waiting is folded into the queue
+    # above and wakes through the same claim as every other job.
+    from cptr.utils.timers import fold_legacy_timers
 
-    await recover_timers()
-    app.state.timer_task = asyncio.create_task(timer_worker_loop(app))
+    await fold_legacy_timers()
 
-    # Start the job scheduler (deferred todos: `trigger='at'`)
-    from cptr.utils.jobs import job_worker_loop, recover_jobs
+    from cptr.utils.services import reattach_all
 
-    await recover_jobs()
-    app.state.job_task = asyncio.create_task(job_worker_loop(app))
+    await reattach_all()
 
     # Start messaging bots
     from cptr.utils.bridge import BotManager
@@ -94,23 +101,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        timer_task = getattr(app.state, "timer_task", None)
-        if timer_task:
-            timer_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await timer_task
+        try:
+            from cptr.utils.services import shutdown_all
 
-        scheduler_task = getattr(app.state, "scheduler_task", None)
-        if scheduler_task:
-            scheduler_task.cancel()
+            await shutdown_all()
+        except Exception:
+            pass
+        task_task = getattr(app.state, "task_task", None)
+        if task_task:
+            task_task.cancel()
             with suppress(asyncio.CancelledError):
-                await scheduler_task
-
-        job_task = getattr(app.state, "job_task", None)
-        if job_task:
-            job_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await job_task
+                await task_task
 
         bot_manager = getattr(app.state, "bot_manager", None)
         if bot_manager:

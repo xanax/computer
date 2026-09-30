@@ -212,12 +212,21 @@ class NotificationEventSink:
 
 
 class TimerEventSink:
+    """Honours `cancel_on`: "remind me in an hour, unless I read this first".
+
+    Timers are `trigger='at'` jobs now, so the cancellation is a conditional
+    UPDATE on those rows (`Job.cancel_cancellable`). The swept-timer path that
+    rewrote a dormant chat's meta went with the loop that fed it: pre-0010 rows
+    are folded into `jobs` at boot (``timers.fold_legacy_timers``), so the same
+    statement covers them.
+    """
+
     async def handle_event(self, event: Event) -> None:
         if event.event not in {EVENTS.CHAT_READ.name, EVENTS.CHAT_USER_MESSAGE.name}:
             return
-        from cptr.utils.timers import cancel_timers_for_event
+        from cptr.utils.task_scheduler import cancel_due_jobs_for_event
 
-        await cancel_timers_for_event(event)
+        await cancel_due_jobs_for_event(event)
 
 
 EVENT_SINKS = [TimerEventSink(), NotificationEventSink()]

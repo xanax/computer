@@ -199,11 +199,13 @@ async def put_workspace(request: Request, path: str = Query(...)):
             else _workspace_display_name(workspace_path)
         )
     workspace_data.pop("path", None)
-    # Preserve tool-server attachments if the editor save omitted them.
-    if "toolServers" not in workspace_data and existing_workspace:
+    # Preserve tool-server attachments and the workspace prompt if the editor
+    # save omitted them: a tab save must not erase fields it never touched.
+    if existing_workspace:
         existing_data = existing_workspace.data or {}
-        if "toolServers" in existing_data:
-            workspace_data["toolServers"] = existing_data["toolServers"]
+        for key in ("toolServers", "prompt", "services"):
+            if key not in workspace_data and key in existing_data:
+                workspace_data[key] = existing_data[key]
     # Everything else is workspace data (groups, tabs, etc.)
     await Workspace.upsert(user_id, workspace_path, name, workspace_data)
 
@@ -262,6 +264,203 @@ async def put_workspace_tool_servers(
     name = existing.name if existing else _workspace_display_name(workspace_path)
     await Workspace.upsert(user_id, workspace_path, name, data)
     return {"status": "saved", "path": workspace_path, "toolServers": ids}
+
+
+class WorkspacePromptBody(BaseModel):
+    prompt: str = ""
+
+
+@router.get("/workspace/prompt")
+async def get_workspace_prompt(request: Request, path: str = Query(...)):
+    """Return the workspace's own description (the block its chats open with)."""
+    user_id = await _get_user_id(request)
+    if not user_id:
+        return {"path": path, "prompt": ""}
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    workspace = _newest_workspace(await _workspaces_at_path(user_id, workspace_path))
+    return {"path": workspace_path, "prompt": Workspace.prompt_from(workspace)}
+
+
+@router.put("/workspace/prompt")
+async def put_workspace_prompt(
+    request: Request, body: WorkspacePromptBody, path: str = Query(...)
+):
+    """Set the workspace's description without touching tabs or tool servers."""
+    user_id = await _get_user_id(request)
+    if not user_id:
+        return {"status": "skipped"}
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    existing = _newest_workspace(await _workspaces_at_path(user_id, workspace_path))
+    data = dict(existing.data or {}) if existing else {}
+    prompt = body.prompt.strip() if isinstance(body.prompt, str) else ""
+    if prompt:
+        data["prompt"] = prompt
+    else:
+        data.pop("prompt", None)
+    name = existing.name if existing else _workspace_display_name(workspace_path)
+    await Workspace.upsert(user_id, workspace_path, name, data)
+    return {"status": "saved", "path": workspace_path, "prompt": prompt}
+
+
+class WorkspaceServiceBody(BaseModel):
+    name: str
+    command: str
+    cwd: str = "."
+    port: int | None = None
+    health_url: str = ""
+
+
+class AdoptServiceBody(BaseModel):
+    name: str
+    port: int | None = None
+    health_url: str = ""
+
+
+def _service_error(exc: Exception) -> HTTPException:
+    from cptr.utils.services import ServiceError
+
+    if isinstance(exc, ServiceError):
+        return HTTPException(status_code=exc.status_code, detail=exc.message)
+    raise exc
+
+
+@router.get("/workspace/services")
+async def get_workspace_services(request: Request, path: str = Query(...)):
+    """Declared services and unmanaged servers for one workspace."""
+    from cptr.utils.services import snapshot
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    return await snapshot(user_id, workspace_path)
+
+
+@router.post("/workspace/services")
+async def post_workspace_service(request: Request, body: WorkspaceServiceBody, path: str = Query(...)):
+    """Save a service definition. Does not start it."""
+    from cptr.utils.services import ServiceError, create_service
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    try:
+        spec = await create_service(user_id, workspace_path, body.model_dump())
+    except ServiceError as exc:
+        raise _service_error(exc) from exc
+    return spec
+
+
+@router.put("/workspace/services/{service_id}")
+async def put_workspace_service(
+    request: Request, service_id: str, body: WorkspaceServiceBody, path: str = Query(...)
+):
+    from cptr.utils.services import ServiceError, update_service
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    try:
+        spec = await update_service(user_id, workspace_path, service_id, body.model_dump())
+    except ServiceError as exc:
+        raise _service_error(exc) from exc
+    return spec
+
+
+@router.delete("/workspace/services/{service_id}")
+async def delete_workspace_service(request: Request, service_id: str, path: str = Query(...)):
+    from cptr.utils.services import ServiceError, delete_service
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    try:
+        await delete_service(user_id, workspace_path, service_id)
+    except ServiceError as exc:
+        raise _service_error(exc) from exc
+    return {"status": "deleted", "id": service_id}
+
+
+@router.post("/workspace/services/{service_id}/start")
+async def start_workspace_service(request: Request, service_id: str, path: str = Query(...)):
+    from cptr.utils.services import ServiceError, start
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    try:
+        return await start(user_id, workspace_path, service_id=service_id)
+    except ServiceError as exc:
+        raise _service_error(exc) from exc
+
+
+@router.post("/workspace/services/{service_id}/stop")
+async def stop_workspace_service(request: Request, service_id: str, path: str = Query(...)):
+    from cptr.utils.services import ServiceError, stop
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    try:
+        return await stop(user_id, workspace_path, service_id=service_id)
+    except ServiceError as exc:
+        raise _service_error(exc) from exc
+
+
+@router.post("/workspace/services/{service_id}/restart")
+async def restart_workspace_service(request: Request, service_id: str, path: str = Query(...)):
+    from cptr.utils.services import ServiceError, restart
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    try:
+        return await restart(user_id, workspace_path, service_id)
+    except ServiceError as exc:
+        raise _service_error(exc) from exc
+
+
+@router.post("/workspace/services/unmanaged/{session_id}/stop")
+async def stop_unmanaged_service(request: Request, session_id: str, path: str = Query(...)):
+    from cptr.utils.services import ServiceError, stop_unmanaged
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    try:
+        await stop_unmanaged(user_id, workspace_path, session_id)
+    except ServiceError as exc:
+        raise _service_error(exc) from exc
+    return {"status": "stopped", "command_session_id": session_id}
+
+
+@router.post("/workspace/services/unmanaged/{session_id}/adopt")
+async def adopt_unmanaged_service(
+    request: Request, session_id: str, body: AdoptServiceBody, path: str = Query(...)
+):
+    from cptr.utils.services import ServiceError, adopt_unmanaged
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    try:
+        spec = await adopt_unmanaged(
+            user_id,
+            workspace_path,
+            session_id,
+            body.model_dump(),
+        )
+    except ServiceError as exc:
+        raise _service_error(exc) from exc
+    return spec
 
 
 @router.delete("/workspace")

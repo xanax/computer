@@ -24,10 +24,10 @@ _Refreshed automatically by `scripts/fork-status.sh --update`; do not hand-edit.
 | | |
 | --- | --- |
 | Upstream base | `open-webui/computer` @ `f9d1d8c` (2026-08-16) — "refac" |
-| Fork commits ahead | 70 |
+| Fork commits ahead | 75 |
 | Upstream commits we lack | 0 |
-| Diff vs upstream | 200 files changed, 21590 insertions(+), 2515 deletions(-) |
-| Probes last run | 2026-09-21 |
+| Diff vs upstream | 215 files changed, 27541 insertions(+), 2667 deletions(-) |
+| Probes last run | 2026-09-28 |
 <!-- fork-status:end -->
 
 Run `scripts/fork-status.sh` for the current numbers plus the bug/fix probes. **This fork carries 0 commits from upstream's future**: the base above is both the fork point and the freshest upstream commit, so a sync is always a fast-forward merge with no upstream work sitting unreviewed.

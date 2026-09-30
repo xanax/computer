@@ -128,7 +128,7 @@
 				</div>
 				<div>
 					<label class="text-xs text-gray-600 dark:text-gray-400" for="image-generation-model"
-						>{$t('automations.model')}</label
+						>{$t('tasks.model')}</label
 					>
 					<input
 						id="image-generation-model"
@@ -196,7 +196,7 @@
 				</div>
 				<div>
 					<label class="text-xs text-gray-600 dark:text-gray-400" for="image-edit-model"
-						>{$t('automations.model')}</label
+						>{$t('tasks.model')}</label
 					>
 					<input
 						id="image-edit-model"

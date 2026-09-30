@@ -1418,6 +1418,24 @@ def build_tool_card_item(tool_name: str, result: str) -> dict | None:
     return None
 
 
+async def _execute_create_artifact(arguments: dict, __context__: dict) -> str:
+    """Run create_artifact directly, with the same context every other tool gets.
+
+    create_artifact is registered inline for plan mode only, so it is not in
+    ALL_TOOLS and cannot go through execute_tool() — which also means it is not
+    protected by that function's try/except. It takes __context__ (not
+    workspace), and called wrongly it raises TypeError, which used to escape
+    the tool call and abort the whole turn with "create_artifact() got an
+    unexpected keyword argument 'workspace'".
+    """
+    args = dict(arguments)
+    args.pop("workspace", None)  # model-supplied; the real one comes from context
+    try:
+        return await create_artifact(**args, __context__=__context__)
+    except Exception as e:
+        return f"Error executing create_artifact: {e}"
+
+
 def _default_base_url(provider: str) -> str:
     return {
         "anthropic": "https://api.anthropic.com/v1",
@@ -2149,9 +2167,9 @@ async def run_chat_task(
 
                 arguments = item.get("arguments") or {}
                 if name == "create_artifact":
-                    args = dict(arguments)
-                    args.pop("workspace", None)
-                    result = await create_artifact(**args, workspace=workspace)
+                    result = await _execute_create_artifact(
+                        arguments, {**tool_ctx, "call_id": item["call_id"]}
+                    )
                 else:
                     result = await execute_tool(
                         name,
@@ -2709,9 +2727,9 @@ async def run_chat_task(
                 for idx in other_indices:
                     tc, item = call_items[idx]
                     if tc["name"] == "create_artifact":
-                        args = dict(tc["arguments"])
-                        args.pop("workspace", None)
-                        result = await create_artifact(**args, workspace=workspace)
+                        result = await _execute_create_artifact(
+                            tc["arguments"], {**tool_ctx, "call_id": tc["call_id"]}
+                        )
                     else:
                         result = await execute_tool(
                             tc["name"],

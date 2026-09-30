@@ -35,6 +35,7 @@ from cptr.env import JOB_POLL_INTERVAL, JOB_TOOL_APPROVAL_MODE
 from cptr.models.jobs import (
     EXECUTOR_HUMAN,
     KIND_NOTE,
+    KIND_RUN,
     STATUS_FAILED,
     STATUS_NEEDS_REVIEW,
     STATUS_OPEN,
@@ -66,28 +67,70 @@ def _iso(ns: int | None) -> str:
 
 
 def build_prompt(job: Job) -> str:
-    """The user message a deferred job hands to the agent."""
+    """The user message a scheduled job hands to the agent.
+
+    Three kinds of row reach here and they want different framing: a deferred
+    todo (this is a promise I made to myself), a firing of a recurring task
+    (this happens every day whether or not anyone is looking), and a webhook
+    call (something outside asked for this just now).
+    """
+    if (job.meta or {}).get("timer"):
+        # A timer is a message the human wrote *to their own chat* and asked to
+        # have delivered later. It should arrive as what they wrote, not with a
+        # robot preamble explaining that it is now later.
+        return (job.payload or job.title).strip()
+
+    is_run = job.kind == KIND_RUN
+    header = (
+        "[Scheduled run - a recurring task just fired]"
+        if is_run
+        else "[Scheduled job - a deferred workspace todo just fired]"
+    )
+    when = job.trigger_at or (job.meta or {}).get("occurrence_scheduled_for")
     lines = [
-        "[Scheduled job — a deferred workspace todo just fired]",
+        header,
         "",
         f"Task: {(job.payload or job.title).strip()}",
         f"Workspace: {job.workspace}",
-        f"Scheduled for: {_iso(job.trigger_at)}",
+        f"Scheduled for: {_iso(when)}",
     ]
     if job.origin_chat:
         lines.append(f"Proposed in chat: {job.origin_chat}")
+
+    payload = (job.meta or {}).get("webhook_payload")
+    if payload:
+        lines += [
+            "",
+            "The caller sent this payload with the request:",
+            "```json",
+            str(payload),
+            "```",
+        ]
+
     lines += [
         "",
         "Nobody is watching this chat: no human will answer a question, and no one",
         "will approve a tool call, so finish what you can and leave the rest plainly",
         "unfinished rather than guessing.",
         "",
-        "Your work lands in a review queue, not a done pile — do not treat the task",
-        "as verified. If it really is complete, propose closing it with",
-        f'complete_workspace_todo(todo_id="{job.id}"), which the human approves in',
-        "the workspace dashboard. If you changed files, say plainly which ones and",
-        "what the change does.",
+        "Your work lands in a review queue, not a done pile - do not treat the task",
+        "as verified. If you changed files, say plainly which ones and what the change",
+        "does.",
     ]
+    if is_run:
+        # Closing the *template* would cancel the schedule, so a run must not
+        # offer that as the way to say "this one went fine".
+        lines.append(
+            "This is one firing of a recurring task; the schedule itself is not"
+            " yours to change. Report the outcome in your final message - do not"
+            " try to close the recurring task."
+        )
+    else:
+        lines.append(
+            "If it really is complete, propose closing it with"
+            f' complete_workspace_todo(todo_id="{job.id}"), which the human approves'
+            " in the workspace dashboard."
+        )
     return "\n".join(lines)
 
 
@@ -214,6 +257,18 @@ async def _tell_ui(job_id: str) -> None:
         logger.debug("Job %s: could not emit jobs_changed", job_id[:8], exc_info=True)
 
 
+async def _after_settle(job_id: str) -> None:
+    """Everything that must happen once a run reaches a terminal status.
+
+    The legacy mirror is kept in step here rather than at each call site, so the
+    two tables cannot drift while both exist (migration 0010).
+    """
+    from cptr.utils.task_scheduler import sync_legacy_run_status
+
+    await sync_legacy_run_status(job_id)
+    await _tell_ui(job_id)
+
+
 async def _watch_run(job_id: str, message_id: str) -> None:
     """Settle a job once its run finishes: `needs_review`, or `failed`.
 
@@ -249,7 +304,7 @@ async def _watch_run(job_id: str, message_id: str) -> None:
                 await Job.update_status(
                     job_id, STATUS_FAILED, _now_ms(), last_error="could not read the run's state"
                 )
-                await _tell_ui(job_id)
+                await _after_settle(job_id)
                 return
             continue
         read_failures = 0
@@ -257,7 +312,7 @@ async def _watch_run(job_id: str, message_id: str) -> None:
             await Job.update_status(
                 job_id, STATUS_FAILED, _now_ms(), last_error="run message disappeared"
             )
-            await _tell_ui(job_id)
+            await _after_settle(job_id)
             return
         if not message.done:
             continue
@@ -271,7 +326,7 @@ async def _watch_run(job_id: str, message_id: str) -> None:
         else:
             await Job.update_status(job_id, STATUS_NEEDS_REVIEW, _now_ms(), last_error=None)
             logger.info("Job %s run finished → needs_review", job_id[:8])
-        await _tell_ui(job_id)
+        await _after_settle(job_id)
         return
 
     logger.warning("Job %s: run did not finish within %ss", job_id[:8], _RUN_TIMEOUT_S)
@@ -281,7 +336,7 @@ async def _watch_run(job_id: str, message_id: str) -> None:
         _now_ms(),
         last_error=f"run did not finish within {_RUN_TIMEOUT_S}s",
     )
-    await _tell_ui(job_id)
+    await _after_settle(job_id)
 
 
 async def run_job(app, job: Job) -> None:
@@ -374,19 +429,15 @@ async def run_job(app, job: Job) -> None:
 
 
 async def job_worker_loop(app) -> None:
-    """Poll for due jobs, claim them, run them."""
-    logger.info("Job scheduler started (poll interval: %ss)", JOB_POLL_INTERVAL)
-    while True:
-        try:
-            now_ns = time.time_ns()
-            fired = await Job.mark_due_queued(now_ns)
-            if fired:
-                logger.info("Fired %d due job(s)", len(fired))
-            for job in await Job.claim_due():
-                asyncio.create_task(run_job(app, job))
-        except Exception:
-            logger.exception("Job scheduler error")
-        await asyncio.sleep(JOB_POLL_INTERVAL)
+    """Deprecated alias. The one scheduler is ``task_scheduler_loop``.
+
+    Kept so an older ``app.py`` or a lane that has not been restarted cannot
+    start a second, rival scheduler: this now *is* the task scheduler.
+    """
+    from cptr.utils.task_scheduler import task_scheduler_loop
+
+    logger.warning("job_worker_loop is deprecated; running task_scheduler_loop")
+    await task_scheduler_loop(app)
 
 
 async def recover_jobs() -> None:

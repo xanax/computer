@@ -16,6 +16,7 @@
  * only that workspace's state.
  */
 
+import { goto } from '$app/navigation';
 import { writable, derived, get } from 'svelte/store';
 import { toast } from 'svelte-sonner';
 import { getChats } from '$lib/apis/chat';
@@ -62,7 +63,7 @@ export interface FileSearchTarget {
 
 export interface Tab {
 	id: string;
-	type: 'home' | 'files' | 'terminal' | 'file' | 'chat' | 'preview' | 'browser'; // preview is migrated on load
+	type: 'home' | 'dash' | 'files' | 'terminal' | 'file' | 'chat' | 'preview' | 'browser'; // preview is migrated on load
 	label: string;
 	filePath?: string;
 	edit?: boolean;
@@ -78,6 +79,7 @@ export interface Tab {
 
 const SUPPORTED_TAB_TYPES = new Set([
 	'home',
+	'dash',
 	'files',
 	'terminal',
 	'file',
@@ -175,10 +177,60 @@ function nextId(): string {
 
 // ── Default group for a workspace ───────────────────────────────
 
+const DASH_TAB: Tab = { id: 'dash', type: 'dash', label: 'dash', permanent: true };
+const FILES_TAB: Tab = { id: 'files', type: 'files', label: 'files', permanent: true };
+
+/** Dash, then Files, then open files, then everything else. Chats stay in the
+    list (the bar hides them) but never sit between the file tabs. */
+export function orderWorkspaceTabs(tabs: Tab[]): Tab[] {
+	const dash: Tab[] = [];
+	const files: Tab[] = [];
+	const file: Tab[] = [];
+	const rest: Tab[] = [];
+	const chat: Tab[] = [];
+	for (const tab of tabs) {
+		if (tab.type === 'dash') dash.push({ ...tab, label: 'dash', permanent: true });
+		else if (tab.type === 'files') files.push({ ...tab, label: 'files', permanent: true });
+		else if (tab.type === 'file') file.push(tab);
+		else if (tab.type === 'chat') chat.push(tab);
+		else rest.push(tab);
+	}
+	return [...dash.slice(0, 1), ...files.slice(0, 1), ...file, ...rest, ...chat];
+}
+
+/** The first group carries the pinned Dash and Files tabs. Copies that have
+    drifted into other groups are pulled back so the bar stays one pair. */
+function pinWorkspaceGroups(groups: EditorGroup[]): EditorGroup[] {
+	let dash: Tab | undefined;
+	let files: Tab | undefined;
+	for (const group of groups) {
+		for (const tab of group.tabs) {
+			if (tab.type === 'dash' && !dash) dash = { ...tab, label: 'dash', permanent: true };
+			if (tab.type === 'files' && !files) files = { ...tab, label: 'files', permanent: true };
+		}
+	}
+	const pinnedDash = dash ?? DASH_TAB;
+	const pinnedFiles = files ?? FILES_TAB;
+	const firstId = groups[0]?.id;
+	const next = groups
+		.map((group) => {
+			const stripped = group.tabs.filter((tab) => tab.type !== 'dash' && tab.type !== 'files');
+			const tabs = orderWorkspaceTabs(
+				group.id === firstId ? [pinnedDash, pinnedFiles, ...stripped] : stripped
+			);
+			const activeTabId = tabs.some((tab) => tab.id === group.activeTabId)
+				? group.activeTabId
+				: (tabs[0]?.id ?? pinnedFiles.id);
+			return { ...group, tabs, activeTabId };
+		})
+		.filter((group) => group.tabs.length > 0);
+	return next.length > 0 ? next : [createDefaultGroup()];
+}
+
 function createDefaultGroup(): EditorGroup {
 	return {
 		id: 'default',
-		tabs: [{ id: 'files', type: 'files', label: 'Files', permanent: true }],
+		tabs: [DASH_TAB, FILES_TAB],
 		activeTabId: 'files'
 	};
 }
@@ -845,7 +897,9 @@ export async function loadWorkspace(path: string): Promise<void> {
 				})
 				.filter((g) => g.tabs.length > 0);
 
-			const groups = cleanedGroups.length > 0 ? cleanedGroups : [createDefaultGroup()];
+			const groups = pinWorkspaceGroups(
+				cleanedGroups.length > 0 ? cleanedGroups : [createDefaultGroup()]
+			);
 			const activeGroupId = groups.some((g) => g.id === ws.activeGroupId)
 				? ws.activeGroupId
 				: (groups[0]?.id ?? 'default');
@@ -1098,11 +1152,12 @@ function updateGroupTabs(
 			groups: ws.groups.map((g) => {
 				if (g.id !== gid) return g;
 				const result = fn(g.tabs, g);
+				const tabs = orderWorkspaceTabs(result.tabs);
 				const newActiveId = result.activeTabId ?? g.activeTabId;
 				const tabHistory =
 					result.tabHistory ??
 					(newActiveId !== g.activeTabId ? pushTabHistory(g, g.activeTabId) : g.tabHistory);
-				return { ...g, tabs: result.tabs, activeTabId: newActiveId, tabHistory };
+				return { ...g, tabs, activeTabId: newActiveId, tabHistory };
 			})
 		};
 	});
@@ -1126,13 +1181,19 @@ export function reorderTabs(oldIndex: number, newIndex: number, groupId?: string
  */
 export function reorderVisibleTabs(oldIndex: number, newIndex: number, groupId?: string): void {
 	updateGroupTabs(groupId, (tabs) => {
-		const visible = tabs.filter((tab) => tab.type !== 'chat');
-		if (oldIndex < 0 || oldIndex >= visible.length) return { tabs };
-		const [moved] = visible.splice(oldIndex, 1);
-		visible.splice(newIndex, 0, moved);
-		let visibleIndex = 0;
-		const reordered = tabs.map((tab) => (tab.type === 'chat' ? tab : visible[visibleIndex++]));
-		return { tabs: reordered };
+		// Dash and Files are pinned ahead of this list, so the indices are only
+		// the tabs that follow them (open files, terminals, browsers).
+		const movable = orderWorkspaceTabs(tabs).filter(
+			(tab) => tab.type !== 'chat' && tab.type !== 'dash' && tab.type !== 'files'
+		);
+		if (oldIndex < 0 || oldIndex >= movable.length || newIndex < 0 || newIndex >= movable.length) {
+			return { tabs };
+		}
+		const [moved] = movable.splice(oldIndex, 1);
+		movable.splice(newIndex, 0, moved);
+		const pinned = tabs.filter((tab) => tab.type === 'dash' || tab.type === 'files');
+		const chats = tabs.filter((tab) => tab.type === 'chat');
+		return { tabs: [...pinned, ...movable, ...chats] };
 	});
 }
 
@@ -1683,6 +1744,44 @@ export function setActiveTab(tabId: string, groupId?: string): void {
 			});
 		}
 	}
+
+	const ws = get(currentWorkspace);
+	const gid = groupId ?? ws?.activeGroupId;
+	const active = ws?.groups.find((g) => g.id === gid)?.tabs.find((t) => t.id === tabId);
+	syncDashQuery(active?.type === 'dash');
+}
+
+/** The dashboard lives on the Dash tab. `view=dashboard` keeps a reload there,
+    and leaving the tab drops the param so a reload returns to the file you had open. */
+function syncDashQuery(showDash: boolean): void {
+	if (typeof window === 'undefined') return;
+	const url = new URL(window.location.href);
+	if (!url.searchParams.get('workspace')) return;
+	const showing = url.searchParams.get('view') === 'dashboard';
+	if (showDash === showing) return;
+	if (showDash) url.searchParams.set('view', 'dashboard');
+	else url.searchParams.delete('view');
+	void goto(`${url.pathname}${url.search}`, {
+		replaceState: true,
+		keepFocus: true,
+		noScroll: true
+	});
+}
+
+/** Open the pinned Dash tab. Used when the address asks for the dashboard. */
+export function focusDashTab(): void {
+	const ws = get(currentWorkspace);
+	if (!ws) return;
+	for (const group of ws.groups) {
+		const dash = group.tabs.find((tab) => tab.type === 'dash');
+		if (!dash) continue;
+		if (ws.activeGroupId === group.id && group.activeTabId === dash.id) {
+			syncDashQuery(true);
+			return;
+		}
+		setActiveTab(dash.id, group.id);
+		return;
+	}
 }
 
 export function setActiveGroup(groupId: string): void {
@@ -1786,7 +1885,7 @@ export function splitCurrentTab(direction?: SplitDirection): void {
 	const group = ws.groups.find((g) => g.id === ws.activeGroupId);
 	if (!group) return;
 	const tab = group.tabs.find((t) => t.id === group.activeTabId);
-	if (!tab) return;
+	if (!tab || tab.type === 'dash' || tab.type === 'files') return;
 
 	const dir = direction ?? ws.splitDirection ?? 'horizontal';
 
