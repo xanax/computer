@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { get } from 'svelte/store';
-	import { Terminal } from '@xterm/xterm';
+	import { Terminal, type ITheme } from '@xterm/xterm';
 	import { FitAddon } from '@xterm/addon-fit';
 	import { WebglAddon } from '@xterm/addon-webgl';
 	import { terminalFontSize } from '$lib/stores';
@@ -10,6 +10,7 @@
 		normalizeTerminalFontSize,
 		TERMINAL_LINE_HEIGHT
 	} from '$lib/utils/appearance';
+	import { MonoAnsiFilter } from '$lib/utils/mono-terminal';
 
 	// ── Compact binary WebSocket protocol ─────────────────────
 	// Client → Server:  byte 0 = type, rest = payload
@@ -182,6 +183,11 @@
 		return document.documentElement.classList.contains('mono');
 	}
 
+	// 240 slots, colours 16–255. Indexed colour is resolved at draw time, so
+	// filling these also recolours scrollback that is already on screen.
+	let monoExtendedAnsi: string[] = [];
+	let monoExtendedAnsiFor = '';
+
 	function terminalTheme() {
 		const background = themeColor('--app-bg');
 		const foreground = themeColor('--app-fg');
@@ -194,40 +200,73 @@
 		};
 		if (!isMonoMode()) return base;
 
-		// Every ANSI slot collapses onto the foreground colour, and selection is
-		// a solid inversion instead of a grey veil. `selectionForeground` is what
-		// keeps the selected text readable on an opaque selection.
-		const ansi: Record<string, string> = {
-			selectionBackground: foreground,
+		if (monoExtendedAnsiFor !== foreground) {
+			monoExtendedAnsiFor = foreground;
+			monoExtendedAnsi = Array.from({ length: 240 }, () => foreground);
+		}
+		// The 16-colour palette and the 256-colour cube all collapse onto ink.
+		// Truecolour and faint are stripped before they reach xterm (see
+		// MonoAnsiFilter); a theme cannot override an RGB cell.
+		//
+		// Selection is an inversion, paper text on ink. xterm turns a fully
+		// opaque selection into a 30% veil, which is a grey, so the alpha sits
+		// just under 1 and the bar stays solid.
+		const inkSelection = withAlpha(foreground, 0.996);
+		// xterm derives its scrollbar thumb from the foreground at 20% alpha,
+		// and a translucent ink is a grey: mono pins it to solid ink.
+		const theme: ITheme = {
+			...base,
+			selectionBackground: inkSelection,
 			selectionForeground: background,
-			selectionInactiveBackground: foreground,
-			// xterm derives its scrollbar thumb from the foreground at 20% alpha,
-			// and a translucent ink is a grey: mono pins it to solid ink.
+			selectionInactiveBackground: inkSelection,
 			scrollbarSliderBackground: foreground,
 			scrollbarSliderHoverBackground: foreground,
-			scrollbarSliderActiveBackground: foreground
+			scrollbarSliderActiveBackground: foreground,
+			extendedAnsi: monoExtendedAnsi,
+			black: foreground,
+			red: foreground,
+			green: foreground,
+			yellow: foreground,
+			blue: foreground,
+			magenta: foreground,
+			cyan: foreground,
+			white: foreground,
+			brightBlack: foreground,
+			brightRed: foreground,
+			brightGreen: foreground,
+			brightYellow: foreground,
+			brightBlue: foreground,
+			brightMagenta: foreground,
+			brightCyan: foreground,
+			brightWhite: foreground
 		};
-		for (const name of [
-			'black',
-			'red',
-			'green',
-			'yellow',
-			'blue',
-			'magenta',
-			'cyan',
-			'white',
-			'brightBlack',
-			'brightRed',
-			'brightGreen',
-			'brightYellow',
-			'brightBlue',
-			'brightMagenta',
-			'brightCyan',
-			'brightWhite'
-		]) {
-			ansi[name] = foreground;
+		return theme;
+	}
+
+	const monoAnsi = new MonoAnsiFilter();
+	let appliedThemeKey = '';
+
+	function applyTerminalTheme() {
+		if (!term) return;
+		const mono = isMonoMode();
+		const key = `${mono}|${themeColor('--app-bg')}|${themeColor('--app-fg')}`;
+		if (key === appliedThemeKey) return;
+		appliedThemeKey = key;
+		if (!mono) monoAnsi.reset();
+		term.options.theme = terminalTheme();
+		// A blinking cursor is a full-frame refresh on e-ink.
+		term.options.cursorBlink = !mono;
+	}
+
+	function writePty(data: string | Uint8Array) {
+		if (!term) return;
+		if (!isMonoMode()) {
+			monoAnsi.reset();
+			term.write(data);
+			return;
 		}
-		return { ...base, ...ansi };
+		const bytes = typeof data === 'string' ? textEncoder.encode(data) : data;
+		term.write(monoAnsi.push(bytes));
 	}
 
 	// Send input to PTY via WebSocket (binary prefix protocol).
@@ -328,14 +367,13 @@
 			disableStdin: readOnly,
 			theme: terminalTheme()
 		});
+		appliedThemeKey = `${isMonoMode()}|${themeColor('--app-bg')}|${themeColor('--app-fg')}`;
 
-		// Watch for theme changes
+		// Watch for theme changes. `style` also moves for the keyboard inset
+		// and the text scale, so the theme is applied only when the palette
+		// actually changes — rewriting it repaints every cell.
 		themeObserver = new MutationObserver(() => {
-			if (term) {
-				term.options.theme = terminalTheme();
-				// A blinking cursor is a full-frame refresh on e-ink.
-				term.options.cursorBlink = !isMonoMode();
-			}
+			applyTerminalTheme();
 		});
 		themeObserver.observe(document.documentElement, {
 			attributes: true,
@@ -380,7 +418,7 @@
 		fitAddon = new FitAddon();
 		term.loadAddon(fitAddon);
 		term.open(containerEl);
-		if (initialOutput) term.write(initialOutput);
+		if (initialOutput) writePty(initialOutput);
 		// // iOS: Move xterm's textarea from inside .xterm-helpers (position:absolute,
 		// // offscreen) to a flex sibling BELOW the terminal.
 		// if ('ontouchstart' in window && term.textarea) {
@@ -548,7 +586,7 @@
 		ws.onmessage = (event) => {
 			// binaryType='arraybuffer' guarantees ArrayBuffer; write
 			// directly with a Uint8Array view (zero-copy wrapper)
-			term?.write(new Uint8Array(event.data as ArrayBuffer));
+			writePty(new Uint8Array(event.data as ArrayBuffer));
 			trackOutputForHaptics();
 		};
 
@@ -603,6 +641,16 @@
 		scrollbar-width: thin;
 		scrollbar-color: color-mix(in oklab, var(--app-fg) 40%, transparent) transparent;
 		overscroll-behavior: contain;
+	}
+	/* A 40% thumb is a grey. Monochrome keeps the bar solid ink. */
+	:global(.mono .xterm-viewport) {
+		scrollbar-color: var(--app-fg) transparent;
+	}
+	:global(.mono .xterm),
+	:global(.mono .xterm-viewport),
+	:global(.mono .xterm-screen) {
+		background-color: var(--app-bg) !important;
+		color: var(--app-fg);
 	}
 	/* When moved to flex sibling on mobile, override xterm's offscreen
 	   positioning. Make it a real in-flow element like chat's textarea.
