@@ -95,8 +95,10 @@
 	type TabDragPayload = { tabId: string; groupId: string };
 
 	// In a workspace the bar is Dash, Files and the Chat launcher (all pinned),
-	// then open files and other editors, then the chat conversations. Home keeps
-	// its chats out of the bar: they are opened from the discover panel there.
+	// then the open files and terminals. Chat conversations never appear as tabs
+	// -- they are opened from the sidebar or the launcher's history, and their
+	// panels stay mounted (hidden) so switching keeps the conversation alive.
+	// Home keeps its chats out of the bar too: it opens them from discover.
 	const displayTabs = $derived.by(() => {
 		const tabs = (group?.tabs ?? []).filter((tab) =>
 			home ? tab.type !== 'chat' : isWorkspaceTabVisible(tab)

@@ -309,14 +309,20 @@ export function executeAction(
 			}
 			const g = get(activeGroup);
 			if (!g) return true;
-			// Cycle exactly what the bar shows: the pinned launcher and chat
-			// conversations count, the new-/pending- placeholder does not.
+			// Cycle exactly what the bar shows: the pinned tabs and the open files
+			// and terminals. Chat conversations are not tabs, so they are skipped.
 			const visible = g.tabs.filter(isWorkspaceTabVisible);
 			if (visible.length < 2) return true;
-			const currentIdx = visible.findIndex((t) => t.id === g.activeTabId);
-			if (currentIdx === -1) return true;
 			const dir = action === 'nextTab' ? 1 : -1;
-			const nextIdx = (currentIdx + dir + visible.length) % visible.length;
+			const currentIdx = visible.findIndex((t) => t.id === g.activeTabId);
+			// Reading a chat leaves nothing on the bar active; the first press
+			// enters the bar at the end the key heads for.
+			const nextIdx =
+				currentIdx === -1
+					? dir === 1
+						? 0
+						: visible.length - 1
+					: (currentIdx + dir + visible.length) % visible.length;
 			setActiveTab(visible[nextIdx].id, g.id);
 			return true;
 		}

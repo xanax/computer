@@ -187,8 +187,8 @@ const FILES_TAB: Tab = { id: 'files', type: 'files', label: 'files', permanent: 
 const CHAT_TAB: Tab = { id: 'chat', type: 'chat', label: 'chat', permanent: true };
 
 /** Dash, then Files, then the Chat launcher, then open files, then everything
-    else. Chat conversations come last: they are reachable from the bar without
-    ever displacing a file tab. */
+    else. Chat conversations come last (and off the bar entirely): open files and
+    terminals take every visible slot, and a chat never displaces one. */
 export function orderWorkspaceTabs(tabs: Tab[]): Tab[] {
 	const dash: Tab[] = [];
 	const files: Tab[] = [];
@@ -220,13 +220,15 @@ export function isWorkspaceTabPinned(tab: Tab): boolean {
 	return tab.type === 'dash' || tab.type === 'files' || (tab.type === 'chat' && !!tab.permanent);
 }
 
-/** Whether the bar shows this tab. The launcher does, and so does a chat once
-    it has a real id; the `new-`/`pending-` placeholder a send passes through
-    stays hidden (it is the same tab, about to be named). */
+/** Whether the bar shows this tab. Everything but a chat: the bar carries Dash,
+    Files and the Chat launcher, then the open files and terminals. A chat
+    conversation is never a tab of its own -- it is reached from the sidebar or
+    from the launcher's history, and lives in the data model only so its panel
+    stays mounted (`+page.svelte`) and the workspace remembers which one is open
+    (the `new-`/`pending-` placeholder a send passes through is likewise kept out
+    of the bar). */
 export function isWorkspaceTabVisible(tab: Tab): boolean {
-	if (tab.type !== 'chat') return true;
-	if (tab.permanent) return true;
-	return !!tab.path && !tab.path.startsWith('new-') && !tab.path.startsWith('pending-');
+	return tab.type !== 'chat' || !!tab.permanent;
 }
 
 /** The first group carries the pinned Dash, Files and Chat tabs. Copies that
