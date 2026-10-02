@@ -533,15 +533,29 @@
 	background-color: var(--app-fg) !important;
 	background-image: none !important;
 }
-.mono :where(.cm-cursor, .cm-dropCursor) {
-	border-left-color: var(--app-fg) !important;
-}
 .mono :where(.cm-activeLine, .cm-activeLineGutter) {
 	background: var(--app-fg) !important;
 }
-.mono :where(.cm-activeLine) :where(span),
+/* The cursor line is a solid ink bar, so everything drawn on it flips to paper.
+   No :where() on the line itself: `.cm-content :where(span)` above is two
+   classes deep and :where() adds none, so a wrapped rule loses to it and the
+   line's bare text nodes stay ink-on-ink. */
+.mono .cm-content .cm-activeLine,
+.mono .cm-content .cm-activeLine :where(span),
 .mono :where(.cm-activeLineGutter) {
 	color: var(--app-bg) !important;
+}
+/* A selection here is a solid inversion too, and CodeMirror paints that slab
+   behind the line, out of every selector's reach — so the covered characters
+   are marked in the DOM (see FileEditor.svelte) and flipped instead. On the
+   cursor line the bar is already ink, so that one inverts the other way round
+   and still reads: paper slab, ink text. */
+.mono .cm-content .cm-mono-selected {
+	color: var(--app-bg) !important;
+}
+.mono .cm-content .cm-activeLine .cm-mono-selected {
+	background: var(--app-bg) !important;
+	color: var(--app-fg) !important;
 }
 .mono :where(.cm-tooltip, .cm-panels) {
 	background: var(--app-bg) !important;
@@ -555,6 +569,22 @@
 .mono :where(.cm-searchMatch, .cm-selectionMatch, .cm-matchingBracket) {
 	background: transparent !important;
 	box-shadow: inset 0 0 0 1px var(--app-fg);
+}
+/* An ink frame is invisible on the ink bar, so hits on the cursor line get a
+   paper one. */
+.mono .cm-content .cm-activeLine
+	:where(.cm-searchMatch, .cm-selectionMatch, .cm-matchingBracket) {
+	box-shadow: inset 0 0 0 1px var(--app-bg);
+}
+/* The primary caret always sits on the cursor line, i.e. on the ink bar, so it
+   flips to paper. Secondary carets belong to other lines, where the surface is
+   paper already, and the drop caret goes anywhere — both stay ink. (The caret
+   layer is a sibling of .cm-content, so no selector can scope this per line.) */
+.mono :where(.cm-cursor-primary) {
+	border-left-color: var(--app-bg) !important;
+}
+.mono :where(.cm-cursor-secondary, .cm-dropCursor) {
+	border-left-color: var(--app-fg) !important;
 }
 
 /* Translucent rules are grey lines on either palette, in or out of .app-theme. */

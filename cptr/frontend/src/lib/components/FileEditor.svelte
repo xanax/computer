@@ -15,6 +15,7 @@
 	import { getGitDiff } from '$lib/apis/git';
 	import { diffDisplayMode, hideWhitespaceChanges } from '$lib/stores/gitDiffSettings';
 	import { gitStatusStore, type GitFile } from '$lib/stores/gitStatus.svelte';
+	import { monoSelectionMarks } from '$lib/editor-mono';
 	import Icon from './Icon.svelte';
 	import SaveDialog from './SaveDialog.svelte';
 	import type RichTextEditorType from './markdown/RichTextEditor.svelte';
@@ -930,6 +931,7 @@
 			EditorState.languageData.of(() => [{ autocomplete: completeAnyWord }]),
 			rectangularSelection(),
 			highlightActiveLine(),
+			...(mono ? [monoSelectionMarks] : []),
 			highlightSelectionMatches(),
 			keymap.of([
 				...closeBracketsKeymap,

@@ -8,6 +8,7 @@
 	import { indentWithTab } from '@codemirror/commands';
 	import { indentUnit } from '@codemirror/language';
 	import { oneDark } from '@codemirror/theme-one-dark';
+	import { monoSelectionMarks } from '$lib/editor-mono';
 
 	interface Props {
 		output: any[];
@@ -40,6 +41,7 @@
 				doc: JSON.stringify(output, null, 2),
 				extensions: [
 					basicSetup,
+					...(isMono ? [monoSelectionMarks] : []),
 					keymap.of([indentWithTab]),
 					indentUnit.of('  '),
 					json(),
