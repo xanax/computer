@@ -59,6 +59,8 @@
 	let todosBusy = $state(false);
 	let loading = $state(true);
 	let failed = $state(false);
+	/** The workspace the rows on screen belong to; '' until the first read lands. */
+	let loadedFor = $state('');
 
 	/**
 	 * Row titles are ellipsised to a single line, which is exactly the wrong
@@ -206,7 +208,13 @@
 	$effect(() => {
 		const ws = workspace;
 		if (!ws) return;
-		loading = true;
+		// The spinner replaces the board, so it may only be shown when there is
+		// nothing to replace: the first read for a workspace. Re-reading the same
+		// workspace (a store write from anywhere in the app re-runs this effect)
+		// otherwise tore the rows down between pointerdown and pointerup, and the
+		// click the user made landed on a detached button. Rows are refreshed in
+		// place instead; `loadBoard` below has always worked this way.
+		loading = loadedFor !== ws;
 		failed = false;
 
 		// One read for the whole board: the schedules are rows of it too, so the
@@ -234,6 +242,7 @@
 				workspacePrompt = promptResult.value.prompt ?? '';
 				if (!promptEditing) promptDraft = workspacePrompt;
 			}
+			loadedFor = ws;
 			loading = false;
 		});
 	});

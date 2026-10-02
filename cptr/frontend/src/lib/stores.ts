@@ -17,7 +17,7 @@
  */
 
 import { goto } from '$app/navigation';
-import { writable, derived, get } from 'svelte/store';
+import { writable, derived, get, type Writable } from 'svelte/store';
 import { toast } from 'svelte-sonner';
 import { getChats } from '$lib/apis/chat';
 import {
@@ -1870,14 +1870,36 @@ export function focusDashTab(): void {
 	}
 }
 
+/**
+ * A store update that changes nothing must not notify.
+ *
+ * `writable.update()` hands its value to `set()`, and Svelte's store contract
+ * compares with `safe_not_equal`, which answers "not equal" for *any* object —
+ * so `update((ws) => ws)` notifies every subscriber even though the value it
+ * carries is the same one. For `currentWorkspace` that means the whole app
+ * re-renders, and the `$currentWorkspace` accessor behind the dashboard's
+ * `workspace` prop is rebuilt, which re-runs the dashboard's load effect.
+ *
+ * That is not free where these helpers are called from an event that must
+ * survive: `setActiveGroup` runs on every `pointerdown` inside a pane, so a
+ * no-op call used to blank the pane between pointerdown and pointerup and the
+ * click never landed (see `notes/NOTES-click-lost-to-pane-remount.md`).
+ */
+function updateIfChanged<T>(store: Writable<T>, change: (value: T) => T): void {
+	const before = get(store);
+	const after = change(before);
+	if (after !== before) store.set(after);
+}
+
 export function setActiveGroup(groupId: string): void {
-	currentWorkspace.update((ws) =>
+	// Called on every pointerdown/focusin in a pane: silent unless it moves.
+	updateIfChanged(currentWorkspace, (ws) =>
 		ws && ws.activeGroupId !== groupId ? { ...ws, activeGroupId: groupId } : ws
 	);
 }
 
 export function setHomeActiveGroup(groupId: string): void {
-	homeState.update((state) =>
+	updateIfChanged(homeState, (state) =>
 		state.activeGroupId === groupId ? state : { ...state, activeGroupId: groupId }
 	);
 }
