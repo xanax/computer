@@ -9,7 +9,13 @@
 		currentWorkspace,
 		sleepClosedChatTabs
 	} from '$lib/stores';
-	import { chatEnabled, setChatClosed, updateChatStatuses } from '$lib/stores/chat';
+	import {
+		chatEnabled,
+		chatStatuses,
+		isChatUnread,
+		setChatClosed,
+		updateChatStatuses
+	} from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import {
 		deleteChat as apiDeleteChat,
@@ -54,6 +60,10 @@
 	let currentPath = $derived($currentWorkspace?.path ?? null);
 	let currentChatId = $derived($activeTab?.type === 'chat' ? $activeTab.path : null);
 	const WS_CHATS_PAGE_SIZE = 5;
+	// Only chats that need attention are listed, so the first fetch has to reach
+	// past recently read ones: a chat waiting unread keeps its place further down
+	// the updated_at order than the handful of chats opened since.
+	const WS_CHATS_INITIAL_FETCH = 25;
 
 	function isWorkspaceExpanded(path: string): boolean {
 		return !collapsedWorkspaces.has(path);
@@ -70,17 +80,34 @@
 	}
 
 	/**
-	 * A closed chat stays out of the sidebar until new activity makes it unread
-	 * again (mirrors the server's `include_closed=false` filter).
+	 * The sidebar is an attention list: a chat is listed while the server is
+	 * working on it, or while it holds activity the user has not seen. Anything
+	 * else (including a closed chat with nothing new -- that is the same as read)
+	 * stays out of the way; idle chats are found in the pinned Chat tab's
+	 * history list instead of as permanent rows here.
 	 */
-	function isHiddenClosedChat(chat: ChatInfo): boolean {
-		if (!chat.closed_at) return false;
-		if (chat.last_read_at === null || chat.last_read_at === undefined) return false;
-		return chat.updated_at <= chat.last_read_at;
+	function needsAttention(chat: ChatInfo): boolean {
+		const status = $chatStatuses.get(chat.id);
+		if (!status) return !!chat.is_active;
+		return status.active || isChatUnread(status);
+	}
+
+	/**
+	 * One unread row per chat is a queue for the user, so a chat waiting on them
+	 * comes before one the server is still working on; newest first within each.
+	 * Applied where the rows are drawn, because the paged fetch returns server
+	 * order (updated_at) and only some refreshes go through the append path.
+	 */
+	function byAttention(a: ChatInfo, b: ChatInfo): number {
+		const waiting = (chat: ChatInfo) =>
+			Number(
+				!chat.is_active && (chat.last_read_at === null || chat.updated_at > chat.last_read_at)
+			);
+		return waiting(b) - waiting(a) || b.updated_at - a.updated_at;
 	}
 
 	function visibleChatsFor(path: string): ChatInfo[] {
-		return (wsChatsCache.get(path) ?? []).filter((chat) => !isHiddenClosedChat(chat));
+		return (wsChatsCache.get(path) ?? []).filter(needsAttention).sort(byAttention);
 	}
 
 	/** Close (conclude) a chat: it leaves the sidebar until it sees new activity. */
@@ -117,20 +144,7 @@
 			);
 			wsChatsCache = new Map([
 				...wsChatsCache,
-				[
-					path,
-					append
-						? [...existing, ...(data.chats || [])].sort(
-								(a, b) =>
-									Number(
-										!b.is_active && (b.last_read_at === null || b.updated_at > b.last_read_at)
-									) -
-										Number(
-											!a.is_active && (a.last_read_at === null || a.updated_at > a.last_read_at)
-										) || b.updated_at - a.updated_at
-							)
-						: data.chats || []
-				]
+				[path, append ? [...existing, ...(data.chats || [])] : data.chats || []]
 			]);
 			updateChatStatuses(data.chats || [], path);
 			wsChatsHasMore = new Map([...wsChatsHasMore, [path, data.has_more]]);
@@ -325,7 +339,7 @@
 		// A chat created in another session is not yet in this sidebar's page.
 		// Refresh only that expanded workspace; all known rows update in place.
 		if (!known && data.workspace && isWorkspaceExpanded(data.workspace)) {
-			void fetchWorkspaceChats(data.workspace);
+			void fetchWorkspaceChats(data.workspace, false, WS_CHATS_INITIAL_FETCH);
 		} else if (
 			known &&
 			typeof data.last_read_at === 'number' &&
@@ -343,7 +357,7 @@
 		for (const ws of $workspaceList) {
 			if (!isWorkspaceExpanded(ws.path)) continue;
 			if (wsChatsCache.has(ws.path) || wsChatsLoading.has(ws.path)) continue;
-			void fetchWorkspaceChats(ws.path);
+			void fetchWorkspaceChats(ws.path, false, WS_CHATS_INITIAL_FETCH);
 		}
 	});
 

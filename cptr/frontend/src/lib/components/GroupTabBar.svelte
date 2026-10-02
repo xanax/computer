@@ -17,6 +17,8 @@
 		setSplitDirection,
 		sidebarOpen,
 		orderWorkspaceTabs,
+		isWorkspaceTabPinned,
+		isWorkspaceTabVisible,
 		type EditorGroup,
 		type Tab
 	} from '$lib/stores';
@@ -92,17 +94,18 @@
 
 	type TabDragPayload = { tabId: string; groupId: string };
 
-	// Chats are surfaced in the sidebar (under each workspace), not as tabs.
-	// In a workspace the bar is Dash, Files, then open files and other editors.
+	// In a workspace the bar is Dash, Files and the Chat launcher (all pinned),
+	// then open files and other editors, then the chat conversations. Home keeps
+	// its chats out of the bar: they are opened from the discover panel there.
 	const displayTabs = $derived.by(() => {
-		const tabs = (group?.tabs ?? []).filter((tab) => tab.type !== 'chat');
+		const tabs = (group?.tabs ?? []).filter((tab) =>
+			home ? tab.type !== 'chat' : isWorkspaceTabVisible(tab)
+		);
 		return home ? tabs : orderWorkspaceTabs(tabs);
 	});
-	const pinnedTabs = $derived(
-		home ? [] : displayTabs.filter((tab) => tab.type === 'dash' || tab.type === 'files')
-	);
+	const pinnedTabs = $derived(home ? [] : displayTabs.filter(isWorkspaceTabPinned));
 	const movableTabs = $derived(
-		home ? displayTabs : displayTabs.filter((tab) => tab.type !== 'dash' && tab.type !== 'files')
+		home ? displayTabs : displayTabs.filter((tab) => !isWorkspaceTabPinned(tab))
 	);
 
 	const isActiveGroup = $derived(home ? homeActive : $activeWorkspace?.activeGroupId === group?.id);
@@ -133,6 +136,8 @@
 	function tabLabel(tab: Tab): string {
 		if (tab.type === 'dash') return 'dash';
 		if (tab.type === 'files') return 'files';
+		// The launcher's label is the key `chat`, the same shape as dash/files.
+		if (tab.type === 'chat' && tab.permanent) return 'chat';
 		return tab.label;
 	}
 

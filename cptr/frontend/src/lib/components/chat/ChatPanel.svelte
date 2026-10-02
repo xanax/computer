@@ -40,6 +40,7 @@
 	import { get } from 'svelte/store';
 	import {
 		currentWorkspace,
+		detachPinnedChatTab,
 		expandToolDetails,
 		openChatTab,
 		sleepClosedChatTabs,
@@ -192,14 +193,27 @@
 		commandSessionsTimer = null;
 	}
 
-	onMount(() => {
-		if (initialChatId || typeof sessionStorage === 'undefined') return;
+	// A draft stashed by "ask about this PR" (GitView/GitBar leave one under this
+	// workspace) belongs in the next chat panel that is looked at. The pinned
+	// launcher is usually already mounted when the draft is written, so this
+	// cannot be read once at mount: it is taken when the tab becomes visible.
+	function pickUpChatDraft() {
+		if (initialChatId || chatId || typeof sessionStorage === 'undefined') return;
+		// Text already typed here wins over a stashed draft.
+		if (inputText.trim()) return;
 		const key = `cptr:intent:chatDraft:${workspace}`;
 		const draft = sessionStorage.getItem(key);
-		if (draft) {
-			inputText = draft;
-			sessionStorage.removeItem(key);
-		}
+		if (!draft) return;
+		sessionStorage.removeItem(key);
+		inputText = draft;
+	}
+
+	onMount(() => {
+		pickUpChatDraft();
+	});
+
+	$effect(() => {
+		if (active) pickUpChatDraft();
 	});
 
 	// ── Windowed rendering ──────────────────────────────────────
@@ -549,6 +563,10 @@
 	}
 
 	async function openChat(id: string) {
+		// Picking a chat from the launcher's history list hands the launcher's tab
+		// to that conversation while the store puts a fresh launcher back in the
+		// pinned slot. A blank (non-pinned) tab is simply reused, as before.
+		if (tabId) detachPinnedChatTab(tabId);
 		await loadChat(id);
 		const chat = previousChats.find((c) => c.id === id);
 		// Opening a closed chat brings it back into the sidebar.
@@ -1275,6 +1293,11 @@
 
 		// Update tab label instantly for new chats
 		if (isNew && tabId) {
+			// A send from the pinned launcher makes this tab the conversation's
+			// tab, and the launcher's pinned slot is filled by a fresh launcher.
+			// Called before the path is set so the tab keeps every message
+			// already in flight through this panel (its id does not change).
+			detachPinnedChatTab(tabId);
 			updateTab(tabId, `pending-${tempId}`, text.slice(0, 40) || $t('chat.fallbackTitle'));
 		}
 

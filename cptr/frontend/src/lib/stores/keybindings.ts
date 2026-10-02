@@ -24,7 +24,7 @@ import {
 	closeGroup,
 	sidebarOpen
 } from '$lib/stores';
-import { openChatTab } from '$lib/stores';
+import { isWorkspaceTabVisible, openChatTab } from '$lib/stores';
 
 // ── Action IDs ──────────────────────────────────────────────────
 
@@ -309,8 +309,9 @@ export function executeAction(
 			}
 			const g = get(activeGroup);
 			if (!g) return true;
-			// Chat tabs are hidden from the bar; cycle only the visible ones.
-			const visible = g.tabs.filter((t) => t.type !== 'chat');
+			// Cycle exactly what the bar shows: the pinned launcher and chat
+			// conversations count, the new-/pending- placeholder does not.
+			const visible = g.tabs.filter(isWorkspaceTabVisible);
 			if (visible.length < 2) return true;
 			const currentIdx = visible.findIndex((t) => t.id === g.activeTabId);
 			if (currentIdx === -1) return true;

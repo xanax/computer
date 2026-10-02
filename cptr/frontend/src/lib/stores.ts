@@ -179,44 +179,90 @@ function nextId(): string {
 
 const DASH_TAB: Tab = { id: 'dash', type: 'dash', label: 'dash', permanent: true };
 const FILES_TAB: Tab = { id: 'files', type: 'files', label: 'files', permanent: true };
+/** The Chat tab is a launcher, not a conversation: it holds the input and the
+    workspace's recent chats (ChatPanel's landing view). Sending from it hands
+    the tab to the conversation it starts and puts a fresh launcher back
+    (`detachPinnedChatTab`). The id here is only the fallback copy -- the real
+    launcher carries the id it was created with. */
+const CHAT_TAB: Tab = { id: 'chat', type: 'chat', label: 'chat', permanent: true };
 
-/** Dash, then Files, then open files, then everything else. Chats stay in the
-    list (the bar hides them) but never sit between the file tabs. */
+/** Dash, then Files, then the Chat launcher, then open files, then everything
+    else. Chat conversations come last: they are reachable from the bar without
+    ever displacing a file tab. */
 export function orderWorkspaceTabs(tabs: Tab[]): Tab[] {
 	const dash: Tab[] = [];
 	const files: Tab[] = [];
+	const launcher: Tab[] = [];
 	const file: Tab[] = [];
 	const rest: Tab[] = [];
 	const chat: Tab[] = [];
 	for (const tab of tabs) {
 		if (tab.type === 'dash') dash.push({ ...tab, label: 'dash', permanent: true });
 		else if (tab.type === 'files') files.push({ ...tab, label: 'files', permanent: true });
+		else if (tab.type === 'chat' && tab.permanent) launcher.push(tab);
 		else if (tab.type === 'file') file.push(tab);
 		else if (tab.type === 'chat') chat.push(tab);
 		else rest.push(tab);
 	}
-	return [...dash.slice(0, 1), ...files.slice(0, 1), ...file, ...rest, ...chat];
+	return [
+		...dash.slice(0, 1),
+		...files.slice(0, 1),
+		...launcher.slice(0, 1),
+		...file,
+		...rest,
+		...chat
+	];
 }
 
-/** The first group carries the pinned Dash and Files tabs. Copies that have
-    drifted into other groups are pulled back so the bar stays one pair. */
+/** Where a workspace tab goes in the bar. Dash, Files and the Chat launcher are
+    always pinned and always in the first group. */
+export function isWorkspaceTabPinned(tab: Tab): boolean {
+	return tab.type === 'dash' || tab.type === 'files' || (tab.type === 'chat' && !!tab.permanent);
+}
+
+/** Whether the bar shows this tab. The launcher does, and so does a chat once
+    it has a real id; the `new-`/`pending-` placeholder a send passes through
+    stays hidden (it is the same tab, about to be named). */
+export function isWorkspaceTabVisible(tab: Tab): boolean {
+	if (tab.type !== 'chat') return true;
+	if (tab.permanent) return true;
+	return !!tab.path && !tab.path.startsWith('new-') && !tab.path.startsWith('pending-');
+}
+
+/** The first group carries the pinned Dash, Files and Chat tabs. Copies that
+    have drifted into other groups are pulled back so the bar stays one each. */
 function pinWorkspaceGroups(groups: EditorGroup[]): EditorGroup[] {
 	let dash: Tab | undefined;
 	let files: Tab | undefined;
+	let launcher: Tab | undefined;
 	for (const group of groups) {
 		for (const tab of group.tabs) {
 			if (tab.type === 'dash' && !dash) dash = { ...tab, label: 'dash', permanent: true };
 			if (tab.type === 'files' && !files) files = { ...tab, label: 'files', permanent: true };
+			// Only a blank tab is a launcher. A permanent chat tab with a path is a
+			// conversation that ended up pinned (an older layout, or a tab demoted
+			// mid-write): keep its messages and let it be an ordinary chat tab.
+			if (tab.type === 'chat' && tab.permanent && !launcher && !tab.path) {
+				launcher = { ...tab, label: 'chat', permanent: true };
+			}
 		}
 	}
 	const pinnedDash = dash ?? DASH_TAB;
 	const pinnedFiles = files ?? FILES_TAB;
+	const pinnedChat = launcher ?? CHAT_TAB;
+	const isStray = (tab: Tab) =>
+		tab.type === 'chat' && !!tab.permanent && tab.id !== pinnedChat.id;
 	const firstId = groups[0]?.id;
 	const next = groups
 		.map((group) => {
-			const stripped = group.tabs.filter((tab) => tab.type !== 'dash' && tab.type !== 'files');
+			const stripped = group.tabs
+				.filter((tab) => tab.type !== 'dash' && tab.type !== 'files')
+				// A blank stray launcher would be an invisible tab: drop it. A pinned
+				// conversation keeps its messages, so it stays as a normal chat tab.
+				.filter((tab) => !(isStray(tab) && !tab.path))
+				.map((tab) => (isStray(tab) ? { ...tab, permanent: false } : tab));
 			const tabs = orderWorkspaceTabs(
-				group.id === firstId ? [pinnedDash, pinnedFiles, ...stripped] : stripped
+				group.id === firstId ? [pinnedDash, pinnedFiles, pinnedChat, ...stripped] : stripped
 			);
 			const activeTabId = tabs.some((tab) => tab.id === group.activeTabId)
 				? group.activeTabId
@@ -230,7 +276,7 @@ function pinWorkspaceGroups(groups: EditorGroup[]): EditorGroup[] {
 function createDefaultGroup(): EditorGroup {
 	return {
 		id: 'default',
-		tabs: [DASH_TAB, FILES_TAB],
+		tabs: [DASH_TAB, FILES_TAB, CHAT_TAB],
 		activeTabId: 'files'
 	};
 }
@@ -1181,19 +1227,20 @@ export function reorderTabs(oldIndex: number, newIndex: number, groupId?: string
  */
 export function reorderVisibleTabs(oldIndex: number, newIndex: number, groupId?: string): void {
 	updateGroupTabs(groupId, (tabs) => {
-		// Dash and Files are pinned ahead of this list, so the indices are only
-		// the tabs that follow them (open files, terminals, browsers).
-		const movable = orderWorkspaceTabs(tabs).filter(
-			(tab) => tab.type !== 'chat' && tab.type !== 'dash' && tab.type !== 'files'
-		);
+		const ordered = orderWorkspaceTabs(tabs);
+		// The bar's movable zone is every visible tab after the pinned ones: open
+		// files, then terminals and browsers, then the chat conversations. A
+		// hidden placeholder (a chat tab still on `new-`/`pending-`) has no row to
+		// drag, so it takes no part in the index maths and stays where it is.
+		const hidden = ordered.filter((tab) => !isWorkspaceTabVisible(tab));
+		const visible = ordered.filter(isWorkspaceTabVisible);
+		const movable = visible.filter((tab) => !isWorkspaceTabPinned(tab));
 		if (oldIndex < 0 || oldIndex >= movable.length || newIndex < 0 || newIndex >= movable.length) {
 			return { tabs };
 		}
 		const [moved] = movable.splice(oldIndex, 1);
 		movable.splice(newIndex, 0, moved);
-		const pinned = tabs.filter((tab) => tab.type === 'dash' || tab.type === 'files');
-		const chats = tabs.filter((tab) => tab.type === 'chat');
-		return { tabs: [...pinned, ...movable, ...chats] };
+		return { tabs: [...visible.filter(isWorkspaceTabPinned), ...movable, ...hidden] };
 	});
 }
 
@@ -1456,7 +1503,14 @@ export function openChatTab(chatId?: string, targetGroupId?: string): void {
 			return;
 		}
 	} else {
-		// No chatId — reuse an existing new/pending chat tab if one is open
+		// No chatId — the pinned launcher already is a new chat when it is idle,
+		// so focus it rather than stacking a second blank tab next to it.
+		const launcher = group.tabs.find((t) => t.type === 'chat' && t.permanent);
+		if (launcher) {
+			setActiveTab(launcher.id, gid);
+			return;
+		}
+		// Otherwise reuse an existing new/pending chat tab if one is open
 		const existing = group.tabs.find(
 			(t) => t.type === 'chat' && (t.path?.startsWith('new-') || t.path?.startsWith('pending-'))
 		);
@@ -1614,6 +1668,36 @@ function defaultHomeGroup(): EditorGroup {
 		tabs: [{ id: 'home', type: 'home', label: 'Home', permanent: true }],
 		activeTabId: 'home'
 	};
+}
+
+/**
+ * The pinned Chat tab is a launcher showing the new-chat view. The moment it
+ * carries a real conversation (a send from it, or a chat picked from its
+ * history list) the tab becomes that conversation's tab and the pinned slot is
+ * filled again by a fresh launcher: the pinned zone of the bar is a fixed set of
+ * tabs, not a first-come spot. The conversation keeps the id (and so keeps
+ * every message already in flight through that panel) while the launcher takes
+ * a new one, so the ChatPanel is not remounted mid-send.
+ */
+export function detachPinnedChatTab(tabId: string): void {
+	currentWorkspace.update((ws) => {
+		if (!ws) return ws;
+		let detached = false;
+		const groups = ws.groups.map((group) => {
+			const tab = group.tabs.find((t) => t.id === tabId);
+			if (!tab || tab.type !== 'chat' || !tab.permanent) return group;
+			detached = true;
+			const launcher: Tab = { ...CHAT_TAB, id: nextId(), label: 'chat' };
+			const rest = group.tabs.filter((t) => t.id !== tabId);
+			const label = tab.label && tab.label !== 'chat' ? tab.label : 'Chat';
+			return {
+				...group,
+				tabs: orderWorkspaceTabs([launcher, ...rest, { ...tab, permanent: false, label }]),
+				activeTabId: group.activeTabId
+			};
+		});
+		return detached ? { ...ws, groups } : ws;
+	});
 }
 
 /**
