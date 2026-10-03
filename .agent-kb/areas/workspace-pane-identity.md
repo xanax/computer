@@ -38,6 +38,7 @@ updated: 2026-10-03
 - Re-probing "is the DB contaminated?" after a switch: the launcher row for a healed workspace is `['chat','chat','chat',None,True]` and stays byte-identical across a round trip (only `updated_at` moves).
 
 ## Open
-- [2026-10-03] 12 other workspace rows still carry a hijacked launcher in the DB; each heals the first time it is opened, and the *currently open* browser tab needs a page reload to pick up the new build.
+- [2026-10-03, audited] 0 of 41 workspace rows still has a *pinned* launcher carrying a foreign chat (the heal ran everywhere it was loaded) — no migration needed. 12 tab rows do point at a chat owned by another workspace: 4 with tab id `chat` (certain reuse residue, invisible in the UI because `isWorkspaceTabVisible` hides non-permanent chat tabs), 8 whose tab id equals the chat id (the `+ New Chat` naming), i.e. they look like chats *minted* for the previous workspace while a pane was reused — provisional, not verified. Left alone: any open browser tab's autosave rewrites the whole row.
+- [2026-10-03] Editing `+page.svelte` needs `npm run build` **and** a page reload: the server serves `cptr/frontend/build` (python on :4200), so a browser tab keeps the old module until it is reloaded.
 - A chat that is streaming while you switch workspaces now unmounts its panel (before, it accidentally stayed mounted). Server-side nothing is lost; the panel re-syncs through `needsResync` → `loadChat` on return — the path `sleepClosedChatTabs()` already used.
 - The home pane's four loops (:1070-1111) still key on `tab.id` alone; safe today because `homePane` is a single store with `home-…` ids, but it is the same shape if home panes ever become per-workspace.

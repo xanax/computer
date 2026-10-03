@@ -107,6 +107,35 @@ race every live browser tab's autosave for no visible gain.
 - Anyone changing the pane keying must keep the `{#each}` keys in step with the
   pane type list — `dash`/`files` are deliberately absent from `paneKey`.
 
+## Residue in the live DB (audited 2026-10-03)
+
+The **pinned launcher** signature is gone: 0 of 41 workspace rows has a
+`permanent` chat tab carrying a chat owned by another workspace, so there is
+nothing to migrate — each row heals to `['chat','chat','chat',None,true]` the
+first time it is loaded.
+
+12 tab rows still reference a chat whose `meta.workspace` is somewhere else, and
+the load-time heal deliberately does **not** drop them: they are ordinary
+conversation tabs (`permanent` absent/false), not strays.
+
+- **4 with tab id `chat`** — certain residue of the reuse. Both
+  `dwp-la-replay-webpage` and `north-star` were showing AIjly's *ae2580 Demo
+  URLs*, `AIjly/applications/dwp` and `dwp-remote-cmd` AIjly's *Local File Path
+  to URL Path*. Invisible in the UI: `isWorkspaceTabVisible` hides non-permanent
+  chat tabs from the tab bar, so they can only surface as an unread row in the
+  wrong workspace's sidebar.
+- **8 whose tab id *equals* the chat id** (`mu9hz30m`, `mudtg4ok`, …) — that is
+  the `+ New Chat` / `openChatTab` naming, i.e. these look like chats that were
+  *created* in the wrong workspace. `ChatPanel` is handed
+  `workspace={$currentWorkspace!.path}` (+page.svelte ~:1491) and keeps draft /
+  chat-list state from init, so a pane reused across a switch is the one place a
+  chat could be minted for the previous workspace. **Provisional — not
+  verified.** Reading these as proof would be a mistake; `paneKey` removes the
+  reuse either way.
+- Auditing them is a read-only query away (`chats.meta['workspace']` owns a chat;
+  `workspaces.data['groups'][n].tabs[n].path` points at it). Do not "fix" them
+  by hand: the autosave of any open browser tab rewrites the whole row.
+
 ## Reproducing
 
 ```bash
