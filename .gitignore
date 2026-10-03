@@ -45,6 +45,7 @@ Thumbs.db
 !.cptr/skills/
 !.cptr/artifacts/
 *.log
+.cptr/task_logs/
 
 # Local runtime artifacts (server launched from this checkout)
 cptr-pid.txt
