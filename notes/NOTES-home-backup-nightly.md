@@ -254,9 +254,18 @@ The live clusters `~/AIjly/data/postgres-{prod,dev}` are `drwx------ 70:70` stal
   carry the weight; `~/.backupignore` needs almost nothing.
 - No `zstd`, no `pigz` on this box — but `xz -T0` *is* installed, which makes that irrelevant
   (see the compressor section). Nothing left to install.
-- Sizes to expect: stage **14.8 GB / 235.7k staged non-dir entries / 238k archive entries /
-  37 live SQLite dbs (0 degraded)**, plus ~14 live `-wal`/`-shm` sidecars that are folded into
-  the snapshots rather than archived.
+- Sizes to expect — **the original 14.8 GB / 3.3 GB figures are stale; do not read the drift as a fault.**
+  Measured on 2026-10-03: stage **19.1 GB / 370k non-dir entries / 375k archive entries /
+  56 live SQLite dbs (0 degraded, +8 sidecars) → 4.84 GB (4.5 GiB) `.tar.xz`, 42:50 wall clock**.
+  Growth is monotonic and tracks one file: `greyhound-odds/data/atr.sqlite` is now **9.0 GB**
+  (7 GB at design time), and is incompressible SQLite, so raw and archive rise together.
+  Nightly trend from `/mnt/e/home_backup/backup.log`: 3.3G/14.8G raw (09-24) → 3.9G/16.7G (09-26)
+  → 4.4G/18.8G, 52 dbs (10-02) → 4.6G/19.1G, 56 dbs (10-03). Up to ~4 GB of archive is therefore
+  now **normal**; only a jump outside the raw-size trend means something changed. Space is not a
+  worry yet: 7 archives ≈ 32 GB, 173 GB free on `/mnt/e`.
+  The generated `~/.cache/home-backup/report.txt` is the authoritative per-run inventory
+  (included/excluded, per-db sizes, `N ok / M degraded`) — read it rather than trusting these
+  numbers.
   `/mnt/e` reads run at only ~10 MB/s, so the cross-filesystem publish copy of a 3-5 GB archive
   takes minutes and a full `sha256sum -c` takes 8+ minutes — the script proves the archive
   against the staged tree *before* publishing, so the nightly check can stay cheap.
