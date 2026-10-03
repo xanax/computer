@@ -23,6 +23,21 @@ def auto_gitignore_cptr_enabled() -> bool:
     return _bool_config(value, default=True)
 
 
+# A bare `.cptr` is not the only way to ignore the directory, but it is the only
+# form this used to recognise. `.cptr/*` ignores the same contents while leaving
+# the directory itself *unexcluded* — which is what lets a project re-include a
+# curated subset (`!.cptr/skills/`). Appending a bare `.cptr` on top of that
+# would exclude the parent again and silently void every negation, so the forms
+# are treated as equivalent. See `.agent-kb/areas/dot-cptr-in-git.md`.
+_CPTR_IGNORED_FORMS = frozenset(
+    {".cptr", ".cptr/", "/.cptr", "/.cptr/", ".cptr/*", "/.cptr/*"}
+)
+
+
+def _already_ignores_cptr(content: str) -> bool:
+    return any(line.strip() in _CPTR_IGNORED_FORMS for line in content.splitlines())
+
+
 def ensure_cptr_gitignored(workspace: str | Path) -> None:
     """If workspace is a git repo, ensure .cptr is listed in .gitignore."""
     if not auto_gitignore_cptr_enabled():
@@ -37,10 +52,8 @@ def ensure_cptr_gitignored(workspace: str | Path) -> None:
 
     if gitignore.exists():
         content = gitignore.read_text(encoding="utf-8", errors="replace")
-        for line in content.splitlines():
-            stripped = line.strip()
-            if stripped == entry or stripped == entry + "/":
-                return
+        if _already_ignores_cptr(content):
+            return
         if content and not content.endswith("\n"):
             content += "\n"
         content += f"{entry}\n"

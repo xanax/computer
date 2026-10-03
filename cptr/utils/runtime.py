@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import mimetypes
 import os
 import signal
@@ -25,6 +26,8 @@ from cptr.utils.identity import (
     identity_for_request,
     preexec_for,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE = 100 * 1024 * 1024
 MATCH_PAGE_SIZE = 100
@@ -802,21 +805,25 @@ def _write_file(path: str, content: str | bytes) -> dict[str, Any]:
 
 
 def _ensure_cptr_gitignored_for(path: Path) -> None:
+    """Ensure the repo containing `path` ignores .cptr (best-effort).
+
+    Delegates to `ensure_cptr_gitignored` so the two cannot drift: this was a
+    duplicate of that logic that only accepted a bare `.cptr`, so writing a file
+    would append a bare entry on top of a curated `.cptr/*` block and silently
+    void its `!` negations.
+    """
     parts = path.parts
     if ".cptr" not in parts:
         return
     root = Path(*parts[: parts.index(".cptr")])
     if not (root / ".git").exists():
         return
+    try:
+        from cptr.utils.workspace import ensure_cptr_gitignored
 
-    gitignore = root / ".gitignore"
-    entry = ".cptr"
-    content = gitignore.read_text(encoding="utf-8", errors="replace") if gitignore.exists() else ""
-    if any(line.strip() in {entry, entry + "/"} for line in content.splitlines()):
-        return
-    if content and not content.endswith("\n"):
-        content += "\n"
-    gitignore.write_text(content + f"{entry}\n", encoding="utf-8")
+        ensure_cptr_gitignored(root)
+    except Exception:  # never let a .gitignore tidy-up break a file write
+        logger.debug("[runtime] Failed to ensure .cptr is gitignored", exc_info=True)
 
 
 def _create_item(path: str, type: str = "file") -> dict[str, Any]:

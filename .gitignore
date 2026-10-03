@@ -26,7 +26,24 @@ cptr/frontend/.svelte-kit/
 .DS_Store
 Thumbs.db
 
+# Agent state. Almost all of it is machine-local churn — regenerable caches,
+# per-turn logs, chat exports (which also carry session tokens) — so it stays out
+# of git. The durable, hand-written parts are re-included below.
+#
+# Four lines, in this order, and each one matters:
+#   `.cptr`     is load-bearing. cptr's auto-gitignore check
+#               (cptr/utils/workspace.py) looks for that exact line and appends
+#               one when absent — at the END of the file, where (last match wins)
+#               it would override every `!` below and silently void the allowlist.
+#   `!.cptr/`   re-includes the directory itself; git will not descend into an
+#               excluded directory, so without this the `!` lines can never apply.
+#   `.cptr/*`   excludes the contents — same coverage as a bare `.cptr`, but
+#               without excluding the parent, which is what makes `!` possible.
 .cptr
+!.cptr/
+.cptr/*
+!.cptr/skills/
+!.cptr/artifacts/
 *.log
 
 # Local runtime artifacts (server launched from this checkout)
