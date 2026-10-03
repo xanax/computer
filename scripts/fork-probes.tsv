@@ -38,3 +38,4 @@ B-011	file	scripts/fork-status.sh	probe runner: pattern test + file-kind existen
 B-014	fix	cptr/routers/chat.py	model_ids = model_ids or []	one unreachable connection must not turn model resolution into a 500 (upstream iterates None)
 B-015	bug	cptr/frontend/src/lib/components/chat/ChatPanel.svelte	if (!text || !selectedModel) return;	composer cleared before the send is confirmed, silent early-returns (coarse probe; open, not fixed)
 B-017	bug	cptr/frontend/src/lib/stores.ts	? { ...ws, activeGroupId: groupId } : ws	a no-op currentWorkspace.update still notifies (Svelte set() always notifies); harmless upstream, fatal under the fork dashboard load effect
+B-020	fix	cptr/frontend/src/routes/+page.svelte	paneKey(tab)	pane identity = workspace path + tab id; the fork-only pinned launcher (CHAT_TAB, id "chat") repeats across workspaces

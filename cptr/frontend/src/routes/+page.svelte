@@ -884,6 +884,23 @@
 		return group.tabs.find((t) => t.id === group.activeTabId) ?? null;
 	}
 
+	/** Pane identity: a workspace plus the tab it renders.
+	 *
+	 * A tab id is only unique *within* a workspace, but the pinned chat launcher
+	 * is created as `CHAT_TAB` (id `chat`) in every workspace, and a conversation
+	 * keeps the id of the launcher it was detached from. Svelte reuses a keyed
+	 * block whose key matches, so switching workspaces handed the incoming tab's
+	 * pane the block (and the mounted ChatPanel, with its live conversation) of
+	 * the workspace you came from -- the panel's `chatId` is its own state, and a
+	 * send or history pick then wrote that foreign chat onto the new workspace's
+	 * tab. Dash and Files stay keyed by tab id alone: they are singletons that
+	 * read the workspace they are showing. */
+	const wsPath = $derived($currentWorkspace?.path ?? '');
+
+	function paneKey(tab: Tab): string {
+		return `${wsPath}\u0000${tab.id}`;
+	}
+
 	// ── Drag-to-split ─────────────────────────────────────────────
 
 	const SPLIT_EDGE_FRACTION = 0.3;
@@ -1451,7 +1468,7 @@
 					<FileBrowser />
 				</div>
 			{/each}
-			{#each group.tabs.filter((tab) => tab.type === 'file' && tab.filePath) as tab (tab.id)}
+			{#each group.tabs.filter((tab) => tab.type === 'file' && tab.filePath) as tab (paneKey(tab))}
 				<div
 					class="persisted-tab"
 					class:persisted-tab-hidden={tab.id !== group.activeTabId}
@@ -1465,7 +1482,7 @@
 					/>
 				</div>
 			{/each}
-			{#each group.tabs.filter((tab) => tab.type === 'chat') as tab (tab.id)}
+			{#each group.tabs.filter((tab) => tab.type === 'chat') as tab (paneKey(tab))}
 				<div
 					class="persisted-tab"
 					class:persisted-tab-hidden={tab.id !== group.activeTabId}
@@ -1482,7 +1499,7 @@
 					/>
 				</div>
 			{/each}
-			{#each group.tabs.filter((tab) => tab.type === 'terminal' && tab.sessionId) as tab (tab.id)}
+			{#each group.tabs.filter((tab) => tab.type === 'terminal' && tab.sessionId) as tab (paneKey(tab))}
 				<div
 					class="persisted-tab"
 					class:persisted-tab-hidden={tab.id !== group.activeTabId}
@@ -1491,7 +1508,7 @@
 					<Terminal sessionId={tab.sessionId!} />
 				</div>
 			{/each}
-			{#each group.tabs.filter((tab) => tab.type === 'browser' && tab.browserSessionId) as tab (tab.id)}
+			{#each group.tabs.filter((tab) => tab.type === 'browser' && tab.browserSessionId) as tab (paneKey(tab))}
 				<div
 					class="persisted-tab"
 					class:persisted-tab-hidden={tab.id !== group.activeTabId}
