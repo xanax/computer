@@ -1369,4 +1369,12 @@
 	"dashboard.promptHint": "Affiché ici et envoyé au début de chaque conversation de cet espace.",
 	"dashboard.promptPlaceholder": "À quoi sert cet espace ?",
 	"dashboard.promptEmpty": "Pas encore d’invite."
+,
+	"dashboard.notesTitle": "Notes",
+	"dashboard.notesHint": "Envoyées à chaque conversation de cet espace — l’agent peut y ajouter ses propres notes.",
+	"dashboard.notesPlaceholder": "Une note pour la prochaine conversation",
+	"dashboard.addNote": "Ajouter une note",
+	"dashboard.notesEmpty": "Pas encore de notes.",
+	"dashboard.notesByAgent": "depuis une conversation",
+	"dashboard.notesByYou": "vous"
 }

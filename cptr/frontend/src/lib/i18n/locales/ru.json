@@ -1369,4 +1369,12 @@
 	"dashboard.promptHint": "Показывается здесь и отправляется в начале каждого чата в этом пространстве.",
 	"dashboard.promptPlaceholder": "Для чего это пространство?",
 	"dashboard.promptEmpty": "Промпта пока нет."
+,
+	"dashboard.notesTitle": "Заметки",
+	"dashboard.notesHint": "Отправляются в каждый чат этого пространства — агент может добавлять свои заметки.",
+	"dashboard.notesPlaceholder": "Заметка для следующего чата здесь",
+	"dashboard.addNote": "Добавить заметку",
+	"dashboard.notesEmpty": "Заметок пока нет.",
+	"dashboard.notesByAgent": "из чата",
+	"dashboard.notesByYou": "вы"
 }

@@ -77,6 +77,40 @@ export const saveWorkspacePrompt = (path: string, prompt: string) =>
 		{ ...jsonBody({ prompt }), method: 'PUT' }
 	);
 
+// ── Workspace notes ─────────────────────────────────────────────
+
+/**
+ * Sticky notes on a workspace: short reminders the human and the agent leave for
+ * each other. They show on the dashboard and open every chat in the workspace.
+ */
+export interface WorkspaceNote {
+	id: string;
+	text: string;
+	/** 'human' (typed here) or 'agent' (added by a chat's note tool). */
+	author: 'human' | 'agent' | string;
+	created_at: number;
+}
+
+export interface WorkspaceNotes {
+	path: string;
+	notes: WorkspaceNote[];
+}
+
+export const getWorkspaceNotes = (path: string) =>
+	fetchJSON<WorkspaceNotes>(`/api/state/workspace/notes?path=${encodeURIComponent(path)}`);
+
+export const addWorkspaceNote = (path: string, text: string) =>
+	fetchJSON<WorkspaceNotes & { status: string; note: WorkspaceNote }>(
+		`/api/state/workspace/notes?path=${encodeURIComponent(path)}`,
+		{ ...jsonBody({ text }), method: 'POST' }
+	);
+
+export const deleteWorkspaceNote = (path: string, noteId: string) =>
+	fetchJSON<WorkspaceNotes & { status: string; id: string }>(
+		`/api/state/workspace/notes/${encodeURIComponent(noteId)}?path=${encodeURIComponent(path)}`,
+		{ method: 'DELETE' }
+	);
+
 // ── Workspace services ──────────────────────────────────────────
 
 export interface WorkspaceService {

@@ -199,17 +199,17 @@ async def put_workspace(request: Request, path: str = Query(...)):
             else _workspace_display_name(workspace_path)
         )
     workspace_data.pop("path", None)
-    # This save owns the tab layout. The prompt, the tool-server attachments and
-    # the declared services each have their own endpoint — and the client's
-    # layout autosave echoes back *everything* it read when the workspace loaded,
-    # so a key that is present but stale used to win and undo the edit the user
-    # had just made: save a prompt, touch any tab, and the 300 ms state save PUT
-    # the copy it had read before the edit, reverting it (B-019). A guard that
-    # only fired for *absent* keys could not see that, because the echo supplies
-    # the key. The stored value always wins here; only the dedicated endpoints
-    # may change these three.
+    # This save owns the tab layout. The prompt, the tool-server attachments, the
+    # declared services and the workspace notes each have their own endpoint — and
+    # the client's layout autosave echoes back *everything* it read when the
+    # workspace loaded, so a key that is present but stale used to win and undo
+    # the edit the user had just made: save a prompt, touch any tab, and the
+    # 300 ms state save PUT the copy it had read before the edit, reverting it
+    # (B-019). A guard that only fired for *absent* keys could not see that,
+    # because the echo supplies the key. The stored value always wins here; only
+    # the dedicated endpoints may change these four.
     existing_data = (existing_workspace.data or {}) if existing_workspace else {}
-    for key in ("toolServers", "prompt", "services"):
+    for key in ("toolServers", "prompt", "services", "notes"):
         workspace_data.pop(key, None)
         if key in existing_data:
             workspace_data[key] = existing_data[key]
@@ -307,6 +307,71 @@ async def put_workspace_prompt(
     name = existing.name if existing else _workspace_display_name(workspace_path)
     await Workspace.upsert(user_id, workspace_path, name, data)
     return {"status": "saved", "path": workspace_path, "prompt": prompt}
+
+
+# ── Workspace notes ──────────────────────────────────────────────
+#
+# Sticky notes on a workspace, written by whichever side knows the thing: the
+# human here, the agent through `add_workspace_note`. They live in
+# `workspaces.data["notes"]`, so they need no migration; the layout autosave
+# guards the key like the prompt (B-019), so a tab drag cannot revert a note.
+
+
+class WorkspaceNoteBody(BaseModel):
+    text: str = ""
+
+
+@router.get("/workspace/notes")
+async def get_workspace_notes(request: Request, path: str = Query(...)):
+    """List a workspace's notes, oldest first."""
+    user_id = await _get_user_id(request)
+    if not user_id:
+        return {"path": path, "notes": []}
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    return {"path": workspace_path, "notes": await Workspace.get_notes(user_id, workspace_path)}
+
+
+@router.post("/workspace/notes")
+async def post_workspace_note(request: Request, body: WorkspaceNoteBody, path: str = Query(...)):
+    """Add a note. The dashboard is the human, so the author is always `human`
+    here — an agent's note comes in through its own tool."""
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    try:
+        note = await Workspace.add_note(user_id, workspace_path, body.text, "human")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    from cptr.socket.main import emit_workspace_notes_changed
+
+    await emit_workspace_notes_changed(user_id, workspace_path)
+    return {
+        "status": "saved",
+        "path": workspace_path,
+        "note": note,
+        "notes": await Workspace.get_notes(user_id, workspace_path),
+    }
+
+
+@router.delete("/workspace/notes/{note_id}")
+async def delete_workspace_note(request: Request, note_id: str, path: str = Query(...)):
+    """Remove one note from a workspace."""
+    user_id = await _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="sign in required")
+    workspace_path = await _resolve_request_workspace_path(request, path)
+    if not await Workspace.delete_note(user_id, workspace_path, note_id):
+        raise HTTPException(status_code=404, detail="note not found")
+    from cptr.socket.main import emit_workspace_notes_changed
+
+    await emit_workspace_notes_changed(user_id, workspace_path)
+    return {
+        "status": "deleted",
+        "id": note_id,
+        "path": workspace_path,
+        "notes": await Workspace.get_notes(user_id, workspace_path),
+    }
 
 
 class WorkspaceServiceBody(BaseModel):

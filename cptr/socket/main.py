@@ -147,6 +147,15 @@ async def emit_todos_changed(user_id: str, workspace: str) -> None:
     await emit_jobs_changed(user_id, workspace)
 
 
+async def emit_workspace_notes_changed(user_id: str, workspace: str) -> None:
+    """Notify all connected tabs that a workspace's notes changed.
+
+    An agent can add a note mid-turn, so the dashboard cannot rely on having
+    fetched the list when it mounted.
+    """
+    await emit_to_user(user_id, {"type": "workspace_notes_changed", "workspace": workspace})
+
+
 async def emit_open_browser(
     user_id: str, url: str, *, chat_id: str = "", workspace: str = "", label: str = ""
 ) -> None:

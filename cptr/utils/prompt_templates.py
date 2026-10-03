@@ -67,6 +67,51 @@ async def load_workspace_prompt(user_id: str | None, workspace: str) -> str:
         return ""
 
 
+MAX_NOTES_IN_PROMPT = 20
+MAX_NOTE_CHARS_IN_PROMPT = 500
+
+
+def format_workspace_notes(notes: list[dict]) -> str:
+    """The block the workspace's notes are injected as ("" when there are none).
+
+    Newest first — a note is usually about what just happened — and capped, since
+    `data["notes"]` can hold far more than is worth spending context on.
+    """
+    usable = [note for note in (notes or []) if (note.get("text") or "").strip()]
+    if not usable:
+        return ""
+    newest = sorted(usable, key=lambda n: n.get("created_at") or 0, reverse=True)
+    shown, hidden = newest[:MAX_NOTES_IN_PROMPT], max(0, len(newest) - MAX_NOTES_IN_PROMPT)
+    lines = [
+        "[WORKSPACE NOTES]",
+        "Notes the human and earlier chats left on this workspace (newest first). "
+        "They are shown on the workspace dashboard; add one yourself with "
+        "add_workspace_note when there is something the next chat here should know.",
+    ]
+    for note in shown:
+        who = "agent" if note.get("author") == "agent" else "human"
+        text = " ".join(str(note.get("text") or "").split())
+        if len(text) > MAX_NOTE_CHARS_IN_PROMPT:
+            text = text[:MAX_NOTE_CHARS_IN_PROMPT].rstrip() + "…"
+        lines.append(f"- ({who}) {text}")
+    if hidden:
+        lines.append(f"({hidden} older note{'s' if hidden != 1 else ''} not shown.)")
+    return "\n".join(lines)
+
+
+async def load_workspace_notes(user_id: str | None, workspace: str) -> str:
+    """The notes stuck on this workspace, formatted for the system prompt."""
+    if not user_id or not workspace:
+        return ""
+    try:
+        from cptr.models import Workspace
+
+        return format_workspace_notes(await Workspace.get_notes(user_id, workspace))
+    except Exception:
+        logger.debug("[workspace_notes] lookup failed", exc_info=True)
+        return ""
+
+
 def _get_file_tree(workspace: str, max_entries: int = 200) -> str:
     """Generate a compact file tree listing for the workspace."""
     ws = Path(workspace)
@@ -289,6 +334,7 @@ def _build_template_variables(
     shell: str | None = None,
     workspace_prompt: str = "",
     workspace_services: str = "",
+    workspace_notes: str = "",
 ) -> dict[str, str]:
     """Build the dict of template variable values for the current context."""
     ws_path = Path(workspace) if workspace else None
@@ -314,6 +360,7 @@ def _build_template_variables(
         "WORKSPACE_PATH": str(ws_path) if ws_path else "",
         "WORKSPACE_PROMPT": format_workspace_prompt(workspace_prompt),
         "WORKSPACE_SERVICES": workspace_services,
+        "WORKSPACE_NOTES": workspace_notes,
         "FILE_TREE": _get_file_tree(workspace) if workspace else "",
         "INSTRUCTIONS": instructions_block,
         "MEMORY": memory,
@@ -424,6 +471,18 @@ async def load_system_prompt(
         else:
             template = "{{WORKSPACE_SERVICES}}\n\n" + template.lstrip()
 
+    # The workspace's notes follow its description and its services: they are the
+    # small print about the place, so a template that places them keeps its own
+    # position and otherwise they land after whatever leads the prompt.
+    workspace_notes = await load_workspace_notes(user_id, workspace)
+    if workspace_notes and "{{WORKSPACE_NOTES}}" not in template:
+        for anchor in ("{{WORKSPACE_SERVICES}}", "{{WORKSPACE_PROMPT}}"):
+            if anchor in template:
+                template = template.replace(anchor, f"{anchor}\n\n{{{{WORKSPACE_NOTES}}}}", 1)
+                break
+        else:
+            template = "{{WORKSPACE_NOTES}}\n\n" + template.lstrip()
+
     try:
         skills_enabled = (await Config.get("skills.enabled")) not in (False, "false", "0")
     except Exception:
@@ -448,5 +507,6 @@ async def load_system_prompt(
         shell,
         workspace_prompt,
         workspace_services,
+        workspace_notes,
     )
     return _render_system_template(template, variables)

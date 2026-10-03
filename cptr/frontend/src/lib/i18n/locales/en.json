@@ -1227,6 +1227,8 @@
 	"models.builtinTools.automationsDesc": "List and manage scheduled tasks",
 	"models.builtinTools.todos": "Todos",
 	"models.builtinTools.todosDesc": "Propose workspace todo changes for human verification",
+	"models.builtinTools.notes": "Notes",
+	"models.builtinTools.notesDesc": "Read and leave notes on the workspace",
 	"models.builtinTools.images": "Images",
 	"models.builtinTools.imagesDesc": "Generate or edit images",
 	"models.builtinTools.subagents": "Subagents",
@@ -1480,4 +1482,12 @@
 	"dashboard.servicesStopped": "Stopped",
 	"dashboard.servicesUnhealthy": "Unhealthy",
 	"dashboard.servicesAdopt": "Save as service"
+,
+	"dashboard.notesTitle": "Notes",
+	"dashboard.notesHint": "Sent to every chat in this workspace — the agent can add notes of its own.",
+	"dashboard.notesPlaceholder": "A note for the next chat here",
+	"dashboard.addNote": "Add note",
+	"dashboard.notesEmpty": "No notes yet.",
+	"dashboard.notesByAgent": "from a chat",
+	"dashboard.notesByYou": "you"
 }

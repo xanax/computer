@@ -2667,6 +2667,83 @@ async def defer_workspace_todo(
         return json.dumps({"error": str(e)})
 
 
+# ── Workspace note tools ────────────────────────────────────
+#
+# Notes are the workspace's own memory: a line the user left for the agent ("the
+# deploy script moved to scripts/deploy.sh") or a line the agent leaves for the
+# next chat ("tests/x is flaky — see NOTES-x.md"). Unlike the todo tools there is
+# nothing to verify: a note is an observation, not a claim about work, and it is
+# visible on the dashboard and one click from being removed. Both tools apply
+# immediately and run without approval.
+
+
+async def list_workspace_notes(
+    *,
+    __context__: dict,
+) -> str:
+    """List the notes on the current workspace, newest first.
+
+    These are short notes the human and earlier chats left on the workspace, and
+    they are already shown at the top of your context — use this only to re-read
+    them after adding one, or to check what is there before removing something.
+    """
+    workspace = __context__["workspace"]
+    user_id = __context__["user_id"]
+
+    try:
+        from cptr.models.workspaces import Workspace
+
+        notes = await Workspace.get_notes(user_id, workspace)
+        return json.dumps(
+            {
+                "workspace": workspace,
+                "notes": sorted(notes, key=lambda n: n.get("created_at") or 0, reverse=True),
+            }
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+async def add_workspace_note(
+    text: str,
+    *,
+    __context__: dict,
+) -> str:
+    """Add a note to the current workspace. It is attached immediately and
+    shows up on the workspace dashboard for the human.
+
+    Use it for something the next chat in this workspace should know and that
+    does not belong in a file: what you were asked to leave alone, where you put
+    the thing you built, a caveat about a test, a follow-up the human owes you.
+    One or two sentences per note; a note is a reminder, not a report. Do not
+    note down what the conversation already records, and do not use it as a
+    todo list — that is `add_workspace_todo`.
+
+    :param text: The note text, one or two sentences.
+    """
+    workspace = __context__["workspace"]
+    user_id = __context__["user_id"]
+
+    try:
+        from cptr.models.workspaces import Workspace
+        from cptr.socket.main import emit_workspace_notes_changed
+
+        note = await Workspace.add_note(user_id, workspace, text, "agent")
+        await emit_workspace_notes_changed(user_id, workspace)
+        return json.dumps(
+            {
+                "status": "added",
+                "id": note["id"],
+                "workspace": workspace,
+                "message": "Note added to the workspace dashboard.",
+            }
+        )
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 # ── Skill tools ─────────────────────────────────────────────
 
 # Track activated skills per session (cleared on import)
@@ -3667,6 +3744,9 @@ TOOLS: dict[str, dict] = {
     "open_browser": {"fn": open_browser, "approval": "allow"},
     "list_automations": {"fn": list_automations, "approval": "allow"},
     "list_workspace_todos": {"fn": list_workspace_todos, "approval": "allow"},
+    # Notes are observations, not work: applied at once, no approval to give.
+    "list_workspace_notes": {"fn": list_workspace_notes, "approval": "allow"},
+    "add_workspace_note": {"fn": add_workspace_note, "approval": "allow"},
     "view_skill": {"fn": view_skill, "approval": "allow"},
     "update_tasks": {"fn": update_tasks, "approval": "allow"},
     # Missing approval inherits tool_approval.default_builtin_approval.
@@ -4180,6 +4260,7 @@ BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
         "defer_workspace_todo",
     ),
     "images": ("image_generate",),
+    "notes": ("list_workspace_notes", "add_workspace_note"),
     "subagents": ("delegate_task",),
     "notifications": ("notify",),
     "telemetry": ("ui_metrics",),
@@ -4192,6 +4273,8 @@ GLOBAL_CHAT_DISABLED_TOOLS = {
     *BUILTIN_TOOL_GROUPS["git"],
     *BUILTIN_TOOL_GROUPS["automations"],
     *BUILTIN_TOOL_GROUPS["images"],
+    # A note is stuck to a workspace, and a home chat has none.
+    *BUILTIN_TOOL_GROUPS["notes"],
     "manage_skill",
 }
 

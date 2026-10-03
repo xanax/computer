@@ -1369,4 +1369,12 @@
 	"dashboard.promptHint": "Erscheint hier und wird am Anfang jedes Chats in diesem Arbeitsbereich gesendet.",
 	"dashboard.promptPlaceholder": "Wofür ist dieser Arbeitsbereich?",
 	"dashboard.promptEmpty": "Noch kein Prompt."
+,
+	"dashboard.notesTitle": "Notizen",
+	"dashboard.notesHint": "Wird an jeden Chat in diesem Arbeitsbereich gesendet – der Agent kann eigene Notizen hinzufügen.",
+	"dashboard.notesPlaceholder": "Eine Notiz für den nächsten Chat hier",
+	"dashboard.addNote": "Notiz hinzufügen",
+	"dashboard.notesEmpty": "Noch keine Notizen.",
+	"dashboard.notesByAgent": "aus einem Chat",
+	"dashboard.notesByYou": "von dir"
 }

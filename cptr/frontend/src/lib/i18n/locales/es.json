@@ -1369,4 +1369,12 @@
 	"dashboard.promptHint": "Se muestra aquí y se envía al inicio de cada chat de este espacio.",
 	"dashboard.promptPlaceholder": "¿Para qué sirve este espacio?",
 	"dashboard.promptEmpty": "Aún no hay prompt."
+,
+	"dashboard.notesTitle": "Notas",
+	"dashboard.notesHint": "Se envía a cada chat de este espacio; el agente también puede añadir sus propias notas.",
+	"dashboard.notesPlaceholder": "Una nota para el próximo chat",
+	"dashboard.addNote": "Añadir nota",
+	"dashboard.notesEmpty": "Aún no hay notas.",
+	"dashboard.notesByAgent": "desde un chat",
+	"dashboard.notesByYou": "tú"
 }

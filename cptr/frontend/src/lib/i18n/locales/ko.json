@@ -1369,4 +1369,12 @@
 	"dashboard.promptHint": "여기에 표시되며 이 워크스페이스의 모든 채팅 시작 부분에 전송됩니다.",
 	"dashboard.promptPlaceholder": "이 워크스페이스는 무엇을 위한 곳인가요?",
 	"dashboard.promptEmpty": "아직 프롬프트가 없습니다."
+,
+	"dashboard.notesTitle": "노트",
+	"dashboard.notesHint": "이 워크스페이스의 모든 채팅에 전송되며, 에이전트도 직접 노트를 추가할 수 있습니다.",
+	"dashboard.notesPlaceholder": "다음 채팅을 위한 노트",
+	"dashboard.addNote": "노트 추가",
+	"dashboard.notesEmpty": "아직 노트가 없습니다.",
+	"dashboard.notesByAgent": "채팅에서",
+	"dashboard.notesByYou": "나"
 }

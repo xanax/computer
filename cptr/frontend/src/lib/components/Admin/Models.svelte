@@ -80,6 +80,7 @@
 			desc: 'models.builtinTools.browserDesc'
 		},
 		{ id: 'memory', label: 'models.builtinTools.memory', desc: 'models.builtinTools.memoryDesc' },
+		{ id: 'notes', label: 'models.builtinTools.notes', desc: 'models.builtinTools.notesDesc' },
 		{ id: 'chats', label: 'models.builtinTools.chats', desc: 'models.builtinTools.chatsDesc' },
 		{ id: 'skills', label: 'models.builtinTools.skills', desc: 'models.builtinTools.skillsDesc' },
 		{ id: 'tasks', label: 'models.builtinTools.tasks', desc: 'models.builtinTools.tasksDesc' },

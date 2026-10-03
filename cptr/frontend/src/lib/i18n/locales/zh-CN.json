@@ -1369,4 +1369,12 @@
 	"dashboard.promptHint": "显示在这里，并在该工作区的每次聊天开头发送。",
 	"dashboard.promptPlaceholder": "这个工作区是做什么的？",
 	"dashboard.promptEmpty": "还没有提示词。"
+,
+	"dashboard.notesTitle": "笔记",
+	"dashboard.notesHint": "会发送到该工作区的每次聊天——智能体也可以添加自己的笔记。",
+	"dashboard.notesPlaceholder": "留给下次聊天的笔记",
+	"dashboard.addNote": "添加笔记",
+	"dashboard.notesEmpty": "还没有笔记。",
+	"dashboard.notesByAgent": "来自聊天",
+	"dashboard.notesByYou": "你"
 }

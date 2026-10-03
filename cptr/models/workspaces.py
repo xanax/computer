@@ -35,6 +35,14 @@ def normalize_path(path: str) -> str:
         return ""
 
 
+#: Who may author a note: the human at the dashboard, or the agent (a chat).
+NOTE_AUTHORS = ("human", "agent")
+#: Caps on the stored list: `data` is one JSON column, and every note is read
+#: back into the system prompt, so it may not grow without bound.
+MAX_NOTES = 200
+MAX_NOTE_CHARS = 4000
+
+
 class Workspace(Base):
     """Per-workspace state. One row per (user, filesystem path)."""
 
@@ -87,6 +95,102 @@ class Workspace(Base):
         if not matches:
             return None
         return max(matches, key=lambda ws: ws.updated_at or ws.created_at or 0)
+
+    # ── Notes ────────────────────────────────────────────────
+    #
+    # Short notes stuck on a workspace: "the deploy script moved", "tests/x is
+    # flaky". Both sides write them — the human from the workspace dashboard, the
+    # agent through the `add_workspace_note` tool — and both sides read them: the
+    # dashboard lists them and every chat in the workspace opens with them, so a
+    # note is how one session leaves a fact for the next. They live in
+    # `workspaces.data["notes"]` (no schema change) as a list of
+    # `{"id", "text", "author", "created_at"}`, oldest first.
+
+    @staticmethod
+    def notes_from(row: Workspace | None) -> list[dict]:
+        """The workspace's notes, normalised and in insertion order."""
+        data = (row.data if row else None) or {}
+        raw = data.get("notes") if isinstance(data, dict) else None
+        if not isinstance(raw, list):
+            return []
+        notes: list[dict] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            author = entry.get("author")
+            notes.append(
+                {
+                    "id": str(entry.get("id") or ""),
+                    "text": text.strip(),
+                    "author": author if author in NOTE_AUTHORS else "human",
+                    "created_at": int(entry.get("created_at") or 0),
+                }
+            )
+        return notes
+
+    @staticmethod
+    async def get_notes(user_id: str, path: str) -> list[dict]:
+        """The notes a workspace carries ([] when it has none or is unknown)."""
+        if not user_id or not path:
+            return []
+        row = await Workspace.get_by_user_path(user_id, path)
+        return Workspace.notes_from(row)
+
+    @staticmethod
+    def make_note(text: str, author: str = "human") -> dict:
+        """A single note as it is stored. Trims; raises ValueError on blank text."""
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("note text is required")
+        if len(text) > MAX_NOTE_CHARS:
+            raise ValueError(f"note is too long (max {MAX_NOTE_CHARS} characters)")
+        return {
+            "id": uuid.uuid4().hex[:12],
+            "text": text,
+            "author": author if author in NOTE_AUTHORS else "human",
+            "created_at": int(time.time() * 1000),
+        }
+
+    @staticmethod
+    async def add_note(user_id: str, path: str, text: str, author: str = "human") -> dict:
+        """Append a note to a workspace and return the stored note.
+
+        Reads the row, appends and writes it back whole, because `data` is one
+        JSON column: a partial write would drop the layout beside it.
+        """
+        note = Workspace.make_note(text, author)
+        row = await Workspace.get_by_user_path(user_id, path)
+        notes = Workspace.notes_from(row)
+        if len(notes) >= MAX_NOTES:
+            raise ValueError(f"this workspace already has {MAX_NOTES} notes — remove one first")
+        data = dict(row.data or {}) if row else {}
+        data["notes"] = [*notes, note]
+        name = row.name if row and row.name else os.path.basename(normalize_path(path)) or path
+        await Workspace.upsert(user_id, path, name, data)
+        return note
+
+    @staticmethod
+    async def delete_note(user_id: str, path: str, note_id: str) -> bool:
+        """Remove one note by id. False when the note was not there."""
+        row = await Workspace.get_by_user_path(user_id, path)
+        if not row:
+            return False
+        notes = Workspace.notes_from(row)
+        remaining = [note for note in notes if note.get("id") != note_id]
+        if len(remaining) == len(notes):
+            return False
+        data = dict(row.data or {})
+        if remaining:
+            data["notes"] = remaining
+        else:
+            data.pop("notes", None)
+        await Workspace.upsert(
+            user_id, path, row.name or os.path.basename(normalize_path(path)) or path, data
+        )
+        return True
 
     @staticmethod
     def prompt_from(row: Workspace | None) -> str:

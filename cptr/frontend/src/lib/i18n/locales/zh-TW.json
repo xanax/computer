@@ -1369,4 +1369,12 @@
 	"dashboard.promptHint": "顯示在這裡，並在該工作區的每次對話開頭傳送。",
 	"dashboard.promptPlaceholder": "這個工作區是做什麼的？",
 	"dashboard.promptEmpty": "還沒有提示詞。"
+,
+	"dashboard.notesTitle": "筆記",
+	"dashboard.notesHint": "會傳送到該工作區的每次對話——代理也可以加入自己的筆記。",
+	"dashboard.notesPlaceholder": "留給下次對話的筆記",
+	"dashboard.addNote": "新增筆記",
+	"dashboard.notesEmpty": "還沒有筆記。",
+	"dashboard.notesByAgent": "來自對話",
+	"dashboard.notesByYou": "你"
 }

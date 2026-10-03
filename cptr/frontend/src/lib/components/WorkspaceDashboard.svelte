@@ -21,7 +21,14 @@
 		type JobData,
 		type JobStatus
 	} from '$lib/apis/jobs';
-	import { getWorkspacePrompt, saveWorkspacePrompt } from '$lib/apis/state';
+	import {
+		addWorkspaceNote,
+		deleteWorkspaceNote,
+		getWorkspaceNotes,
+		getWorkspacePrompt,
+		saveWorkspacePrompt,
+		type WorkspaceNote
+	} from '$lib/apis/state';
 	import { get } from 'svelte/store';
 	import { currentWorkspace, openChatTab, setActiveTab } from '$lib/stores';
 	import { chatModels, defaultModel, refreshChatState } from '$lib/stores/chat';
@@ -57,6 +64,22 @@
 	let promptSaved = $state(false);
 	let newTodoTitle = $state('');
 	let todosBusy = $state(false);
+
+	// ── Workspace notes ─────────────────────────────────────────
+	//
+	// The workspace's own memory: what the human leaves for the agent, and what
+	// the agent leaves for the next chat here (its `add_workspace_note` tool
+	// writes the same list). Both sides read them: they are listed here and
+	// injected into the system prompt of every chat in this workspace.
+	let notes = $state<WorkspaceNote[]>([]);
+	let noteDraft = $state('');
+	let notesBusy = $state(false);
+	let notesError = $state('');
+
+	/** Newest first: a note is nearly always about what just happened. */
+	const shownNotes = $derived(
+		[...notes].sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
+	);
 	let loading = $state(true);
 	let failed = $state(false);
 	/** The workspace the rows on screen belong to; '' until the first read lands. */
@@ -174,6 +197,49 @@
 		await Promise.allSettled([loadTodos(ws), loadJobs(ws)]);
 	}
 
+	async function loadNotes(ws: string) {
+		if (!ws) return;
+		try {
+			const data = await getWorkspaceNotes(ws);
+			notes = data.notes;
+		} catch {
+			// As above: a failed read must not blank what is on screen.
+		}
+	}
+
+	// ── Workspace notes ─────────────────────────────────────────
+
+	async function handleAddNote() {
+		const text = noteDraft.trim();
+		if (!text || notesBusy) return;
+		notesBusy = true;
+		notesError = '';
+		try {
+			const res = await addWorkspaceNote(workspace, text);
+			notes = res.notes;
+			noteDraft = '';
+		} catch (err) {
+			// Keep the draft so the note can be retried (or shortened to fit).
+			notesError = err instanceof Error ? err.message : String(err);
+		} finally {
+			notesBusy = false;
+		}
+	}
+
+	async function handleDeleteNote(id: string) {
+		if (notesBusy) return;
+		notesBusy = true;
+		notesError = '';
+		try {
+			const res = await deleteWorkspaceNote(workspace, id);
+			notes = res.notes;
+		} catch (err) {
+			notesError = err instanceof Error ? err.message : String(err);
+		} finally {
+			notesBusy = false;
+		}
+	}
+
 	// ── Workspace prompt ────────────────────────────────────────
 
 	function startPromptEdit() {
@@ -223,8 +289,9 @@
 			getChats(ws, 8, 0, 'updated_at', 'desc', false),
 			getTodos(ws),
 			getJobs(ws),
-			getWorkspacePrompt(ws)
-		]).then(([chatsResult, todosResult, jobsResult, promptResult]) => {
+			getWorkspacePrompt(ws),
+			getWorkspaceNotes(ws)
+		]).then(([chatsResult, todosResult, jobsResult, promptResult, notesResult]) => {
 			const chatList = chatsResult.status === 'fulfilled' ? chatsResult.value.chats : [];
 			failed = chatsResult.status === 'rejected' && jobsResult.status === 'rejected';
 
@@ -241,6 +308,9 @@
 			if (promptResult.status === 'fulfilled') {
 				workspacePrompt = promptResult.value.prompt ?? '';
 				if (!promptEditing) promptDraft = workspacePrompt;
+			}
+			if (notesResult.status === 'fulfilled') {
+				notes = notesResult.value.notes;
 			}
 			loadedFor = ws;
 			loading = false;
@@ -278,6 +348,11 @@
 			// the jobs table, so they are always emitted as a pair.
 			if (data?.type === 'todos_changed' || data?.type === 'jobs_changed') {
 				scheduleReload();
+			}
+			// A chat's `add_workspace_note` lands mid-turn: the notes are the only
+			// thing that moved, so read them back without touching the board.
+			if (data?.type === 'workspace_notes_changed') {
+				void loadNotes(workspace);
 			}
 		});
 		return () => {
@@ -713,6 +788,75 @@
 				{/if}
 
 				<p class="prompt-hint">{$t('dashboard.promptHint')}</p>
+			</section>
+
+			<!-- Notes stuck on this workspace. The same list is injected into the
+			     system prompt of every chat here, and the agent can add to it
+			     with its note tool — so this is where both sides talk to each
+			     other across a chat boundary. -->
+			<section class="dashboard-section">
+				<h2 class="section-title">
+					<Icon name="brain" size={15} />
+					{$t('dashboard.notesTitle')}
+				</h2>
+
+				<div class="todo-add">
+					<input
+						type="text"
+						class="todo-input"
+						bind:value={noteDraft}
+						placeholder={$t('dashboard.notesPlaceholder')}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') handleAddNote();
+						}}
+					/>
+					<button
+						class="btn-secondary"
+						onclick={handleAddNote}
+						disabled={notesBusy || !noteDraft.trim()}
+					>
+						{$t('dashboard.addNote')}
+					</button>
+				</div>
+
+				{#if notesError}
+					<p class="notes-error">{notesError}</p>
+				{/if}
+
+				{#if shownNotes.length === 0}
+					<div class="empty-card">
+						<p>{$t('dashboard.notesEmpty')}</p>
+					</div>
+				{:else}
+					<ul class="card-list">
+						{#each shownNotes as note (note.id)}
+							<li>
+								<div class="note-row">
+									<div class="row-main">
+										<p class="note-text">{note.text}</p>
+										<span class="row-detail">
+											{note.author === 'agent'
+												? $t('dashboard.notesByAgent')
+												: $t('dashboard.notesByYou')}
+											· {formatWhenAt(note.created_at, $t)}
+										</span>
+									</div>
+									<button
+										class="icon-btn note-remove"
+										onclick={() => handleDeleteNote(note.id)}
+										disabled={notesBusy}
+										aria-label={$t('dashboard.remove')}
+										title={$t('dashboard.remove')}
+									>
+										<Icon name="trash" size={13} />
+									</button>
+								</div>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+
+				<p class="prompt-hint">{$t('dashboard.notesHint')}</p>
 			</section>
 
 			<WorkspaceServices {workspace} />
@@ -1504,6 +1648,44 @@
 
 	.defer-error {
 		flex-basis: 100%;
+		font-size: 0.6875rem;
+		color: var(--app-fg);
+		text-decoration: underline;
+		text-decoration-style: dotted;
+		text-underline-offset: 2px;
+	}
+
+	/* ── Workspace notes ───────────────────────────────────── */
+
+	.note-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.625rem;
+		padding: 0.625rem 0.875rem;
+	}
+
+	/* A note is prose, not a row title: the whole sentence is the point, so it
+	   wraps instead of being ellipsised onto one line. */
+	.note-text {
+		margin: 0;
+		font-size: 0.8125rem;
+		line-height: 1.45;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+
+	.note-row .row-detail {
+		white-space: normal;
+	}
+
+	.note-remove {
+		flex-shrink: 0;
+	}
+
+	/* Ink, dotted-underline — the same "something went wrong" as a failed
+	   defer, so an empty theme stays ink-on-paper. */
+	.notes-error {
+		margin: 0.375rem 0 0;
 		font-size: 0.6875rem;
 		color: var(--app-fg);
 		text-decoration: underline;

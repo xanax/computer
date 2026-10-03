@@ -1369,4 +1369,12 @@
 	"dashboard.promptHint": "ここに表示され、このワークスペースのすべてのチャットの冒頭で送信されます。",
 	"dashboard.promptPlaceholder": "このワークスペースは何のため？",
 	"dashboard.promptEmpty": "プロンプトはまだありません。"
+,
+	"dashboard.notesTitle": "ノート",
+	"dashboard.notesHint": "このワークスペースのすべてのチャットに送信されます。エージェントも自分のノートを追加できます。",
+	"dashboard.notesPlaceholder": "次のチャットへのメモ",
+	"dashboard.addNote": "ノートを追加",
+	"dashboard.notesEmpty": "ノートはまだありません。",
+	"dashboard.notesByAgent": "チャットから",
+	"dashboard.notesByYou": "あなた"
 }
