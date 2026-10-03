@@ -21,8 +21,9 @@ updated: 2026-10-03
 - `scripts/backfill-chat-index.py` — the backfill (dry run by default). Imports the module above.
 - `cptr/routers/chat.py:1440` — `POST /api/chats/{id}/index` → `index_chat`, the per-chat refresh. Reads nothing
   from the request body, so it is safe to call in-process with `_get_user` stubbed (see below).
-- `cptr/frontend/src/lib/components/chat/ChatInput.svelte` — the `/index` slash-command row; `ChatPanel.svelte`
-  `handleIndexChat` is the handler. Keys `chat.commandIndex*` / `chat.index*`.
+- `cptr/frontend/src/lib/components/chat/ChatInput.svelte:1692` — the index **button** (a `search` icon in the
+  composer toolbar, `aria-label` from `chat.commandIndex`), alongside the older `/index` slash-command row (1042).
+  `ChatPanel.svelte` `handleIndexChat` is the handler. Keys `chat.commandIndex*` / `chat.index*`.
 - `scripts/add-chat-index-locales.py` — adds those keys to all 10 locales by **text insertion**, `--check` to verify.
 - `notes/NOTES-chat-storage-and-search-audit.md` — where the bytes are, and the blind spot this fixes.
 
@@ -56,14 +57,27 @@ updated: 2026-10-03
   (re-`json.loads` a `str`, pass a list through); do not drop that branch.
 - [ran 2026-10-03] Branch coverage over the real corpus: **258 `composed`, 120 `checkpoint`, 0 `empty`** — no chat has
   zero messages, so the `empty` branch is only reachable via `build_entry([])` and is unit-tested, not live-tested.
+- [ran 2026-10-03 CDP harness, port 9333] The button lands as the **immediate next sibling of the `+`** in the
+  composer toolbar: same parent, `plus.nextElementSibling === button`, 4px gap (`gap-1`), same 24x24 box, and
+  **zero** computed-style differences from the `+` — checked colour, background, radius, width, height, padding.
+- [verified 2026-10-03 frontend/src/app.css:389,634] Why that matters on the e-ink themes: `.mono` collapses
+  `--color-gray-400`/`-500` to `var(--app-fg)`, so the button's `text-gray-400 dark:text-gray-500` renders as
+  **solid ink, not grey**; and `.mono :where([class*='opacity-3'])` — a *substring* match — forces `opacity: 1`,
+  neutralising the `disabled:opacity-30` added for the busy state. Both are inherited from the `+`.
+- [ran 2026-10-03 ~/.cptr/app.db] Only **1 of 379** chats has an assistant message with `done=0`, so gating the
+  button on `sending || streaming` does not brick historical chats — the single disabled button is the chat that is
+  genuinely mid-turn. Disabling during a stream is also *correct*: indexing mid-turn composes a summary that omits it.
 
 ## Built
 - **Phase 1 (done):** `scripts/backfill-chat-index.py` filled all 378 chats. Idempotent; `--force` to rewrite;
   `--dry-run` default.
-- **Phase 2 (built, pending restart):** `POST /api/chats/{id}/index` (`cptr/routers/chat.py`) →
+- **Phase 2 — LIVE.** `POST /api/chats/{id}/index` (`cptr/routers/chat.py`) →
   `{ok, indexed, kind, summary, chars}`; `indexed: false` with `reason: "empty"` when there is nothing to index;
-  404 for an unknown chat. Wire-up: `/index` in the composer (`ChatInput.svelte`) → `indexChat()` in
+  404 for an unknown chat. Wire-up: the toolbar button *or* `/index` in `ChatInput.svelte` → `indexChat()` in
   `lib/apis/chat.ts` → `handleIndexChat` in `ChatPanel.svelte`, which toasts and reloads the chat.
+- Confirmed end-to-end through a real browser, not just in-process: clicking the button put
+  `POST /api/chats/<id>/index 200` in `cptr-start.log`, raised the "Search index rebuilt" toast, and rewrote that
+  chat's `summary` to 1227 chars of composed activity.
 - **Endpoint verified in-process** against a snapshot copy, 9/9: summary persisted, `updated_at` untouched,
   `kind` reported, and — the one that matters — the endpoint's entry is **byte-identical to `build_entry`** for the
   same chat. Exercised live on a real `composed` chat and a real `checkpoint` chat, plus the 404 and `empty` paths.
@@ -84,6 +98,10 @@ updated: 2026-10-03
   Rejected: routing the button through a utility-model call — that would make an explicitly manual refresh the one
   action that can fail, for a field whose whole value is being filled for free. If an LLM summary is ever wanted it
   belongs as a *separate*, opt-in concern, not behind this button.
+- **It is a toolbar button beside the `+`, not only a slash command.** The index acts on the whole conversation
+  (`chats.summary`), and a slash command is something you must already know the name of — worse, it was gated on
+  `hasChatContent`, so it did not appear until the chat already had content. Rejected: leaving it dropdown-only.
+  `/index` is kept as well, matching the `/plan` precedent of command *and* toolbar control.
 - Titles are *not* copied into the composed entry — the ranker already scores title separately.
 
 ## Dead ends
@@ -94,9 +112,8 @@ updated: 2026-10-03
   index of that chat, not a defect. Do not add a special case.
 
 ## Open
-- **Phase 2 is built and verified, but not yet live.** The new route is not served until the process restarts; the
-  frontend is already compiled (`npm run build` → `build/`). Restart is the user's call — the assistant does not
-  restart the server. Until then `POST /api/chats/{id}/index` returns 404 from the running process.
+- `summary` is composed from stored data only, so a chat indexed mid-turn omits the in-flight turn — hence the
+  button is disabled while streaming. A completed turn needs a fresh click.
 - `loadChat(chatId)` after a successful index re-renders the panel; on a long chat this is a full reload for a field
   the visible UI does not display. Acceptable now, but it is the obvious thing to trim if it ever feels slow.
 - Forks inherit the index: `chat.py:1160` copies `summary` on fork, so a fork shows its parent's entry until
@@ -113,6 +130,9 @@ updated: 2026-10-03
   in Facts with the code that proves them.
 - Writing a *second* builder for the endpoint. `cptr/utils/chat_index.py` is shared on purpose; the backfill and the
   button agreeing byte-for-byte is the property that makes the button trustworthy. There is a test for it (below).
+- Wondering whether a change is live. Python route changes need a process restart (the running server logs
+  `'reload': False`); the **frontend is served straight from `cptr/frontend/build/`**, so `npm run build` + reload is
+  enough. Confirm against the served bundle (`curl` the `/_app/immutable/chunks/*.js` it references), not the source.
 - Testing the endpoint by restarting the server. Call the handler in-process instead: snapshot the DB with
   `sqlite3.Connection.backup` into `$CPTR_DATA_DIR=/tmp/...`, stub `cptr.routers.chat._get_user`, `await
   chat.index_chat(None, chat_id)`. Verifies the real code path, touches nothing live, needs no restart.
