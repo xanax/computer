@@ -1685,6 +1685,25 @@
 						processFiles([file]);
 					}}
 				/>
+				<!-- Chat-level, not per-message: rebuilds `chats.summary`, the entry the
+				     search ranker reads. It sits next to the + because it acts on the
+				     whole conversation, not on one turn — and unlike a slash command it
+				     is a thing you press, not a thing you have to know the name of. -->
+				{#if hasChatContent && onindex}
+					<button
+						type="button"
+						aria-label={$t('chat.commandIndex')}
+						use:tooltip={{
+							content: $t('chat.commandIndexDesc'),
+							placement: 'top'
+						}}
+						class="flex items-center justify-center w-6 h-6 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors duration-100 cursor-pointer disabled:opacity-30 disabled:pointer-events-none"
+						disabled={sending || streaming}
+						onclick={() => onindex?.()}
+					>
+						<Icon name="search" size={14} />
+					</button>
+				{/if}
 				{#if planMode}
 					<button
 						type="button"
