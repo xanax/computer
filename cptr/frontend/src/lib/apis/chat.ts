@@ -86,6 +86,17 @@ export interface CompactChatResult {
 	context_usage?: ContextUsage | null;
 }
 
+export interface IndexChatResult {
+	ok: boolean;
+	/** false when the chat has nothing to index yet (no messages). */
+	indexed: boolean;
+	reason?: string;
+	/** `checkpoint` when built from a compaction summary, `composed` otherwise. */
+	kind?: 'checkpoint' | 'composed';
+	chars?: number;
+	summary?: string | null;
+}
+
 export interface UsageHeatmapEntry {
 	date: string;
 	tokens: number;
@@ -235,6 +246,13 @@ export const answerAskUser = (
 
 export const cancelTask = (chatId: string, messageId: string) =>
 	fetchJSON(`/api/chats/${chatId}/messages/${messageId}/cancel`, { method: 'POST' });
+
+/**
+ * Rebuild this chat's search-index entry (`chats.summary`). Free: the entry is
+ * composed server-side from stored data, no model call.
+ */
+export const indexChat = (chatId: string) =>
+	fetchJSON<IndexChatResult>(`/api/chats/${chatId}/index`, { method: 'POST' });
 
 export const compactChat = (chatId: string, modelId?: string | null) =>
 	fetchJSON<CompactChatResult>(

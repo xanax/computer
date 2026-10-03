@@ -84,6 +84,7 @@
 		onfork?: () => void;
 		onplan?: () => void;
 		onstatus?: () => void;
+		onindex?: () => void;
 		onskillslist?: () => void;
 		oncancel?: () => void;
 		onaskuseranswer?: (
@@ -119,6 +120,7 @@
 		onfork,
 		onplan,
 		onstatus,
+		onindex,
 		onskillslist,
 		oncancel,
 		onaskuseranswer,
@@ -1037,6 +1039,7 @@
 		if (onplan && '/plan'.startsWith(slashCommandQuery)) ids.push('plan');
 		if (hasChatContent && onfork && '/fork'.startsWith(slashCommandQuery)) ids.push('fork');
 		if (hasChatContent && onstatus && '/status'.startsWith(slashCommandQuery)) ids.push('status');
+		if (hasChatContent && onindex && '/index'.startsWith(slashCommandQuery)) ids.push('index');
 		if ('/model'.startsWith(slashCommandQuery)) ids.push('model');
 		if (hasChatContent && onskillslist && '/skills:list'.startsWith(slashCommandQuery))
 			ids.push('skills:list');
@@ -1160,6 +1163,7 @@
 	function runSlashCommand(commandId: string | undefined) {
 		if (commandId === 'compact' && (sending || streaming)) return;
 		if (commandId === 'fork' && (sending || streaming)) return;
+		if (commandId === 'index' && (sending || streaming)) return;
 		if (commandId === 'compact' && oncompact) {
 			removeSlashCommandToken();
 			oncompact();
@@ -1178,6 +1182,11 @@
 		if (commandId === 'status' && onstatus) {
 			removeSlashCommandToken();
 			onstatus();
+			return;
+		}
+		if (commandId === 'index' && onindex) {
+			removeSlashCommandToken();
+			onindex();
 			return;
 		}
 		if (commandId === 'model') {
@@ -1431,6 +1440,34 @@
 						<span class="truncate">{$t('chat.commandStatus')}</span>
 						<span class="app-muted text-[0.625rem] truncate shrink-0">
 							{$t('chat.commandStatusDesc')}
+						</span>
+					</span>
+				</button>
+			{/if}
+			{#if slashCommandIds.includes('index')}
+				<button
+					type="button"
+					aria-label={`${$t('chat.commandIndex')}: ${$t('chat.commandIndexDesc')}`}
+					use:tooltip={{
+						content: $t('chat.commandIndexDesc'),
+						placement: 'top'
+					}}
+					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
+						{selectedSlashCommand('index') ? 'app-interactive-active' : ''} disabled:opacity-50"
+					disabled={sending || streaming}
+					onmousedown={(e) => e.preventDefault()}
+					onclick={() => {
+						runSlashCommand('index');
+					}}
+					onmouseenter={() => selectSlashCommand('index')}
+				>
+					<span class="app-icon-muted flex items-center justify-center w-4 shrink-0">
+						<Icon name="search" size={14} />
+					</span>
+					<span class="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden">
+						<span class="truncate">{$t('chat.commandIndex')}</span>
+						<span class="app-muted text-[0.625rem] truncate shrink-0">
+							{$t('chat.commandIndexDesc')}
 						</span>
 					</span>
 				</button>

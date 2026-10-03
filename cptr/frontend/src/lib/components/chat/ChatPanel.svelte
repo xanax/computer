@@ -10,6 +10,7 @@
 		answerAskUser,
 		cancelTask,
 		compactChat as apiCompactChat,
+		indexChat as apiIndexChat,
 		updateCurrentMessage,
 		updateMessage,
 		createMessage,
@@ -1363,6 +1364,32 @@
 		}
 	}
 
+	/** Rebuild this chat's search-index entry (`chats.summary`).
+	 *
+	 * No model is called — the server composes the entry from stored messages — so
+	 * this is free and cannot fail on a missing model. `sending` is deliberately
+	 * left alone: the composer stays usable and the draft is not cleared, since the
+	 * chat itself is not changing.
+	 */
+	async function handleIndexChat() {
+		if (!chatId) {
+			toast.message($t('chat.indexNoChat'));
+			return;
+		}
+		const toastId = toast.loading($t('chat.indexing'));
+		try {
+			const result = await apiIndexChat(chatId);
+			if (result.indexed) {
+				toast.success($t('chat.indexDone'), { id: toastId });
+			} else {
+				toast.message($t('chat.indexSkipped'), { id: toastId });
+			}
+			await loadChat(chatId);
+		} catch (err: any) {
+			toast.error(err?.message || $t('chat.indexFailed'), { id: toastId });
+		}
+	}
+
 	async function handleForkChat(messageId?: string | null) {
 		if (!chatId || sending || streaming) return;
 		sending = true;
@@ -2246,6 +2273,7 @@
 					onsettingschange={persistChatSettings}
 					ontoolapprovalchange={handleToolApprovalModeChange}
 					onstatus={handleStatusCommand}
+					onindex={handleIndexChat}
 					onskillslist={handleSkillsListCommand}
 					oncancel={handleCancel}
 					{queuedMessages}

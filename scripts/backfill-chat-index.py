@@ -1,36 +1,17 @@
 #!/usr/bin/env python3
 """Backfill `chats.summary` — the chat index that search ranks on.
 
-Why this exists
----------------
-`chats.summary` is already read and ranked everywhere, and populated nowhere:
-
-- `Chat.search_by_text` (`cptr/models/chats.py:503`) ranks a query against
-  id / title / **summary** / message content, with `summary` at rank 40 —
-  *above* raw message content at 50+.
-- It is returned by `search_chats` (`cptr/utils/tools.py:3268`), `/api/search`
-  (`cptr/routers/search.py:92`) and the chat list payload (`chat.py:202`).
-- `Chat.update_summary` (`chats.py:196`) exists and is used by fork.
-- Measured 2026-10-03: **0 of 378 chats** had a value.
-
-Meanwhile 56 MB of the 58 MB `chat_messages` table is tool activity that is
-invisible to search entirely (see `notes/NOTES-chat-storage-and-search-audit.md`).
-
-This writes an index entry for every chat out of data already on disk.
+The entry-building lives in `cptr/utils/chat_index.py`, shared with the
+`POST /api/chats/{id}/index` endpoint so the two cannot drift. This script is
+the bulk runner: the same entry for every chat, out of data already on disk.
 **No LLM calls.**
 
-Precedence
-----------
-1. The chat has a compaction checkpoint (`chat_messages.chat_summary`) — use it
-   verbatim, trimmed. A checkpoint only describes the messages that were dropped
-   *before* it, so the paths touched *after* it are appended.
-2. Otherwise compose from the opening question plus the file paths and tool names
-   the chat's `function_call` items touched.
-
-Two deliberate omissions in the composed form: no English filler labels and no
-dates. `summary` is substring-matched by the ranker, so a literal "Files:" or a
-year present in all 378 rows would make every chat match the query "files" or
-"2026" and flood search results.
+Why it matters: `chats.summary` is ranked by `Chat.search_by_text`
+(`cptr/models/chats.py:506`, rank 40 — above raw message content) and returned
+by the chat list, `/api/search` and `search_chats`, but it was populated for 0
+of 378 chats. Meanwhile 56 MB of the 58 MB `chat_messages` table is tool
+activity that search cannot see at all; the file paths in
+`function_call.arguments` put a searchable handle on it.
 
 `updated_at` is left untouched on purpose — the sidebar and `/api/search/recent`
 sort on it, so bumping it would reshuffle every chat's position in the UI.
@@ -39,7 +20,7 @@ Usage
 -----
     .venv/bin/python scripts/backfill-chat-index.py                  # dry run
     .venv/bin/python scripts/backfill-chat-index.py --write
-    .venv/bin/python scripts/backfill-chat-index.py --write --force  # overwrite
+    .venv/bin/python scripts/backfill-chat-index.py --force          # rebuild all
     .venv/bin/python scripts/backfill-chat-index.py --chat-id <id> --write
 """
 
@@ -53,14 +34,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-# ── Limits ──────────────────────────────────────────────────
-# `summary` is a search snippet and a rank input, not a document.
-MAX_ENTRY = 1600
-MAX_CHECKPOINT = 1100
-MAX_LATER = 400
-MAX_QUESTION = 300
-MAX_PATHS = 18
-MAX_TOOLS = 8
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from cptr.utils.chat_index import IndexMessage, build_entry  # noqa: E402
 
 
 def resolve_db() -> Path:
@@ -69,115 +45,35 @@ def resolve_db() -> Path:
     return data_dir / "app.db"
 
 
-def collapse(text: str) -> str:
-    """One line, no runs of whitespace — keeps the entry greppable."""
-    return " ".join((text or "").split())
+def load_messages(conn: sqlite3.Connection, chat_id: str) -> list[IndexMessage]:
+    rows = conn.execute(
+        "select role, content, output, chat_summary, created_at "
+        "from chat_messages where chat_id = ? order by created_at",
+        (chat_id,),
+    ).fetchall()
+    return [
+        IndexMessage(
+            role=row["role"] or "",
+            content=row["content"] or "",
+            output=row["output"],
+            chat_summary=row["chat_summary"],
+            created_at=row["created_at"] or 0,
+        )
+        for row in rows
+    ]
 
 
-def truncate(text: str, limit: int) -> str:
-    text = text or ""
-    if len(text) <= limit:
-        return text
-    cut = text[:limit]
-    # Prefer a boundary; fall back to a hard cut for unbroken text (paths, code).
-    for sep in ("\n", ". ", " "):
-        idx = cut.rfind(sep)
-        if idx >= limit // 2:
-            return cut[:idx].rstrip() + " …"
-    return cut.rstrip() + " …"
-
-
-def relpath(path: str, workspace: str) -> str:
-    """Drop the workspace prefix so paths read as repo-relative."""
-    if workspace and path.startswith(workspace.rstrip("/") + "/"):
-        return path[len(workspace.rstrip("/")) + 1 :]
-    return path
-
-
-def paths_in(arguments: object) -> list[str]:
-    """Pull path-like values out of a tool call's arguments."""
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except Exception:
-            return []
-    if not isinstance(arguments, dict):
-        return []
-
-    found: list[str] = []
-    for key, value in arguments.items():
-        key_l = key.lower()
-        pathish = "path" in key_l or "file" in key_l
-        if not pathish:
-            continue
-        if isinstance(value, str):
-            found.append(value)
-        elif isinstance(value, list):
-            found.extend(v for v in value if isinstance(v, str))
-        elif isinstance(value, dict):
-            found.extend(v for v in value.values() if isinstance(v, str))
-    return found
-
-
-def iter_tool_calls(rows: list[sqlite3.Row]):
-    """Yield (created_at, tool_name, arguments) for every function_call item."""
-    for row in rows:
-        raw = row["output"]
-        if not raw:
-            continue
-        try:
-            items = json.loads(raw)
-        except Exception:
-            continue
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if isinstance(item, dict) and item.get("type") == "function_call":
-                yield row["created_at"], (item.get("name") or ""), item.get("arguments")
-
-
-def build_entry(rows: list[sqlite3.Row], workspace: str) -> tuple[str, str]:
-    """Return (entry, kind) where kind is 'checkpoint' or 'composed'."""
-    # ── 1. Newest compaction checkpoint ─────────────────────
-    checkpoint: sqlite3.Row | None = None
-    for row in rows:
-        if (row["chat_summary"] or "").strip():
-            checkpoint = row
-
-    paths: Counter[str] = Counter()
-    tools: Counter[str] = Counter()
-    for created_at, name, arguments in iter_tool_calls(rows):
-        if name:
-            tools[name] += 1
-        if checkpoint is not None and created_at <= checkpoint["created_at"]:
-            continue  # paths before the checkpoint are already in its prose
-        for path in paths_in(arguments):
-            cleaned = relpath(collapse(path), workspace)
-            if cleaned and not cleaned.startswith("/"):
-                paths[cleaned] += 1
-
-    if checkpoint is not None:
-        entry = truncate(collapse(checkpoint["chat_summary"]), MAX_CHECKPOINT)
-        if paths:
-            later = ", ".join(p for p, _ in paths.most_common(MAX_PATHS))
-            entry = f"{entry}\n{truncate(later, MAX_LATER)}"
-        return entry[:MAX_ENTRY], "checkpoint"
-
-    # ── 2. Compose from what the chat already contains ──────
-    lines: list[str] = []
-    for row in rows:
-        if row["role"] == "user" and (row["content"] or "").strip():
-            lines.append(truncate(collapse(row["content"]), MAX_QUESTION))
-            break
-    if paths:
-        lines.append(", ".join(p for p, _ in paths.most_common(MAX_PATHS)))
-    if tools:
-        lines.append(", ".join(f"{n}×{c}" for n, c in tools.most_common(MAX_TOOLS)))
-    return truncate("\n".join(lines).strip(), MAX_ENTRY), "composed"
+def workspace_of(chat: sqlite3.Row) -> str:
+    try:
+        return json.loads(chat["meta"] or "{}").get("workspace") or ""
+    except Exception:
+        return ""
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--write", action="store_true", help="apply (default is a dry run)")
     ap.add_argument("--force", action="store_true", help="overwrite chats that already have a summary")
     ap.add_argument("--limit", type=int, default=0, help="only process the N largest chats")
@@ -190,7 +86,6 @@ def main() -> int:
         print(f"database not found: {db_path}", file=sys.stderr)
         return 1
 
-    # Read-only connection for everything; writes go through `writer` below.
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
 
@@ -209,26 +104,19 @@ def main() -> int:
     plan: list[tuple[str, str, str]] = []  # (chat_id, entry, kind)
     skipped = 0
     kinds = Counter()
+    shown = Counter()
     for chat in chats:
         if not args.force and (chat["summary"] or "").strip():
             skipped += 1
             continue
-        rows = conn.execute(
-            "select role, content, output, chat_summary, created_at "
-            "from chat_messages where chat_id = ? order by created_at",
-            (chat["id"],),
-        ).fetchall()
-        try:
-            workspace = json.loads(chat["meta"] or "{}").get("workspace") or ""
-        except Exception:
-            workspace = ""
-        entry, kind = build_entry(rows, workspace)
-        if not entry.strip():
+        entry, kind = build_entry(load_messages(conn, chat["id"]), workspace_of(chat))
+        if kind == "empty":
             skipped += 1
             continue
         kinds[kind] += 1
         plan.append((chat["id"], entry, kind))
-        if args.show and kinds[kind] <= 3:
+        if args.show and shown[kind] < 3:
+            shown[kind] += 1
             print(f"\n── {kind}: {chat['title']!r} ({chat['id'][:8]}) " + "─" * 20)
             print(entry[:600])
 
@@ -236,18 +124,15 @@ def main() -> int:
         f"\n{'would write' if not args.write else 'writing'}: {len(plan)} "
         f"(checkpoint {kinds['checkpoint']}, composed {kinds['composed']}), skipped {skipped}"
     )
-    if not plan:
-        conn.close()
-        return 0
-
-    if not args.write:
-        print("dry run — pass --write to apply")
+    if not plan or not args.write:
+        if plan:
+            print("dry run — pass --write to apply")
         conn.close()
         return 0
 
     # ── Writes: one short transaction, updated_at untouched ──
-    # The server holds this DB open in WAL mode; a single IMMEDIATE
-    # transaction with a busy timeout is enough to coexist with it.
+    # The server holds this DB open in WAL mode; a single IMMEDIATE transaction
+    # with a busy timeout is enough to coexist with it.
     conn.close()
     writer = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     writer.execute("pragma busy_timeout = 30000")

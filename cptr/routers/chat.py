@@ -1420,6 +1420,62 @@ async def compact_chat(request: Request, chat_id: str, body: CompactRequest):
     }
 
 
+# ── Chat search index ───────────────────────────────────────
+
+
+@router.post("/{chat_id}/index")
+async def index_chat(request: Request, chat_id: str):
+    """Rebuild this chat's search-index entry (`chats.summary`) from its messages.
+
+    Free and reproducible: the entry is composed from what the chat already
+    stores and **no model is called**, so pressing the button cannot cost
+    anything or fail on a missing model. It is the per-chat twin of
+    `scripts/backfill-chat-index.py`; both build the entry with
+    `cptr.utils.chat_index.build_entry`, so a refreshed entry is identical to
+    the backfilled one for the same messages.
+
+    The value it adds is freshness: the index is derived, so it goes stale as a
+    chat grows, and a chat that never had one (or that was forked) can be filled
+    on demand.
+    """
+    user_id = _get_user(request)
+    chat = await Chat.get_by_id(chat_id)
+    if not chat or chat.user_id != user_id:
+        raise HTTPException(404, "chat not found")
+
+    from cptr.utils.chat_index import IndexMessage, build_entry
+
+    messages = await ChatMessage.get_all_by_chat(chat_id)
+    workspace = (chat.meta or {}).get("workspace") or ""
+    entry, kind = build_entry(
+        [
+            IndexMessage(
+                role=message.role or "",
+                content=message.content or "",
+                # `output` is a Column(JSON): already a list here, not text.
+                output=message.output,
+                chat_summary=message.chat_summary,
+                created_at=message.created_at or 0,
+            )
+            for message in messages
+        ],
+        workspace,
+    )
+    if kind == "empty":
+        return {"ok": True, "indexed": False, "reason": "empty", "summary": None}
+
+    # Pass the chat's *existing* `updated_at`: it sorts the sidebar and
+    # `/api/search/recent`, so refreshing an index must not move the chat.
+    await Chat.update_summary(chat_id, entry, chat.updated_at)
+    return {
+        "ok": True,
+        "indexed": True,
+        "kind": kind,
+        "chars": len(entry),
+        "summary": entry,
+    }
+
+
 # ── Resolve a pending tool call ─────────────────────────────
 
 
