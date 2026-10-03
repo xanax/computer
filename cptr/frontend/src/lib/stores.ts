@@ -952,7 +952,7 @@ export async function loadWorkspace(path: string): Promise<void> {
 				? ws.activeGroupId
 				: (groups[0]?.id ?? 'default');
 
-			currentWorkspace.set({
+			const next = {
 				...ws,
 				path: canonicalWorkspacePath,
 				groups,
@@ -967,7 +967,15 @@ export async function loadWorkspace(path: string): Promise<void> {
 				splitRatio: ws.splitRatio ?? 0.5,
 				fileBrowserCwd: ws.fileBrowserCwd ?? canonicalWorkspacePath,
 				toolServers: Array.isArray(ws.toolServers) ? ws.toolServers : undefined
-			});
+			};
+			// This read also carries the prompt and the declared services, but those
+			// are written by their own endpoints. The debounced autosave below PUTs
+			// this object back, so leaving a copy read here would echo a value the
+			// user has since changed and revert the edit (B-019). Keep only what the
+			// workspace store owns; the server preserves the rest across a layout save.
+			delete (next as unknown as Record<string, unknown>).prompt;
+			delete (next as unknown as Record<string, unknown>).services;
+			currentWorkspace.set(next);
 		} else {
 			// First time opening this workspace, create defaults
 			currentWorkspace.set(createDefaultWorkspace(canonicalWorkspacePath));

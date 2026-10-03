@@ -2,7 +2,7 @@
 area: frontend-reactivity
 title: Store notifies, pane re-renders, and swallowed clicks
 aliases: [stores, setActiveGroup, dashboard-click, rerender]
-updated: 2026-10-02
+updated: 2026-10-03
 ---
 
 # Store notifies, pane re-renders, and swallowed clicks
@@ -39,4 +39,5 @@ updated: 2026-10-02
 
 ## Open
 - `setActiveTab` / `setFileBrowserCwd` / the other always-spread updates still notify on no-ops (harmless today; they are the same class of trap).
+- [2026-10-03] The same autosave is a *writer*, not just a no-op notifier: it PUTs the whole workspace object, so any field the store should not own must be stripped at load — see `areas/workspace-state-ownership.md` (B-019, prompt/tool-servers reverting).
 - The dashboard still re-reads todos/jobs on any `workspace` change; the re-reads are now invisible, but they are not deduplicated.

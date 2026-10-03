@@ -264,3 +264,73 @@ def _servers(ids: list[str]):
     from cptr.routers.state import WorkspaceToolServersBody
 
     return WorkspaceToolServersBody(toolServers=ids)
+
+
+def _json_request(payload: dict):
+    """A Request carrying a JSON body, as starlette sees the autosave's PUT."""
+    import json as _json
+
+    from starlette.requests import Request
+
+    body = _json.dumps(payload).encode()
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "PUT",
+            "path": "/__test__",
+            "query_string": b"",
+            "headers": [(b"cookie", b"cptr_session=test-token")],
+            "client": ("127.0.0.1", 0),
+            "server": ("test", 0),
+            "scheme": "http",
+        },
+        receive,
+    )
+
+
+def test_a_stale_layout_save_cannot_revert_the_prompt(workspace_db, request_obj, router):
+    """The autosave echoes the whole workspace it loaded; that echo must not win.
+
+    Seen live: the prompt was saved, the user clicked a tab, and the 300 ms state
+    save PUT the copy it had read *before* the edit, reverting it — "it didn't
+    save". The layout endpoint owns the layout, not the prompt (B-019).
+    """
+    from cptr.models import Workspace
+    from cptr.routers.state import WorkspacePromptBody
+
+    async def seed():
+        await Workspace.upsert(
+            USER, WS, "ws", {"groups": [], "prompt": "Old text.", "toolServers": ["srv-1"]}
+        )
+
+    _run(seed())
+
+    # What the page read when the workspace loaded: layout *and* the old prompt.
+    snapshot = _call(router.get_workspace(request_obj, path=WS))
+    assert snapshot["prompt"] == "Old text."
+
+    # The user edits the prompt and saves it.
+    _call(router.put_workspace_prompt(request_obj, WorkspacePromptBody(prompt="New text."), path=WS))
+    _call(router.put_workspace_tool_servers(request_obj, _servers(["srv-2"]), path=WS))
+
+    # Then a tab click autosaves the whole object it is still holding.
+    _call(router.put_workspace(_json_request(snapshot), path=WS))
+
+    assert _call(router.get_workspace_prompt(request_obj, path=WS))["prompt"] == "New text."
+
+    # The tool-server attachment was re-pointed in the same window; the echo
+    # carries the old list, and the layout save must not put it back either.
+    async def stored_data():
+        row = await Workspace.get_by_user_path(USER, WS)
+        return (row.data or {}) if row else {}
+
+    assert _run(stored_data()).get("toolServers") == ["srv-2"]

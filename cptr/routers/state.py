@@ -199,13 +199,20 @@ async def put_workspace(request: Request, path: str = Query(...)):
             else _workspace_display_name(workspace_path)
         )
     workspace_data.pop("path", None)
-    # Preserve tool-server attachments and the workspace prompt if the editor
-    # save omitted them: a tab save must not erase fields it never touched.
-    if existing_workspace:
-        existing_data = existing_workspace.data or {}
-        for key in ("toolServers", "prompt", "services"):
-            if key not in workspace_data and key in existing_data:
-                workspace_data[key] = existing_data[key]
+    # This save owns the tab layout. The prompt, the tool-server attachments and
+    # the declared services each have their own endpoint — and the client's
+    # layout autosave echoes back *everything* it read when the workspace loaded,
+    # so a key that is present but stale used to win and undo the edit the user
+    # had just made: save a prompt, touch any tab, and the 300 ms state save PUT
+    # the copy it had read before the edit, reverting it (B-019). A guard that
+    # only fired for *absent* keys could not see that, because the echo supplies
+    # the key. The stored value always wins here; only the dedicated endpoints
+    # may change these three.
+    existing_data = (existing_workspace.data or {}) if existing_workspace else {}
+    for key in ("toolServers", "prompt", "services"):
+        workspace_data.pop(key, None)
+        if key in existing_data:
+            workspace_data[key] = existing_data[key]
     # Everything else is workspace data (groups, tabs, etc.)
     await Workspace.upsert(user_id, workspace_path, name, workspace_data)
 
