@@ -260,9 +260,12 @@ The live clusters `~/AIjly/data/postgres-{prod,dev}` are `drwx------ 70:70` stal
   Growth is monotonic and tracks one file: `greyhound-odds/data/atr.sqlite` is now **9.0 GB**
   (7 GB at design time), and is incompressible SQLite, so raw and archive rise together.
   Nightly trend from `/mnt/e/home_backup/backup.log`: 3.3G/14.8G raw (09-24) → 3.9G/16.7G (09-26)
-  → 4.4G/18.8G, 52 dbs (10-02) → 4.6G/19.1G, 56 dbs (10-03). Up to ~4 GB of archive is therefore
-  now **normal**; only a jump outside the raw-size trend means something changed. Space is not a
-  worry yet: 7 archives ≈ 32 GB, 173 GB free on `/mnt/e`.
+  → 4.4G/18.8G, 52 dbs (10-02) → 4.6G/19.1G, 56 dbs (10-03) → **4.6G/19.2G, 56 dbs (10-04, 38:55)**.
+  Up to ~4.6 GB of archive is therefore now **normal**; only a jump outside the raw-size trend means
+  something changed. Space is not a worry yet: 7 archives ≈ 32 GB, 165 GB free on `/mnt/e`.
+  (The 04:15 automation's prompt still quotes the *design-time* "~3.0-3.6 GB expected / >4 GB means
+  something changed" range, which every run since 09-27 has now exceeded — that range is stale, not
+  the archive. Editing it is a `jobs`-row change, not a script change.)
   The generated `~/.cache/home-backup/report.txt` is the authoritative per-run inventory
   (included/excluded, per-db sizes, `N ok / M degraded`) — read it rather than trusting these
   numbers.
