@@ -186,13 +186,19 @@ notificationSound.subscribe((v) => {
  * there is no tab strip to add to, so fall back to a plain browser tab and let
  * the browser decide whether to allow it.
  */
-async function openBrowserFromChat(url: string, label?: string) {
+async function openBrowserFromChat(url: string, label?: string, workspace?: string) {
 	const stores = await import('$lib/stores');
-	if (!get(stores.currentWorkspace)) {
+	// `workspace` is the chat's own workspace. When it differs from the one on
+	// screen, openLocalPage switches first so the page lands next to the chat
+	// that asked for it rather than in whatever the user was last looking at.
+	// An empty/absent value still means "open where I am" -- a home chat has
+	// no workspace, and switching on that would throw you off the home page.
+	const target = workspace || undefined;
+	if (!get(stores.currentWorkspace) && !target) {
 		window.open(url, '_blank', 'noopener');
 		return;
 	}
-	await stores.openLocalPage(url, label);
+	await stores.openLocalPage(url, label, target);
 }
 
 export function bindGlobalChatListener() {
@@ -218,7 +224,7 @@ export function bindGlobalChatListener() {
 			closed_at?: number | null;
 		}) => {
 			if (data.type === 'open_browser' && typeof data.url === 'string') {
-				void openBrowserFromChat(data.url, data.label);
+				void openBrowserFromChat(data.url, data.label, data.workspace);
 			}
 			if (data.type === 'chat:active' && typeof data.active === 'boolean') {
 				setChatActive(data.chat_id, data.active, data.workspace);

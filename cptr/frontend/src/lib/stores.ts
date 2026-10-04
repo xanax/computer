@@ -1153,6 +1153,15 @@ if (typeof BroadcastChannel !== 'undefined') {
 // ── Workspace actions ───────────────────────────────────────────
 
 /**
+ * How long `switchToWorkspace` waits for the URL-driven loader before loading
+ * the workspace itself. Generous, because the alternative is opening a tab into
+ * a workspace that is not there yet; short enough that a failed switch does not
+ * leave the user watching a spinner.
+ */
+const WORKSPACE_SWITCH_TIMEOUT_MS = 3000;
+const WORKSPACE_SWITCH_POLL_MS = 50;
+
+/**
  * Register a workspace path in the sidebar list.
  * Does NOT set currentWorkspace. That happens when the URL changes
  * (via goto() in the calling component), which triggers loadWorkspace().
@@ -1172,6 +1181,35 @@ export function addWorkspace(path: string): void {
 		if (order.includes(path)) return order;
 		return [...order, path];
 	});
+}
+
+/**
+ * Make `path` the active workspace and wait until it is actually loaded.
+ *
+ * The URL is the source of truth for which workspace is active, and `+page.svelte`
+ * loads it in a `$effect`. Awaiting `goto()` alone therefore returns *before*
+ * the tabs exist, which matters when the caller is about to add a tab to them.
+ * So wait for the store rather than for the navigation. `loadWorkspace()` is
+ * still called as a fallback: it is idempotent apart from re-creating browser
+ * sessions for `preview` tabs, so only reach for it when nothing else moves the
+ * needle (no page mounted, e.g. a socket listener firing before first paint).
+ */
+export async function switchToWorkspace(path: string): Promise<void> {
+	if (get(currentWorkspace)?.path === path) return;
+
+	addWorkspace(path);
+	await goto(`/?workspace=${encodeURIComponent(path)}`);
+
+	// Give the URL-driven loader a chance to do it, since that is the path the
+	// rest of the app already uses and it also canonicalises the URL.
+	const deadline = Date.now() + WORKSPACE_SWITCH_TIMEOUT_MS;
+	while (get(currentWorkspace)?.path !== path && Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, WORKSPACE_SWITCH_POLL_MS));
+	}
+	if (get(currentWorkspace)?.path === path) return;
+
+	// Nothing else moved the needle, so load it here rather than give up.
+	await loadWorkspace(path);
 }
 
 export async function removeWorkspace(path: string): Promise<void> {
@@ -1496,8 +1534,29 @@ export async function openBrowserTab(
  * With no workspace open there is no tab strip to add to, so fall back to a
  * plain browser window: the click came from a real user gesture, so it will not
  * be blocked, and doing nothing would be worse than leaving cptr.
+ *
+ * `targetWorkspace` is the workspace the page belongs to. It is a switch, not a
+ * hint: pass it when the caller knows the owning workspace (the `open_browser`
+ * socket event), and pass nothing for a link the user clicked, which should
+ * open where the user already is.
  */
-export async function openLocalPage(url: string, label?: string): Promise<void> {
+export async function openLocalPage(
+	url: string,
+	label?: string,
+	targetWorkspace?: string
+): Promise<void> {
+	// A chat in workspace A calling open_browser while the user is looking at
+	// workspace B used to drop the tab into B: the event carried `workspace`
+	// but the client dropped it and opened wherever it happened to be. Switch
+	// to the owning workspace first, so the page lands beside the chat that
+	// asked for it.
+	//
+	// An unusable target is not a reason to swallow the page: fall through and
+	// open it here rather than leaving the user with nothing.
+	if (targetWorkspace && isSupportedWorkspacePath(targetWorkspace)) {
+		await switchToWorkspace(targetWorkspace);
+	}
+
 	const ws = get(currentWorkspace);
 	if (!ws) {
 		if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener');

@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 from typing import Any
+from urllib.parse import quote
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -25,6 +26,9 @@ _REF_PREFIX = "@e"
 class CDPClient:
     """Low-level Chrome DevTools Protocol client."""
 
+    #: Marker URL that marks a target as ours, so a reconnect can find it again.
+    OWNED_TARGET_URL = "about:blank#cptr-agent"
+
     def __init__(self, ws: Any, target_id: str) -> None:
         self._ws = ws
         self._target_id = target_id
@@ -36,32 +40,25 @@ class CDPClient:
 
     @classmethod
     async def connect(cls, cdp_url: str = "http://localhost:9222") -> "CDPClient":
-        """Connect to a Chrome instance via CDP.
+        """Open a target of our own and drive that, never a page the user can see.
 
-        Discovers the WebSocket debug URL from the /json/version endpoint,
-        then opens a WebSocket connection to the first available page target.
+        Adopting "the first page target" looks harmless and is not: a chat that
+        runs `browser_navigate` while the user has a Browser tab open would take
+        over that page and navigate it away, because the two share one browser.
+        So look for a target we left behind first (a reconnect after a timeout
+        drops the websocket but not the tab), and otherwise open a fresh one.
+        Anything found in the list that we did not create is left untouched --
+        a blank tab is cheap, hijacking the user's page is not.
         """
         import httpx
 
         base = cdp_url.rstrip("/")
 
-        # Get available targets (pages/tabs)
-        async with httpx.AsyncClient() as http:
-            resp = await http.get(f"{base}/json/list", timeout=5)
-            targets = resp.json()
-
-        # Find a page target, or create one
-        page_target = None
-        for t in targets:
-            if t.get("type") == "page":
-                page_target = t
-                break
+        # Reuse our own leftover target when one is still there.
+        page_target = await cls._find_owned_target(base)
 
         if not page_target:
-            # Create a new tab
-            async with httpx.AsyncClient() as http:
-                resp = await http.put(f"{base}/json/new?about:blank", timeout=5)
-                page_target = resp.json()
+            page_target = await cls._create_target(base)
 
         ws_url = page_target["webSocketDebuggerUrl"]
         target_id = page_target["id"]
@@ -81,6 +78,49 @@ class CDPClient:
         await client._send("Runtime.enable")
 
         return client
+
+    @classmethod
+    async def _find_owned_target(cls, base: str) -> dict | None:
+        """Our own page target from a previous connection, if it is still open.
+
+        Only targets carrying our marker match, so a page the user opened is
+        never mistaken for ours even when it happens to be about:blank.
+        """
+        import httpx
+
+        try:
+            async with httpx.AsyncClient() as http:
+                resp = await http.get(f"{base}/json/list", timeout=5)
+                targets = resp.json()
+        except Exception:
+            return None
+
+        for target in targets:
+            if target.get("type") != "page":
+                continue
+            if target.get("url", "").startswith(cls.OWNED_TARGET_URL):
+                return target
+        return None
+
+    @classmethod
+    async def _create_target(cls, base: str) -> dict:
+        """Open a fresh page target and return its descriptor.
+
+        The marker is percent-encoded on the way in: written as a literal ``#``
+        it is parsed as a fragment of the *request* URL and silently dropped,
+        so every tab would come back as a plain about:blank and the marker
+        would never match on the next connect.
+        """
+        import httpx
+
+        marked = quote(cls.OWNED_TARGET_URL, safe="")
+        async with httpx.AsyncClient() as http:
+            resp = await http.put(f"{base}/json/new?{marked}", timeout=5)
+            if resp.status_code >= 400:
+                # Some builds refuse PUT here; fall back to a plain blank page.
+                # It is still our own target, just unmarkable.
+                resp = await http.put(f"{base}/json/new?about:blank", timeout=5)
+            return resp.json()
 
     # ── Low-level CDP messaging ────────────────────────────
 

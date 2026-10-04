@@ -162,8 +162,10 @@ async def emit_open_browser(
     """Ask the user's connected tabs to open a Browser tab at ``url``.
 
     Used by the ``open_browser`` tool so a chat can show the user a page it just
-    built or started. The client opens it in its current workspace (see
-    ``openBrowserFromChat`` in lib/stores/chat.ts).
+    built or started. ``workspace`` is the chat's own workspace: the client
+    switches to it before opening the tab (see ``openBrowserFromChat`` in
+    lib/stores/chat.ts), so the page lands beside the chat that asked for it
+    instead of in whichever workspace the user happened to be looking at.
     """
     await emit_to_user(
         user_id,
