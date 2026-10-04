@@ -457,6 +457,32 @@ def _plain_message_text(content) -> str:
     return str(content or "")
 
 
+# Providers occasionally emit NUL bytes and stray C0 controls at token
+# boundaries (observed on a MiniMax-backed OpenRouter route: "br\x00endan",
+# "cptr/\x00frontend", plus a "]<]minimax[>[" watermark). They pass through
+# JSON intact, so cptr used to persist them and hand them straight to tools,
+# where they surface only as "embedded null byte" / "lstat: embedded null
+# character" — the run then retries the same broken call forever and looks
+# like a crash. Strip them at the one place every provider adapter converges
+# (the event loop below) so text, reasoning and tool arguments are all clean.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _strip_control_chars(value):
+    """Recursively drop C0/C7 control characters from a streamed value."""
+    if isinstance(value, str):
+        return _CONTROL_CHARS_RE.sub("", value)
+    if isinstance(value, list):
+        return [_strip_control_chars(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_control_chars(item) for key, item in value.items()}
+    return value
+
+
+def _had_control_chars(value) -> bool:
+    return value != _strip_control_chars(value)
+
+
 def _memory_recall_inputs(
     messages: list[dict],
     regeneration_prompt: str | None = None,
@@ -869,6 +895,11 @@ def _output_items_to_messages(
     output_items: list[dict], message_id: str | None = None
 ) -> list[dict]:
     """Convert ordered persisted output items into model-visible messages."""
+    # Persisted items predate the stream guard (and other installs may still be
+    # writing them), so re-clean on read too: `m.output` is replayed as prompt
+    # context on every later turn, which would re-inject the NUL forever.
+    if _had_control_chars(output_items):
+        output_items = _strip_control_chars(output_items)
     native_agent_call_ids = {
         item["call_id"]
         for item in output_items
@@ -2400,6 +2431,18 @@ async def run_chat_task(
                 )
 
             async for event in stream:
+                if _had_control_chars(event):
+                    # Cheap when clean: `!=` against a rebuilt copy. Providers
+                    # leak NUL bytes at token boundaries and nothing between the
+                    # adapter and here strips them, so they reach the transcript
+                    # and then the tools as "embedded null byte" failures.
+                    logger.warning(
+                        "[task %s] stripped control characters from a %s event",
+                        message_id[:8],
+                        event.get("type"),
+                    )
+                    event = _strip_control_chars(event)
+
                 if event["type"] == "text_delta":
                     content += event["content"]
                     text_buffer += event["content"]
