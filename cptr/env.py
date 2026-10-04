@@ -59,6 +59,16 @@ DATA_DIR = Path(os.environ.get("CPTR_DATA_DIR", str(Path.home() / ".cptr")))
 CONFIG_FILE = DATA_DIR / "config.toml"
 DB_FILE = DATA_DIR / "app.db"
 
+# How long a write waits for SQLite's single write lock before giving up.
+# SQLite's own default is 5000ms, and cptr blows straight through it: every chat
+# turn persists its whole `output` JSON blob (measured up to 5.9MB) in one commit,
+# and 9 of 7596 saves in a real log took 5-40s. One writer in that window turns
+# every other in-flight turn into `sqlite3.OperationalError: database is locked`,
+# which kills the turn and loses its text, tool calls and results. Waiting is
+# correct here — the lock always clears, and a turn may legitimately hold it
+# while a multi-megabyte commit is flushed to disk.
+DB_BUSY_TIMEOUT_S = float(os.environ.get("CPTR_DB_BUSY_TIMEOUT_S", "60"))
+
 # ── Logging ─────────────────────────────────────────────────
 LOG_LEVEL = os.environ.get("CPTR_LOG_LEVEL", "INFO").upper()
 LOG_FORMAT = os.environ.get("CPTR_LOG_FORMAT", "text").lower()

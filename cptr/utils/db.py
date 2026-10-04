@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
-from cptr.env import DATA_DIR, DB_FILE
+from cptr.env import DATA_DIR, DB_BUSY_TIMEOUT_S, DB_FILE
 
 _engine = None
 _async_session = None
@@ -17,7 +18,25 @@ def get_engine():
         _engine = create_async_engine(
             f"sqlite+aiosqlite:///{DB_FILE}",
             echo=False,
+            # SQLite's default is 5000ms, which a burst of concurrent turns saving
+            # multi-megabyte output blobs exceeds (see DB_BUSY_TIMEOUT_S). Handing
+            # the timeout to the driver also covers connections alembic and any
+            # future raw engine make, which bypass the PRAGMA below.
+            connect_args={"timeout": DB_BUSY_TIMEOUT_S},
         )
+        # `synchronous` and the lock timeout are per-connection, so they are set
+        # here on every new pooled connection rather than once at startup.
+        # NORMAL is the documented safe setting for WAL (durable across app
+        # crashes, only at risk from an OS-level crash) and removes an fsync per
+        # commit -- the cost that decides how long a commit holds the write lock.
+        @event.listens_for(_engine.sync_engine, "connect")
+        def _set_sqlite_pragmas(dbapi_connection, _record):
+            cur = dbapi_connection.cursor()
+            try:
+                cur.execute(f"PRAGMA busy_timeout={int(DB_BUSY_TIMEOUT_S * 1000)}")
+                cur.execute("PRAGMA synchronous=NORMAL")
+            finally:
+                cur.close()
     return _engine
 
 
@@ -46,7 +65,11 @@ async def init_db():
 
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", str(Path(__file__).parent.parent / "migrations"))
-    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{DB_FILE}")
+    # Migrations open their own sync engine, so they need the same lock timeout:
+    # a DDL migration that runs while turns are saving must wait, not abort boot.
+    alembic_cfg.set_main_option(
+        "sqlalchemy.url", f"sqlite:///{DB_FILE}?timeout={DB_BUSY_TIMEOUT_S}"
+    )
     command.upgrade(alembic_cfg, "head")
 
     # Seed DB config from config.toml (file is source of truth on startup)
