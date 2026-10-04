@@ -2202,7 +2202,10 @@ async def list_automations(
                     "rrule": item.rrule,
                     "is_active": item.status == STATUS_OPEN,
                     "last_run_at": runs[0].created_at if runs else None,
-                    "next_runs": upcoming,
+                    # A paused task has no next run - `next_n_runs_ns` reads the
+                    # rrule alone, so this would list fire times for something
+                    # that will never fire.
+                    "next_runs": upcoming if item.status == STATUS_OPEN else None,
                 }
             )
         return json.dumps({"automations": automations, "total": total})
@@ -2227,7 +2230,7 @@ async def update_automation(
     :param model_id: New model ID (optional).
     """
     try:
-        from cptr.models.jobs import Job
+        from cptr.models.jobs import STATUS_OPEN, Job
         from cptr.utils.automations import next_n_runs_ns, next_run_ns, validate_rrule
 
         job = await Job.get_by_id(automation_id)
@@ -2256,12 +2259,15 @@ async def update_automation(
             return json.dumps({"error": "Failed to update task"})
 
         await _emit_board_changed(job.user_id, job.workspace)
+        # Editing a paused task's schedule must not advertise fire times.
+        refreshed = await Job.get_by_id(automation_id)
+        is_open = (refreshed.status if refreshed else job.status) == STATUS_OPEN
         return json.dumps(
             {
                 "status": "success",
                 "id": automation_id,
                 "updated_fields": list(values.keys()),
-                "next_runs": next_n_runs_ns(rrule or job.rrule),
+                "next_runs": next_n_runs_ns(rrule or job.rrule) if is_open else None,
             }
         )
     except Exception as e:

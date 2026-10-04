@@ -64,6 +64,13 @@ check", Fri 10:15) reports and notifies *only* on exit 1; a clean week costs the
 user nothing. Verified the check by dropping a known row from the baseline and
 confirming it came back as `+ resource_path` with exit 1.
 
+**Corrected earlier claim:** I first reported paused tasks as "paused-but-still-scheduling,
+which may quietly restart itself after a redeploy." **That was wrong.** The
+scheduler always gated correctly — `Job.promote_due_templates` requires
+`status == STATUS_OPEN` in both the SELECT and the conditional UPDATE
+(`cptr/models/jobs.py`). A paused task never fires. The bug was purely in what
+the API *reported*: see the next-runs section.
+
 Traps hit while building it:
 - `import datetime` then `datetime.now()` fails — `now` is an *instance* method on
   the class, not a module function. Use `datetime.datetime.now()`.

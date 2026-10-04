@@ -106,12 +106,16 @@ def _automation_dict(
         "rrule": job.rrule,
         "is_active": job.status == STATUS_OPEN,
         "last_run_at": last_run.created_at if last_run else None,
-        "next_run_at": job.trigger_at,
+        # A paused task has no next run. `trigger_at` survives the pause and
+        # `next_runs` is computed from the rrule alone, so reporting both for a
+        # paused row advertised fire times for something that will never fire -
+        # and the dashboard showed them as if they were real.
+        "next_run_at": job.trigger_at if job.status == STATUS_OPEN else None,
         "meta": job.meta,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
         "last_run": _run_dict(last_run) if last_run else None,
-        "next_runs": next_runs,
+        "next_runs": next_runs if job.status == STATUS_OPEN else None,
         "has_webhook": bool(meta.get("webhook_token")),
         "webhook_url": webhook_url,
     }
