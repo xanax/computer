@@ -63,6 +63,227 @@ _STREAM_TIMEOUT = httpx.Timeout(
 )
 
 
+# Sentinel key `_parse_tool_arguments` sets when it could not recover a
+# usable arguments object. `chat_task.py` turns it into a visible error tool
+# output; it must never reach a tool, because every tool takes named kwargs.
+INVALID_TOOL_ARGS_KEY = "__invalid_tool_arguments__"
+
+
+def _parse_tool_arguments(raw: str) -> dict:
+    """Parse streamed tool-call arguments, tolerating provider JSON glitches.
+
+    `raw` is the concatenation of the provider's `arguments` deltas. It is
+    almost always valid JSON, but a model writing a large blob — a plan
+    artifact, a file body — can emit one unescaped quote or a truncated tail
+    and the whole thing stops being JSON.
+
+    `json.loads` used to run unguarded here, so that glitch raised straight
+    out of the stream generator: the `async for event in stream` loop in
+    chat_task.py died, the turn was saved as an error, and every *other*
+    tool call the model had batched in that same message was thrown away
+    with it. One unparsable argument blob cost the whole turn.
+
+    So: repair what is repairable, and never raise. Returning a dict with a
+    single `__invalid_tool_arguments__` key is the signal to
+    `chat_task.py`, which turns it into a visible error tool output so the
+    model can re-emit the call and the turn continues. A tool that wants a
+    real argument simply never finds it, which is the correct outcome —
+    better than a killed turn.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    else:
+        if isinstance(parsed, dict):
+            return parsed
+        # A bare list/scalar/None is not a valid arguments object.
+        return {"__invalid_tool_arguments__": True, "__raw__": text[:4000]}
+
+    repaired = _repair_tool_arguments_json(text)
+    if repaired is not None:
+        logger.warning(
+            "[stream] repaired malformed tool-call arguments (%d chars) into usable JSON",
+            len(text),
+        )
+        return repaired
+    logger.warning(
+        "[stream] unrecoverable tool-call arguments JSON (%d chars): %s",
+        len(text),
+        text[:200],
+    )
+    return {"__invalid_tool_arguments__": True, "__raw__": text[:4000]}
+
+
+def _read_relaxed_string(text: str, i: int) -> tuple[str | None, int]:
+    """Read a JSON string value that may contain unescaped `"` characters.
+
+    This is the shape that actually reaches us: a model writes a large blob
+    (a plan artifact, a file body) and forgets to escape a quote inside it.
+    `raw_decode` stops at the first stray quote, then the next parse fails on
+    the word it lands in.
+
+    Scan to the *next* structurally valid boundary instead — a quote that is
+    followed (after whitespace) by `,` `}` or `]` — and keep the inner quote
+    as a literal character. That recovers the value verbatim instead of
+    throwing away a whole artifact because of one typo.
+
+    Returns (text, index_after_closing_quote) or (None, i) if unusable.
+    """
+    n = len(text)
+    if i >= n or text[i] != '"':
+        return None, i
+    i += 1
+    out: list[str] = []
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            if i + 1 >= n:
+                # Trailing backslash from a truncated tail: keep the content
+                # we have and let the caller close the structure.
+                return "".join(out), i
+            nxt = text[i + 1]
+            simple = {
+                '"': '"',
+                "\\": "\\",
+                "/": "/",
+                "b": "\b",
+                "f": "\f",
+                "n": "\n",
+                "r": "\r",
+                "t": "\t",
+            }
+            if nxt in simple:
+                out.append(simple[nxt])
+                i += 2
+                continue
+            if nxt == "u" and i + 6 <= n:
+                try:
+                    out.append(chr(int(text[i + 2 : i + 6], 16)))
+                    i += 6
+                    continue
+                except ValueError:
+                    pass
+            # Unrecognised escape: pass the character through literally.
+            out.append(nxt)
+            i += 2
+            continue
+        if ch == '"':
+            # Is this the real end, or a quote the model forgot to escape?
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j >= n or text[j] in ",}]":
+                return "".join(out), i + 1
+            out.append('"')
+            i += 1
+            continue
+        if ch == "\n":
+            # A raw newline inside a string is invalid JSON, but it is
+            # overwhelmingly the model writing a multi-line body.
+            out.append("\n")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    # Ran out of input mid-string: a truncated tail. Salvage what we read.
+    return "".join(out), i
+
+
+def _repair_tool_arguments_json(text: str) -> dict | None:
+    """Best-effort salvage of a malformed JSON object, or None if hopeless.
+
+    Deliberately small and local rather than a dependency: the two shapes
+    seen in practice are an unescaped `"` inside a string value (close the
+    string at the stray quote, re-escape it, continue) and a truncated tail
+    (drop the incomplete member and close the braces). Both are recoverable
+    without guessing at the model's intent.
+    """
+    decoder = json.JSONDecoder()
+    obj: dict = {}
+    i = 0
+    n = len(text)
+    while i < n:
+        # Skip whitespace and separators between members.
+        while i < n and text[i] in " \t\r\n,":
+            i += 1
+        if i >= n:
+            break
+        if text[i] != "{":
+            # Not an object at the top level, or it went off the rails early.
+            return obj or None
+        i += 1
+        while True:
+            while i < n and text[i] in " \t\r\n":
+                i += 1
+            if i < n and text[i] == "}":
+                i += 1
+                break
+            if i >= n:
+                return obj or None
+            if text[i] != '"':
+                return obj or None
+            try:
+                key, i = decoder.raw_decode(text, i)
+            except (json.JSONDecodeError, ValueError):
+                # Unparsable member name: nothing further can be trusted.
+                return obj or None
+            while i < n and text[i] in " \t\r\n":
+                i += 1
+            if i >= n or text[i] != ":":
+                return obj or None
+            i += 1
+            while i < n and text[i] in " \t\r\n":
+                i += 1
+            if i >= n:
+                # Truncated right after the colon — drop this member.
+                return obj or None
+            value_start = i
+            try:
+                value, i = decoder.raw_decode(text, i)
+            except (json.JSONDecodeError, ValueError):
+                value, i = _read_relaxed_string(text, value_start)
+                if value is None:
+                    return obj or None
+            else:
+                # `raw_decode` happily stops at a stray unescaped quote, so a
+                # successful parse does not prove we consumed the whole value:
+                # if the next token is not a structural boundary, the string
+                # ended early and we are looking at a prefix. Re-read it
+                # relaxed rather than keeping a truncated fragment.
+                j = i
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                if j < n and text[j] not in ",}]":
+                    value, i = _read_relaxed_string(text, value_start)
+                    if value is None:
+                        return obj or None
+            if not isinstance(value, (str, int, float, bool, type(None), list, dict)):
+                return obj or None
+            obj[key] = value
+            while i < n and text[i] in " \t\r\n":
+                i += 1
+            if i >= n:
+                return obj or None
+            if text[i] == ",":
+                i += 1
+                continue
+            if text[i] == "}":
+                i += 1
+                break
+            return obj or None
+        # Continue with the next top-level object if the blob is a list of
+        # them (shouldn't happen for arguments, but don't hard-fail).
+        while i < n and text[i] in " \t\r\n,":
+            i += 1
+        if i >= n:
+            break
+    return obj or None
+
+
 class EmptyCompletionError(RuntimeError):
     pass
 
@@ -505,7 +726,9 @@ async def stream_anthropic(
                                     "type": "tool_call",
                                     "call_id": current_block["id"],
                                     "name": current_block["name"],
-                                    "arguments": json.loads(current_block["input_json"]),
+                                    "arguments": _parse_tool_arguments(
+                                        current_block["input_json"]
+                                    ),
                                 }
 
                         elif etype == "message_delta":
@@ -807,7 +1030,9 @@ async def stream_openai_completions(
                                     "type": "tool_call",
                                     "call_id": tc["id"],
                                     "name": tc["name"],
-                                    "arguments": json.loads(tc["arguments_json"]),
+                                    "arguments": _parse_tool_arguments(
+                                        tc["arguments_json"]
+                                    ),
                                 }
 
                         if chunk.get("usage"):
@@ -1141,7 +1366,7 @@ async def stream_openai_responses(
                                     "id": item.get("id", ""),
                                     "call_id": item["call_id"],
                                     "name": item["name"],
-                                    "arguments": json.loads(item["arguments"]),
+                                    "arguments": _parse_tool_arguments(item["arguments"]),
                                 }
                             elif item["type"] == "reasoning":
                                 # Reasoning items must be round-tripped for reasoning models

@@ -2,6 +2,8 @@
 
 Newest first. One line per task. Current truth is in `areas/`, not here.
 
+2026-10-05 — tool-arguments-json-repair — Fixed chat `9ffb4266`, where one unescaped `"` inside a plan artifact raised `JSONDecodeError` out of the stream generator and ended `run_chat_task`'s `async for` loop, killing the turn and discarding every other batched tool call. All three adapters parsed streamed arguments with bare `json.loads`; `_parse_tool_arguments` now repairs an unescaped-quote string and a truncated tail and never raises, with a sentinel that `run_chat_task` records as a completed call carrying a readable error. Kept out `json-repair` (no new dep in the request path) and left `ai.py:414` alone (replayed history, always valid). Two traps worth keeping: `raw_decode` succeeds on a *prefix*, and a recursive repair `RecursionError`ed inside the stream loop. 30 tests, the 2 adapter ones verified to fail without the fix; suite 263 (B-026).
+
 2026-10-04 — browser-tab-routing — Two "my page moved itself" bugs, both confirmed by tests that fail without the fix: CDP `connect()` adopted the first page target (now marks and reuses its own), and the `open_browser` socket event's `workspace` field was dropped client-side (now `switchToWorkspace` before opening the tab).
 
 2026-10-04 — silent-turn-truncation — Diagnosed chat `457af6a2` "stopped for no reason": the provider's `finish_reason` is read only for `tool_calls` and then dropped, so a `length` stop is saved via the normal `done` path with no `meta.error`. No fix applied yet (B-023).

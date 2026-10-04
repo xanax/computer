@@ -42,6 +42,7 @@ from cptr.models import (
 )
 from cptr.socket.main import emit_to_user, is_chat_visible
 from cptr.utils.ai import (
+    INVALID_TOOL_ARGS_KEY,
     ChatCompletionForm,
     generate_json,
     stream_anthropic,
@@ -2525,6 +2526,46 @@ async def run_chat_task(
                         )
                         continue
                     pending_call_ids.add(call_id)
+                    # A provider emitted arguments we could not parse, even
+                    # after repair. Executing the tool with a junk dict gives
+                    # an opaque "unexpected keyword argument"; raising instead
+                    # kills the turn and discards every other call batched
+                    # with it. Record it as a *completed* call whose output is
+                    # a readable error, so the model sees what went wrong and
+                    # re-emits the call while the turn carries on.
+                    args = event.get("arguments")
+                    if isinstance(args, dict) and args.get(INVALID_TOOL_ARGS_KEY):
+                        logger.warning(
+                            "[task %s] unrecoverable arguments for tool call %s (%s); "
+                            "recording an error result instead of failing the turn",
+                            message_id[:8],
+                            event.get("name"),
+                            call_id,
+                        )
+                        item = {
+                            "type": "function_call",
+                            "id": str(uuid.uuid4()),
+                            "call_id": call_id,
+                            "fc_id": event.get("id", ""),
+                            "name": event["name"],
+                            "arguments": {},
+                            "status": "completed",
+                        }
+                        result_item = {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": (
+                                f"Error: the arguments for {event['name']} were not valid JSON "
+                                "and could not be parsed. Re-issue the tool call with valid "
+                                "JSON arguments (escape any double quotes inside string values)."
+                            ),
+                        }
+                        output_items.append(item)
+                        output_items.append(result_item)
+                        await emit(output=item)
+                        await emit(output=result_item)
+                        _sync_state()
+                        continue
                     pending_calls.append(event)
 
                 elif event["type"] in ("output", "reasoning"):
