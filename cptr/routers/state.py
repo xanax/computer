@@ -153,6 +153,28 @@ async def get_workspace_list(request: Request):
     return await _workspace_summaries(user_id)
 
 
+@router.get("/workspaces/priority")
+async def get_workspace_priority(
+    request: Request,
+    current: str | None = Query(None, description="The open workspace, held visible."),
+    limit: int = Query(8, ge=0, le=100, description="Suggested visible count."),
+):
+    """Rank the sidebar's workspaces by how much the user actually uses them.
+
+    Kept beside ``/workspaces`` rather than under ``/api/ui-events`` because the
+    answer is a property of the user's workspaces, not of the telemetry store:
+    dwell is only one of the five signals, and it is a means, not the end.
+    """
+    user_id = await _get_user_id(request)
+    if not user_id:
+        return {"workspaces": [], "pinned": [], "limit": limit}
+
+    from cptr.utils.workspace_priority import workspace_priority
+
+    paths = [path for path, _ in _dedupe_workspaces(await Workspace.get_by_user(user_id))]
+    return await workspace_priority(paths, current=current, limit=limit)
+
+
 # ── Single workspace CRUD ────────────────────────────────────────
 
 

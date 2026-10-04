@@ -417,7 +417,22 @@ export function measureToPaint(
 	const startedHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
 	requestAnimationFrame(() => {
 		requestAnimationFrame(() => {
-			record(kind, label, nowMs() - t0, { started_hidden: startedHidden, ...meta });
+			// rAF callbacks are *paused* while the document is hidden, so a span
+			// that started or ended hidden is not a latency measurement at all —
+			// it is however long the tab sat in the background. Stamping only at
+			// start cannot see a tab that went hidden in between, which is how
+			// background panes ended up reporting 5,000-second "mounts" and
+			// dragged the p95 tail to garbage. Measure the clock at paint time
+			// too, keep the sample (it is real, just not a latency), and mark it
+			// so readers can filter. See `UiEvent.summary` for the reader side.
+			const hiddenAtPaint =
+				typeof document !== 'undefined' && document.visibilityState === 'hidden';
+			record(kind, label, nowMs() - t0, {
+				started_hidden: startedHidden,
+				hidden_at_paint: hiddenAtPaint,
+				throttled: startedHidden || hiddenAtPaint,
+				...meta
+			});
 		});
 	});
 }

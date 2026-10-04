@@ -33,6 +33,11 @@ import { changeLocale, i18next } from '$lib/i18n';
 import { measureToPaint, setPerfContext } from '$lib/utils/perf';
 import { requestConfirm } from '$lib/stores/confirm';
 import { streamingChatTabs } from '$lib/stores/chat';
+import {
+	applyStoredPins,
+	pinnedWorkspaces,
+	resurface
+} from '$lib/stores/workspacePriority.svelte';
 import { keybindings, loadKeybindings } from '$lib/stores/keybindings';
 import { defaultPwaPreferences, type PwaPreferences } from '$lib/intents/types';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
@@ -147,6 +152,7 @@ export interface UserPreferences {
 	toolApprovalMode?: ToolApprovalMode;
 	locale: string;
 	workspaceOrder?: string[]; // ordered paths for sidebar drag-reorder
+	workspacePinned?: string[]; // sidebar workspaces kept visible, best-first
 	keybindings?: Record<string, string>; // user-customised keyboard shortcuts
 	version?: string; // last seen app version for changelog
 	showUpdateToast?: boolean; // show version update notifications (default true)
@@ -617,6 +623,7 @@ function persistPreferences(): void {
 			toolApprovalMode: get(toolApprovalMode),
 			locale: i18next.language,
 			workspaceOrder: get(workspaceOrder),
+			workspacePinned: get(pinnedWorkspaces),
 			keybindings: get(keybindings),
 			version: get(lastSeenVersion),
 			showUpdateToast: get(showUpdateToastPref),
@@ -663,6 +670,9 @@ function subscribeForPersistence() {
 		if (get(stateLoaded)) persistPreferences();
 	});
 	workspaceOrder.subscribe(() => {
+		if (get(stateLoaded)) persistPreferences();
+	});
+	pinnedWorkspaces.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
 	keybindings.subscribe(() => {
@@ -734,6 +744,9 @@ export async function loadPreferences(): Promise<void> {
 		}
 		if (prefs.locale) changeLocale(prefs.locale as string);
 		if (Array.isArray(prefs.workspaceOrder)) workspaceOrder.set(prefs.workspaceOrder as string[]);
+		// The sidebar's visible set is the user's, not the server's suggestion:
+		// apply what they last chose before the ranking ever loads.
+		applyStoredPins(prefs.workspacePinned);
 		if (prefs.keybindings) loadKeybindings(prefs.keybindings as Record<string, string>);
 		if (prefs.version) lastSeenVersion.set(prefs.version as string);
 		if (prefs.showUpdateToast !== undefined)
@@ -1401,6 +1414,10 @@ export function openUntitledFileTab(targetGroupId?: string): void {
 export async function openTerminalTab(targetGroupId?: string): Promise<void> {
 	const ws = get(currentWorkspace);
 	if (!ws) return;
+
+	// Opening a terminal is real work in this workspace, so its sidebar row comes
+	// back even if the ranking had it in the collapsed tail.
+	resurface(ws.path);
 
 	try {
 		const data = await createSession(ws.path);

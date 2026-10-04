@@ -3399,10 +3399,13 @@ async def ui_metrics(
         the frontend reports them, otherwise falls back to attributing gaps
         between interaction samples (an estimate — see the caveat it prints).
       - "slow": slowest interactions as p50/p95/max per (kind, label).
+      - "fragmentation": shape of the attention from measured dwell spans —
+        median span, focus ratio, context switches, and how long each
+        workspace held unbroken attention.
       - "inventory": how much data exists — kinds, sessions, coverage.
 
     Args:
-        metric: One of "dwell", "slow", "inventory".
+        metric: One of "dwell", "slow", "fragmentation", "inventory".
         window_hours: How far back to look, by event time.
         cap_s: For the "dwell" fallback, the longest gap still counted as time
             spent (guards against idle periods inflating a workspace).
@@ -3412,7 +3415,9 @@ async def ui_metrics(
     from collections import defaultdict
     import datetime as dt
 
-    from cptr.models.ui_events import UiEvent, _percentile
+    # A background-tab sample: paused rAF, so duration is not latency. Shared
+    # with the model so the tool and /summary can never disagree on the mask.
+    from cptr.models.ui_events import UiEvent, _is_throttled, _percentile
     from cptr.utils.config import now_ms
 
     try:
@@ -3450,29 +3455,106 @@ async def ui_metrics(
 
     if metric == "slow":
         groups: dict[tuple[str, str | None], list[float]] = defaultdict(list)
+        throttled: dict[tuple[str, str | None], int] = defaultdict(int)
         for row in rows:
             if kind and row["kind"] != kind:
                 continue
-            groups[(row["kind"], row["label"])].append(float(row["duration_ms"] or 0.0))
+            key = (row["kind"], row["label"])
+            # A background tab's rAFs are paused, so its sample records how long
+            # it sat in the background, not how slow it was. Counting it here
+            # is what turned `mount` into a 388-second p95. Excluded unless the
+            # caller explicitly asks; noted per row so the gap is visible.
+            if _is_throttled(row.get("meta")):
+                throttled[key] += 1
+                continue
+            groups[key].append(float(row["duration_ms"] or 0.0))
         if not groups:
-            return f"No samples for kind={kind!r} in the last {window_hours}h."
+            return (
+                f"No unmasked samples for kind={kind!r} in the last {window_hours}h."
+                if throttled
+                else f"No samples for kind={kind!r} in the last {window_hours}h."
+            )
         for durations in groups.values():
             durations.sort()
         ranked = sorted(groups.items(), key=lambda kv: -_percentile(kv[1], 95))
         lines = [
             f"Slowest UI interactions — last {window_hours}h (ms, slowest p95 first)",
             "",
-            f"  {'p95':>8} {'p50':>8} {'max':>9} {'n':>6}  kind / label",
+            "  Background-tab samples excluded: a paused rAF records time in the",
+            "  background, not latency.",
+            "",
+            f"  {'p95':>8} {'p50':>8} {'max':>9} {'n':>6} {'bg':>5}  kind / label",
         ]
         for (group_kind, label), durations in ranked[:limit]:
             lines.append(
                 f"  {_percentile(durations, 95):8.1f} {_percentile(durations, 50):8.1f} "
-                f"{durations[-1]:9.1f} {len(durations):6d}  {group_kind} / {label or '-'}"
+                f"{durations[-1]:9.1f} {len(durations):6d} {throttled[(group_kind, label)]:5d}  "
+                f"{group_kind} / {label or '-'}"
             )
         return "\n".join(lines)
 
+    if metric == "fragmentation":
+        dwell_rows = [row for row in rows if row["kind"] == "dwell"]
+        if not dwell_rows:
+            return (
+                f"No dwell spans in the last {window_hours}h, so there is no measured "
+                f"attention to shape. Fragmentation is never estimated from gaps."
+            )
+        durations = sorted(float(row["duration_ms"] or 0.0) for row in dwell_rows)
+        total_ms = sum(durations)
+        switches = sum(1 for row in dwell_rows if row["label"] == "switch")
+        long_enough = [d for d in durations if d >= 300_000]
+        focus_pct = 100.0 * sum(long_enough) / total_ms if total_ms else 0.0
+
+        per_ws: dict[str, list[float]] = defaultdict(list)
+        for row in dwell_rows:
+            per_ws[row["workspace"] or "(unknown)"].append(float(row["duration_ms"] or 0.0))
+
+        lines = [
+            f"Attention shape — last {window_hours}h, from {len(durations)} measured dwell span(s)",
+            "",
+            f"  total tracked      {total_ms / 60000:8.1f} min",
+            f"  median span        {_percentile(durations, 50) / 1000:8.1f} s",
+            f"  mean span          {total_ms / len(durations) / 1000:8.1f} s",
+            f"  longest span       {durations[-1] / 1000:8.1f} s",
+            f"  context switches   {switches:8d}   (spans ended by a workspace switch)",
+            f"  focus ratio        {focus_pct:8.1f}%  (time inside spans >= 5 min)",
+            "",
+            "  span length distribution:",
+        ]
+        for name, upper in UiEvent.FRAGMENT_BUCKETS:
+            in_bucket = [d for d in durations if d < upper]
+            share = 100.0 * sum(in_bucket) / total_ms if total_ms else 0.0
+            lines.append(
+                f"    under {upper // 60000:>2d}m   {len(in_bucket):5d} spans  "
+                f"{sum(in_bucket) / 60000:7.1f} min  {share:5.1f}%"
+            )
+        rest = [d for d in durations if d >= 1_800_000]
+        share = 100.0 * sum(rest) / total_ms if total_ms else 0.0
+        lines.append(
+            f"    30m and over   {len(rest):5d} spans  {sum(rest) / 60000:7.1f} min  {share:5.1f}%"
+        )
+
+        lines += ["", f"  {'spans':>5} {'median':>8} {'min':>8}  workspace"]
+        ranked_ws = sorted(
+            per_ws.items(),
+            key=lambda kv: -(sum(kv[1]) / max(len(kv[1]), 1)),
+        )[:limit]
+        for workspace, values in ranked_ws:
+            values.sort()
+            lines.append(
+                f"  {len(values):5d} {_percentile(values, 50) / 1000:7.1f}s "
+                f"{sum(values) / 60000:7.1f}m  {workspace}"
+            )
+        lines += [
+            "",
+            "  Measures interruption, not value: no outcome is joined to a span, so",
+            "  this cannot say whether the time was well spent, only whether it held.",
+        ]
+        return "\n".join(lines)
+
     if metric != "dwell":
-        return f"Unknown metric {metric!r}. Use one of: dwell, slow, inventory."
+        return f"Unknown metric {metric!r}. Use one of: dwell, slow, fragmentation, inventory."
 
     per_workspace: dict[str, float] = defaultdict(float)
     measured = [row for row in rows if row["kind"] == "dwell" and (row["duration_ms"] or 0) > 0]

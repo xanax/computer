@@ -25,6 +25,36 @@ export interface WorkspaceListItem {
 
 export const getWorkspaceList = () => fetchJSON<WorkspaceListItem[]>('/api/state/workspaces');
 
+export interface WorkspacePriorityRow {
+	path: string;
+	score: number;
+	dwell_seconds: number;
+	active_days: number;
+	chats: number;
+	live_jobs: number;
+	unread: number;
+	last_seen_ms: number;
+	reasons: string[];
+}
+
+export interface WorkspacePriorityResult {
+	workspaces: WorkspacePriorityRow[];
+	/** Held visible whatever the score says: unread, tasks, or the open one. */
+	pinned: string[];
+	limit: number;
+	window_days: number;
+}
+
+/** Rank the user's workspaces by how much they actually use them. */
+export const getWorkspacePriority = (current?: string | null) => {
+	const params = new URLSearchParams();
+	if (current) params.set('current', current);
+	const qs = params.toString();
+	return fetchJSON<WorkspacePriorityResult>(
+		`/api/state/workspaces/priority${qs ? `?${qs}` : ''}`
+	);
+};
+
 // ── Single workspace CRUD ───────────────────────────────────────
 
 export const getWorkspaceState = (path: string) =>

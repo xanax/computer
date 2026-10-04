@@ -91,12 +91,26 @@ async def summary(
     request: Request,
     since_ms: int = Query(0, description="Include events at/after this epoch-ms. 0 = last 24h."),
     kind: Optional[str] = Query(None, description="Restrict to a single event kind"),
+    include_throttled: bool = Query(
+        False, description="Include background-tab samples (paused rAF), which are not latency."
+    ),
 ):
-    """Aggregated durations per (kind, label), slowest p95 first."""
+    """Aggregated durations per (kind, label), slowest p95 first.
+
+    Background-tab samples are excluded unless ``include_throttled`` is set:
+    the client marks them ``meta.throttled``, and a paused rAF records how long
+    the tab was in the background rather than how long a paint took.
+    """
     if since_ms <= 0:
         since_ms = now_ms() - DEFAULT_WINDOW_HOURS * 60 * 60 * 1000
-    groups = await UiEvent.summary(since_ms, kind=kind)
-    return {"since_ms": since_ms, "groups": groups}
+    groups = await UiEvent.summary(
+        since_ms, kind=kind, include_throttled=include_throttled
+    )
+    return {
+        "since_ms": since_ms,
+        "include_throttled": include_throttled,
+        "groups": groups,
+    }
 
 
 @router.get("/recent")
@@ -155,6 +169,29 @@ async def dwell(
             for workspace, seconds in ranked
         ],
     }
+
+
+@router.get("/fragmentation")
+async def fragmentation(
+    request: Request,
+    window_hours: int = Query(
+        24, ge=1, le=24 * 90, description="How far back to sum, by event time."
+    ),
+):
+    """How fragmented the session was, from measured dwell spans.
+
+    Complements `/dwell`: that answers where time went, this answers the shape
+    of the attention — how long the unbroken stretches were and how many times
+    they were broken. Every figure is a measured dwell span, never an estimate
+    from gaps.
+
+    Note the limit honestly: this measures interruption, not value. There is no
+    outcome signal joined to a span, so it cannot say whether the time was well
+    spent, only whether it was continuous.
+    """
+    since_ms = now_ms() - window_hours * 60 * 60 * 1000
+    stats = await UiEvent.fragmentation(since_ms)
+    return {"since_ms": since_ms, "window_hours": window_hours, **stats}
 
 
 @router.post("/prune")
