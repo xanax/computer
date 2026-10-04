@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import ast
 import collections
+import datetime
 import json
 import re
 import sqlite3
@@ -387,7 +388,11 @@ def audit_python() -> list[dict]:
 # ── Report ──────────────────────────────────────────────────────────────────
 
 
+COLLECTED: dict[str, list[dict]] = {}
+
+
 def emit(title: str, rows: list[dict], key: str, invert: bool = True) -> None:
+    COLLECTED[title] = rows
     print(f"\n{'=' * 78}\n{title}  ({len(rows)})\n{'=' * 78}")
     if not rows:
         print("  nothing reported")
@@ -405,12 +410,53 @@ def emit(title: str, rows: list[dict], key: str, invert: bool = True) -> None:
             print(f"          {r['where']}")
 
 
+def _diff_baseline(baseline: Path) -> int:
+    """Compare the run just made against a stored baseline.
+
+    Only growth is a failure. Dead code shrinking is the point of the audit -
+    that is someone deleting the automations router, not a regression - and
+    failing the check on it would train the reader to ignore a red result.
+    """
+    if not baseline.exists():
+        print(f"no baseline at {baseline}; write one with --json {baseline}")
+        return 0
+    base = json.loads(baseline.read_text(encoding="utf-8"))
+    base_sections = base.get("sections", {})
+
+    new_rows = 0
+    for title, rows in COLLECTED.items():
+        was = {r["id"] for r in base_sections.get(title, [])}
+        now = {r["id"] for r in rows}
+        added = sorted(now - was)
+        removed = sorted(was - now)
+        if not added and not removed:
+            continue
+        print(f"\n{title}")
+        for i in added:
+            print(f"  + {i}")
+        for i in removed:
+            print(f"  - {i}")
+        new_rows += len(added)
+
+    if new_rows:
+        print(f"\\n{new_rows} new row(s) since the baseline - new dead code?")
+        return 1
+    print("\\nno new dead code since the baseline")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--layer", action="append", choices=["routes", "tools", "frontend", "python"])
     ap.add_argument("--db", default=str(Path.home() / ".cptr" / "app.db"))
     ap.add_argument("--confidence", default="100", choices=["100", "90", "60"],
                     help="only report rows at or above this confidence")
+    ap.add_argument("--json", metavar="PATH",
+                    help="also write every layer's rows as JSON - the stable input a\n"
+                         "drift check diffs against a baseline")
+    ap.add_argument("--baseline", metavar="PATH",
+                    help="compare against a baseline JSON written earlier; exit 1 if\n"
+                         "the set of reported ids grew. Use --json to write it.")
     args = ap.parse_args()
     layers = args.layer or ["routes", "tools", "frontend", "python"]
 
@@ -424,6 +470,37 @@ def main() -> int:
         emit("FRONTEND files imported by exactly one file (near-dead)", [r for r in rows if r["refs"] == 1], "refs")
     if "python" in layers:
         emit("PYTHON symbols referenced nowhere in the repo", audit_python(), "refs")
+
+    if args.json:
+        out = Path(args.json)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(
+                {
+                    "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "layers": layers,
+                    "sections": {
+                        title: [
+                            {
+                                "id": r["id"],
+                                "refs": r.get("refs", 0),
+                                "where": r.get("where", ""),
+                            }
+                            for r in rows
+                        ]
+                        for title, rows in COLLECTED.items()
+                    },
+                },
+                indent=1,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"\nwrote {out}")
+
+    if args.baseline:
+        return _diff_baseline(Path(args.baseline))
 
     return 0
 

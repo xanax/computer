@@ -50,6 +50,30 @@ webhooks, `/api/images/*`) are reached by external callers, not the SPA.
 - **Do not delete `@tiptap/pm` by inspection** — peer dep of starter-kit.
   `katex` / `iconoir` / `highlight.js` are genuinely unimported.
 
+## Monitoring (built after the audit)
+`--json PATH` writes every layer's rows for machine reading; `--baseline PATH`
+diffs a run against a stored baseline and **exits 1 only when rows are added**.
+Baseline lives at `notes/dead-code-baseline.json`.
+
+**Growth alone is the failure.** Shrinking is the point — that's someone deleting
+the automations router, not a regression. Failing on removal would train the
+reader to ignore a red result.
+
+**A silent no-op is the whole design.** The weekly automation ("Dead code drift
+check", Fri 10:15) reports and notifies *only* on exit 1; a clean week costs the
+user nothing. Verified the check by dropping a known row from the baseline and
+confirming it came back as `+ resource_path` with exit 1.
+
+Traps hit while building it:
+- `import datetime` then `datetime.now()` fails — `now` is an *instance* method on
+  the class, not a module function. Use `datetime.datetime.now()`.
+- A "doctor the baseline to test it" snippet that does `rows.remove(r)` inside a
+  loop with a `break` looks like it worked and doesn't. The first drift test
+  passed vacuously; re-filtering with a list comprehension caught it. **A test
+  that cannot fail proves nothing** — always doctor the input and watch the
+  check go red before trusting a green.
+- `--baseline` needs the ids only; `refs`/`where` churn and would create noise.
+
 ## Reusable
 The audit is a **candidate generator, not an oracle**. Verify each hit with
 `grep -rn "\bname\b" --include=*.py .` scoped to `src/` — a bare repo grep
