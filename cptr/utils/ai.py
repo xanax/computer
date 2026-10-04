@@ -564,6 +564,38 @@ def _reasoning_items_to_content(items: list[dict]) -> str:
     return "\n".join(texts)
 
 
+def _sanitise_tool_calls(msgs: list[dict]) -> list[dict]:
+    """Drop tool_calls with an unusable name/id before they reach a provider.
+
+    An empty function name is a request-level 400 ("tool_calls[0].function.name
+    must be a non-empty string"), not a per-call error: it rejects the whole
+    conversation and leaves the chat unable to continue. This guards the
+    OpenAI-compatible paths, which pass tool_calls through untouched.
+    """
+    if not any(msg.get("tool_calls") for msg in msgs if isinstance(msg, dict)):
+        return msgs
+    for msg in msgs:
+        if not isinstance(msg, dict):
+            continue
+        tcs = msg.get("tool_calls")
+        if not tcs:
+            continue
+        valid = [
+            tc
+            for tc in tcs
+            if isinstance((fn := tc.get("function") or {}).get("name"), str)
+            and fn.get("name", "").strip()
+        ]
+        if len(valid) != len(tcs):
+            logger.warning(
+                "[openai] Dropping %d invalid tool_call(s) from history "
+                "(missing function name)",
+                len(tcs) - len(valid),
+            )
+        msg["tool_calls"] = valid
+    return msgs
+
+
 def _to_openai_messages(
     messages: list[dict], instructions: str, *, provider_type: str = "default"
 ) -> list[dict]:
@@ -620,7 +652,7 @@ def _to_openai_messages(
                 if rc:
                     out["reasoning_content"] = rc
             result.append(out)
-    return result
+    return _sanitise_tool_calls(result)
 
 
 async def stream_openai_completions(
@@ -910,6 +942,14 @@ def _to_responses_input(
                 )
             for tc in m["tool_calls"]:
                 call_id = tc.get("id", "")
+                name = (tc.get("function") or {}).get("name")
+                # An empty name is a request-level 400 on the provider side.
+                if not isinstance(name, str) or not name.strip():
+                    logger.warning(
+                        "[responses] Dropping function_call %s — empty name",
+                        call_id or "?",
+                    )
+                    continue
                 # Skip function_calls that have no matching tool result
                 if call_id and call_id not in tool_result_ids:
                     logger.warning(

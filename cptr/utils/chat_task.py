@@ -483,6 +483,55 @@ def _had_control_chars(value) -> bool:
     return value != _strip_control_chars(value)
 
 
+def _drop_invalid_tool_calls(items: list) -> list:
+    """Remove function_call items whose name is not a usable identifier.
+
+    _strip_control_chars() can empty a name outright: a provider emitted a
+    bare "\x00" as a tool name, which serialised as the 6-character escape
+    "\\u0000" and was accepted (cptr just failed that one call locally with
+    "unknown tool"). Once stripped it became "", and every provider rejects
+    an empty function name with HTTP 400 "tool_calls[0].function.name must
+    be a non-empty string" — which kills the whole request, not one call.
+
+    A call with no name cannot be dispatched, can never be matched to its
+    result, and poisons the history it is replayed into. Drop the call and
+    its orphaned output rather than send a structurally invalid tool_call.
+    """
+    if not isinstance(items, list):
+        return items
+    dropped: set[str] = set()
+    kept: list = []
+    for item in items:
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            name = item.get("name")
+            # Judge the name after stripping, so this holds even if it runs
+            # before the control-char pass: a name of only "\x00" is unusable.
+            if isinstance(name, str):
+                name = _CONTROL_CHARS_RE.sub("", name)
+            if not isinstance(name, str) or not name.strip():
+                call_id = item.get("call_id") or item.get("id")
+                if isinstance(call_id, str) and call_id:
+                    dropped.add(call_id)
+                logger.warning(
+                    "[history] Dropping function_call %s — name is empty after "
+                    "control-char stripping",
+                    call_id or "?",
+                )
+                continue
+        kept.append(item)
+    if not dropped:
+        return kept
+    return [
+        item
+        for item in kept
+        if not (
+            isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+            and item.get("call_id") in dropped
+        )
+    ]
+
+
 def _memory_recall_inputs(
     messages: list[dict],
     regeneration_prompt: str | None = None,
@@ -900,6 +949,9 @@ def _output_items_to_messages(
     # context on every later turn, which would re-inject the NUL forever.
     if _had_control_chars(output_items):
         output_items = _strip_control_chars(output_items)
+    # Stripping can empty a tool name; drop such calls rather than replay a
+    # tool_call the provider will reject for the entire request.
+    output_items = _drop_invalid_tool_calls(output_items)
     native_agent_call_ids = {
         item["call_id"]
         for item in output_items
