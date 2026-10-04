@@ -1376,5 +1376,7 @@
 	"dashboard.addNote": "新增筆記",
 	"dashboard.notesEmpty": "還沒有筆記。",
 	"dashboard.notesByAgent": "來自對話",
-	"dashboard.notesByYou": "你"
+	"dashboard.notesByYou": "你",
+	"sidebar.showMoreCount": "顯示更多（{{count}}）",
+	"sidebar.showFewer": "收合"
 }

@@ -1489,5 +1489,7 @@
 	"dashboard.addNote": "Add note",
 	"dashboard.notesEmpty": "No notes yet.",
 	"dashboard.notesByAgent": "from a chat",
-	"dashboard.notesByYou": "you"
+	"dashboard.notesByYou": "you",
+	"sidebar.showMoreCount": "Show more ({{count}})",
+	"sidebar.showFewer": "Show fewer"
 }

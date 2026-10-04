@@ -12,7 +12,6 @@
 	import {
 		chatEnabled,
 		chatStatuses,
-		isChatUnread,
 		setChatClosed,
 		updateChatStatuses
 	} from '$lib/stores/chat';
@@ -24,6 +23,16 @@
 		type ChatInfo
 	} from '$lib/apis/chat';
 	import { getWorkspaceDwell } from '$lib/apis/perf';
+	import {
+		collapseList,
+		DEFAULT_LIMIT,
+		loadWorkspacePriority,
+		pinnedWorkspaces,
+		resurface,
+		visibleWorkspaces,
+		workspacePriority,
+		workspacesExpandedList
+	} from '$lib/stores/workspacePriority.svelte';
 	import { t } from '$lib/i18n';
 	import { tooltip } from '$lib/tooltip';
 	import Sortable from 'sortablejs';
@@ -51,19 +60,32 @@
 	// it would be pure waste (see the cptr-frontend skill).
 	let dwellShare = $state<Map<string, number>>(new Map());
 
+	// Which workspaces are shown, and the tail of low-priority ones behind
+	// "Show more". The rank decides the starting set; the user's own clicks then
+	// own it (see stores/workspacePriority.svelte.ts).
+	let visiblePaths = $derived(
+		visibleWorkspaces(
+			$workspaceList,
+			$workspacePriority,
+			$pinnedWorkspaces,
+			$workspacesExpandedList,
+			DEFAULT_LIMIT
+		)
+	);
+	let visibleSet = $derived(new Set(visiblePaths));
+	let hiddenWorkspaces = $derived($workspaceList.length - visiblePaths.length);
+
 	// Workspace folders start expanded (their chat list visible); we only
 	// remember the ones the user explicitly collapsed.
 	let collapsedWorkspaces = $state<Set<string>>(new Set());
 	let wsChatsCache = $state<Map<string, ChatInfo[]>>(new Map());
-	let wsChatsHasMore = $state<Map<string, boolean>>(new Map());
 	let wsChatsLoading = $state<Set<string>>(new Set());
 	let currentPath = $derived($currentWorkspace?.path ?? null);
 	let currentChatId = $derived($activeTab?.type === 'chat' ? $activeTab.path : null);
-	const WS_CHATS_PAGE_SIZE = 5;
-	// Only chats that need attention are listed, so the first fetch has to reach
-	// past recently read ones: a chat waiting unread keeps its place further down
-	// the updated_at order than the handful of chats opened since.
-	const WS_CHATS_INITIAL_FETCH = 25;
+	// Every chat that has not been closed is listed, so there is nothing to page:
+	// the workspace is asked for its whole open list in one request. The API caps
+	// `limit` at 200, which is above every per-workspace chat count on this box.
+	const WS_CHATS_LIMIT = 200;
 
 	function isWorkspaceExpanded(path: string): boolean {
 		return !collapsedWorkspaces.has(path);
@@ -80,37 +102,32 @@
 	}
 
 	/**
-	 * The sidebar is an attention list: a chat is listed while the server is
-	 * working on it, or while it holds activity the user has not seen. Anything
-	 * else (including a closed chat with nothing new -- that is the same as read)
-	 * stays out of the way; idle chats are found in the pinned Chat tab's
-	 * history list instead of as permanent rows here.
+	 * A chat is listed for as long as it has not been closed. Reading it is not
+	 * what removes a row -- only the x closes it, and a chat with no messages at
+	 * all is closed automatically, so nothing else can ever empty a workspace's
+	 * list. Idle chats are still in the pinned Chat tab's history list.
 	 */
 	function needsAttention(chat: ChatInfo): boolean {
-		const status = $chatStatuses.get(chat.id);
-		if (!status) return !!chat.is_active;
-		return status.active || isChatUnread(status);
+		return !chat.closed_at;
 	}
 
 	/**
-	 * One unread row per chat is a queue for the user, so a chat waiting on them
-	 * comes before one the server is still working on; newest first within each.
-	 * Applied where the rows are drawn, because the paged fetch returns server
-	 * order (updated_at) and only some refreshes go through the append path.
+	 * Newest first. The server already returns `updated_at` desc, but only some
+	 * refreshes come through that path and a socket event can move a chat after
+	 * it has been drawn, so the order is re-applied where the rows are drawn.
+	 * Attention is no longer an ordering key: a read chat keeps its row and its
+	 * place, while a chat the server is working on carries a spinner instead of a
+	 * dot.
 	 */
-	function byAttention(a: ChatInfo, b: ChatInfo): number {
-		const waiting = (chat: ChatInfo) =>
-			Number(
-				!chat.is_active && (chat.last_read_at === null || chat.updated_at > chat.last_read_at)
-			);
-		return waiting(b) - waiting(a) || b.updated_at - a.updated_at;
+	function byRecent(a: ChatInfo, b: ChatInfo): number {
+		return b.updated_at - a.updated_at;
 	}
 
 	function visibleChatsFor(path: string): ChatInfo[] {
-		return (wsChatsCache.get(path) ?? []).filter(needsAttention).sort(byAttention);
+		return (wsChatsCache.get(path) ?? []).filter(needsAttention).sort(byRecent);
 	}
 
-	/** Close (conclude) a chat: it leaves the sidebar until it sees new activity. */
+	/** Close (conclude) a chat: its row leaves the sidebar for good. */
 	function handleCloseChat(chatId: string, wsPath: string) {
 		const now = Date.now();
 		setChatClosed(chatId, true);
@@ -129,28 +146,19 @@
 		}
 	}
 
-	async function fetchWorkspaceChats(path: string, append = false, limit = WS_CHATS_PAGE_SIZE) {
+	async function fetchWorkspaceChats(path: string, limit = WS_CHATS_LIMIT) {
 		if (wsChatsLoading.has(path)) return;
 		wsChatsLoading = new Set([...wsChatsLoading, path]);
 		try {
-			const existing = wsChatsCache.get(path) ?? [];
-			const data = await getChats(
-				path,
-				append ? WS_CHATS_PAGE_SIZE : limit,
-				append ? existing.length : 0,
-				'updated_at',
-				'desc',
-				false
-			);
-			wsChatsCache = new Map([
-				...wsChatsCache,
-				[path, append ? [...existing, ...(data.chats || [])] : data.chats || []]
-			]);
+			// include_closed=true and the local `closed_at` filter: the endpoint's
+			// own `include_closed=false` is an attention rule -- it lets a closed
+			// chat back into the list once new activity makes it unread again --
+			// and closing has to be the one and only way a row leaves.
+			const data = await getChats(path, limit, 0, 'updated_at', 'desc', true);
+			wsChatsCache = new Map([...wsChatsCache, [path, data.chats || []]]);
 			updateChatStatuses(data.chats || [], path);
-			wsChatsHasMore = new Map([...wsChatsHasMore, [path, data.has_more]]);
 		} catch {
 			wsChatsCache = new Map([...wsChatsCache, [path, []]]);
-			wsChatsHasMore = new Map([...wsChatsHasMore, [path, false]]);
 		} finally {
 			const next = new Set(wsChatsLoading);
 			next.delete(path);
@@ -159,8 +167,7 @@
 	}
 
 	function reloadWorkspaceChats(path: string) {
-		const loadedCount = wsChatsCache.get(path)?.length ?? WS_CHATS_PAGE_SIZE;
-		void fetchWorkspaceChats(path, false, Math.max(loadedCount, WS_CHATS_PAGE_SIZE));
+		void fetchWorkspaceChats(path, WS_CHATS_LIMIT);
 	}
 
 	function closeMobileSidebar() {
@@ -174,21 +181,15 @@
 		closeMobileSidebar();
 	}
 
+	// Collapsing gives the ranking back its say: everything it only remembered
+	// because it was being used is dropped, and the held/highest-scored set is
+	// what remains.
+	function toggleMoreWorkspaces() {
+		if ($workspacesExpandedList) collapseList();
+		else workspacesExpandedList.set(true);
+	}
+
 	function openChat(chatId: string, wsPath: string) {
-		// Clicking a closed chat (visible because it has new activity) reopens it.
-		const chat = (wsChatsCache.get(wsPath) ?? []).find((item) => item.id === chatId);
-		if (chat?.closed_at) {
-			setChatClosed(chatId, false);
-			wsChatsCache = new Map([
-				...wsChatsCache,
-				[
-					wsPath,
-					(wsChatsCache.get(wsPath) ?? []).map((item) =>
-						item.id === chatId ? { ...item, closed_at: null } : item
-					)
-				]
-			]);
-		}
 		goto(`/?workspace=${encodeURIComponent(wsPath)}&chatId=${encodeURIComponent(chatId)}`);
 		closeMobileSidebar();
 	}
@@ -321,17 +322,7 @@
 				});
 				return [
 					path,
-					shouldReorder
-						? nextChats.sort(
-								(a, b) =>
-									Number(
-										!b.is_active && (b.last_read_at === null || b.updated_at > b.last_read_at)
-									) -
-										Number(
-											!a.is_active && (a.last_read_at === null || a.updated_at > a.last_read_at)
-										) || b.updated_at - a.updated_at
-							)
-						: nextChats
+					shouldReorder ? nextChats.sort((a, b) => b.updated_at - a.updated_at) : nextChats
 				] as [string, ChatInfo[]];
 			})
 		);
@@ -339,7 +330,9 @@
 		// A chat created in another session is not yet in this sidebar's page.
 		// Refresh only that expanded workspace; all known rows update in place.
 		if (!known && data.workspace && isWorkspaceExpanded(data.workspace)) {
-			void fetchWorkspaceChats(data.workspace, false, WS_CHATS_INITIAL_FETCH);
+			void fetchWorkspaceChats(data.workspace);
+			// New activity is its own reason to be visible.
+			resurface(data.workspace);
 		} else if (
 			known &&
 			typeof data.last_read_at === 'number' &&
@@ -350,15 +343,22 @@
 		}
 	}
 
-	// Workspaces default to expanded, so load every visible workspace's chats
-	// as soon as the workspace list is known (and for any newly added one).
+	// Workspaces default to expanded, so load each *visible* workspace's chats as
+	// soon as it appears (and for any newly added one). Collapsed-tail workspaces
+	// are deliberately not fetched: that was 40 chat requests a page load.
 	$effect(() => {
 		if (!$chatEnabled) return;
-		for (const ws of $workspaceList) {
-			if (!isWorkspaceExpanded(ws.path)) continue;
-			if (wsChatsCache.has(ws.path) || wsChatsLoading.has(ws.path)) continue;
-			void fetchWorkspaceChats(ws.path, false, WS_CHATS_INITIAL_FETCH);
+		for (const path of visiblePaths) {
+			if (!isWorkspaceExpanded(path)) continue;
+			if (wsChatsCache.has(path) || wsChatsLoading.has(path)) continue;
+			void fetchWorkspaceChats(path);
 		}
+	});
+
+	// Opening a workspace is the clearest signal there is that it is in use, so
+	// its row returns to the visible list even if the ranking had it buried.
+	$effect(() => {
+		if (currentPath) resurface(currentPath);
 	});
 
 	async function loadDwellShare() {
@@ -382,6 +382,18 @@
 		);
 	}
 
+	function handleWorkspaceSort(evt: { oldIndex?: number; newIndex?: number }) {
+		if (evt.oldIndex == null || evt.newIndex == null || evt.oldIndex === evt.newIndex) return;
+		// Sortable sees only the rendered rows, so translate its indices back into
+		// the full list before reordering — otherwise a drag while the tail is
+		// collapsed moves the wrong workspace.
+		const from = visiblePaths[evt.oldIndex];
+		const to = visiblePaths[evt.newIndex];
+		const oldIndex = $workspaceList.findIndex((ws) => ws.path === from);
+		const newIndex = $workspaceList.findIndex((ws) => ws.path === to);
+		if (oldIndex >= 0 && newIndex >= 0) reorderWorkspaces(oldIndex, newIndex);
+	}
+
 	onMount(() => {
 		if (wsListEl && !isTouchDevice()) {
 			sortable = Sortable.create(wsListEl, {
@@ -389,11 +401,7 @@
 				ghostClass: 'opacity-30',
 				dragClass: 'cursor-grabbing',
 				direction: 'vertical',
-				onEnd: (evt) => {
-					if (evt.oldIndex != null && evt.newIndex != null && evt.oldIndex !== evt.newIndex) {
-						reorderWorkspaces(evt.oldIndex, evt.newIndex);
-					}
-				}
+				onEnd: handleWorkspaceSort
 			});
 		}
 
@@ -401,6 +409,7 @@
 
 		// Once, not on a timer — the share moves over days, not seconds.
 		loadDwellShare();
+		loadWorkspacePriority(currentPath);
 	});
 
 	onDestroy(() => {
@@ -441,11 +450,10 @@
 	class="flex-1 overflow-y-auto px-1.5"
 	class:invisible={!workspacesExpanded}
 >
-	{#each $workspaceList as ws (ws.path)}
+	{#each $workspaceList.filter((ws) => visibleSet.has(ws.path)) as ws (ws.path)}
 		{@const isExpanded = isWorkspaceExpanded(ws.path)}
 		{@const chats = visibleChatsFor(ws.path)}
 		{@const chatsLoaded = wsChatsCache.has(ws.path)}
-		{@const hasMoreChats = wsChatsHasMore.get(ws.path)}
 		{@const isLoading = wsChatsLoading.has(ws.path)}
 		<div class="ws-item">
 			<div
@@ -543,20 +551,34 @@
 								onclose={() => handleCloseChat(chat.id, ws.path)}
 							/>
 						{/each}
-						{#if hasMoreChats}
-							<button
-								class="ws-chat-show-more"
-								disabled={isLoading}
-								onclick={() => fetchWorkspaceChats(ws.path, true)}
-							>
-								{$t('sidebar.showMore')}
-							</button>
-						{/if}
 					{/if}
 				</div>
 			{/if}
 		</div>
 	{/each}
+
+	<!-- The low-priority tail. Collapsed, it states the count so the list is
+	     honest about what is behind it; expanded, it is the way back down. -->
+	{#if hiddenWorkspaces > 0 || $workspacesExpandedList}
+		<button
+			class="ws-show-more"
+			onclick={toggleMoreWorkspaces}
+			aria-expanded={$workspacesExpandedList}
+			aria-label={$t(
+				$workspacesExpandedList ? 'sidebar.showFewer' : 'sidebar.showMoreCount',
+				{ count: hiddenWorkspaces }
+			)}
+		>
+			<span class="ws-show-more-chevron">
+				<Icon name="chevron-right" size={11} />
+			</span>
+			<span class="truncate">
+				{$t($workspacesExpandedList ? 'sidebar.showFewer' : 'sidebar.showMoreCount', {
+					count: hiddenWorkspaces
+				})}
+			</span>
+		</button>
+	{/if}
 
 	{#if $workspaceList.length === 0}
 		<div class="flex flex-col items-center justify-center py-12">
@@ -736,10 +758,15 @@
 		padding-bottom: 0.25rem;
 	}
 
-	.ws-chat-show-more {
-		display: block;
+	/* Collapsed-workspace tail toggle -- now the only "show more" left in the
+	   sidebar. No background of its own: in bw/mono anything translucent here
+	   would come out as a grey wash, and the e-ink palettes forbid one. */
+	.ws-show-more {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
 		width: 100%;
-		padding: 0.125rem 0.5rem;
+		padding: 0.25rem 0.5rem;
 		border: none;
 		background: none;
 		cursor: pointer;
@@ -749,8 +776,12 @@
 		transition: color 0.1s;
 	}
 
-	.ws-chat-show-more:hover {
+	.ws-show-more:hover {
 		color: var(--app-fg);
+	}
+
+	.ws-show-more[aria-expanded='true'] .ws-show-more-chevron {
+		transform: rotate(-90deg);
 	}
 
 	.ws-chat-loading {

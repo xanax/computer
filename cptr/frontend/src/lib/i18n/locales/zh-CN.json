@@ -1376,5 +1376,7 @@
 	"dashboard.addNote": "添加笔记",
 	"dashboard.notesEmpty": "还没有笔记。",
 	"dashboard.notesByAgent": "来自聊天",
-	"dashboard.notesByYou": "你"
+	"dashboard.notesByYou": "你",
+	"sidebar.showMoreCount": "显示更多（{{count}}）",
+	"sidebar.showFewer": "收起"
 }

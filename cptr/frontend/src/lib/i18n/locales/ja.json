@@ -1376,5 +1376,7 @@
 	"dashboard.addNote": "ノートを追加",
 	"dashboard.notesEmpty": "ノートはまだありません。",
 	"dashboard.notesByAgent": "チャットから",
-	"dashboard.notesByYou": "あなた"
+	"dashboard.notesByYou": "あなた",
+	"sidebar.showMoreCount": "もっと見る（{{count}}）",
+	"sidebar.showFewer": "表示を減らす"
 }

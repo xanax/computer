@@ -1376,5 +1376,7 @@
 	"dashboard.addNote": "Добавить заметку",
 	"dashboard.notesEmpty": "Заметок пока нет.",
 	"dashboard.notesByAgent": "из чата",
-	"dashboard.notesByYou": "вы"
+	"dashboard.notesByYou": "вы",
+	"sidebar.showMoreCount": "Показать ещё ({{count}})",
+	"sidebar.showFewer": "Показать меньше"
 }

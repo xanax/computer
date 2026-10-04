@@ -1376,5 +1376,7 @@
 	"dashboard.addNote": "Ajouter une note",
 	"dashboard.notesEmpty": "Pas encore de notes.",
 	"dashboard.notesByAgent": "depuis une conversation",
-	"dashboard.notesByYou": "vous"
+	"dashboard.notesByYou": "vous",
+	"sidebar.showMoreCount": "Afficher plus ({{count}})",
+	"sidebar.showFewer": "Afficher moins"
 }

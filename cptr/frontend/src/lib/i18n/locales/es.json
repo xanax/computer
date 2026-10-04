@@ -1376,5 +1376,7 @@
 	"dashboard.addNote": "Añadir nota",
 	"dashboard.notesEmpty": "Aún no hay notas.",
 	"dashboard.notesByAgent": "desde un chat",
-	"dashboard.notesByYou": "tú"
+	"dashboard.notesByYou": "tú",
+	"sidebar.showMoreCount": "Mostrar más ({{count}})",
+	"sidebar.showFewer": "Mostrar menos"
 }

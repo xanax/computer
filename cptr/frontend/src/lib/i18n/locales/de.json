@@ -1376,5 +1376,7 @@
 	"dashboard.addNote": "Notiz hinzufügen",
 	"dashboard.notesEmpty": "Noch keine Notizen.",
 	"dashboard.notesByAgent": "aus einem Chat",
-	"dashboard.notesByYou": "von dir"
+	"dashboard.notesByYou": "von dir",
+	"sidebar.showMoreCount": "Mehr anzeigen ({{count}})",
+	"sidebar.showFewer": "Weniger anzeigen"
 }
