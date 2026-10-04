@@ -2,6 +2,8 @@
 
 Newest first. One line per task. Current truth is in `areas/`, not here.
 
+2026-10-04 — silent-turn-truncation — Diagnosed chat `457af6a2` "stopped for no reason": the provider's `finish_reason` is read only for `tool_calls` and then dropped, so a `length` stop is saved via the normal `done` path with no `meta.error`. No fix applied yet (B-023).
+
 2026-10-03 — workspace-state-ownership — Workspace **notes**: one list both sides write (`workspaces.data["notes"]`, no migration; human card on the dashboard, `add_workspace_note` for the agent) and both sides read (the `[WORKSPACE NOTES]` block in every chat's system prompt, newest first, 20 notes/500 chars). Same B-019 family as the prompt, so `put_workspace` and `loadWorkspace` guard `notes` too. 27 tests + a live prompt render against a copy of the real data dir; verified add/delete through the cdp harness on a throwaway instance (:4299).
 
 2026-10-03 — dot-cptr-in-git — `.cptr` is not un-ignored wholesale: it is 263M, 216M regenerable, and `task_logs/` holds live session JWTs (one `admin`, valid to 2026-10-14), so only `.cptr/skills/` and `.cptr/artifacts/` are re-included (6 files, 64K, no credential-shaped strings). Re-including under an ignored parent needs `.cptr/*` (not `.cptr`) plus `!.cptr/`; and the real bug was that `ensure_cptr_gitignored` only accepted a bare `.cptr`, so it **appended** one at the end of the file on the next prompt build — where, last-match-wins, it silently voided every negation. Both copies of the check (workspace.py, runtime.py) fixed, runtime's collapsed into a delegation, 13 new tests, 129 passed. Restart needed for the code fix to be live; the `.gitignore` block works around the old path meanwhile.
