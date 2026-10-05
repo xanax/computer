@@ -3799,6 +3799,13 @@ async def open_browser(
     )
     result["success"] = True
     result["opened_in"] = "cptr Browser tab"
+    if workspace:
+        result["workspace"] = workspace
+        result["note"] = (
+            "The tab was added to that workspace's own tab strip. It did not move "
+            "the user there — a notification names the workspace instead, so if "
+            "you want the page in front of them now, tell them to switch."
+        )
     return json.dumps(result, ensure_ascii=False)
 
 

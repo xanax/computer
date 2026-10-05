@@ -885,6 +885,8 @@
 	"chat.notification.inputBody": "계속하려면 프롬프트에 답하세요.",
 	"chat.notification.finishedBody": "작업이 완료되었습니다.",
 	"chat.notification.thisTool": "이 도구",
+	"chat.notification.browserTitle": "{{workspace}}에서 페이지를 열었습니다",
+	"chat.notification.browserBody": "해당 워크스페이스의 탭에 추가되었으며, 화면은 이동하지 않았습니다.",
 	"chat.greeting": "무엇을 도와드릴까요?",
 	"chat.close": "채팅 닫기",
 	"chat.closeHint": "이 채팅을 닫고 시작 페이지로 돌아갑니다",

@@ -13,6 +13,11 @@ tab loads the page *through* cptr's proxy, so a process started on the server
 (a port on `localhost`) reaches the user's screen even when their own machine
 cannot route to the box.
 
+**The tab goes in the chat's own workspace, and the user is not moved.** See
+`NOTES-open-browser-workspace-routing.md` — the server writes the tab into the
+owning workspace's persisted layout, and a background open is announced by
+notification rather than by switching.
+
 ## Shape of the call
 
 * `url` accepts the old shorthands: `8765`, `localhost:8765/x`, `example.com`.

@@ -885,6 +885,8 @@
 	"chat.notification.inputBody": "Responde la solicitud para continuar.",
 	"chat.notification.finishedBody": "Tarea finalizada.",
 	"chat.notification.thisTool": "esta herramienta",
+	"chat.notification.browserTitle": "Página abierta en {{workspace}}",
+	"chat.notification.browserBody": "Se añadió a las pestañas de ese espacio de trabajo; no se te trasladó allí.",
 	"chat.greeting": "¿En qué puedo ayudarte?",
 	"chat.close": "Cerrar chat",
 	"chat.closeHint": "Cerrar este chat y volver a la página de inicio",

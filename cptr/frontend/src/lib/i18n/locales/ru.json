@@ -885,6 +885,8 @@
 	"chat.notification.inputBody": "Ответьте на запрос, чтобы продолжить.",
 	"chat.notification.finishedBody": "Задача завершена.",
 	"chat.notification.thisTool": "этот инструмент",
+	"chat.notification.browserTitle": "Страница открыта в {{workspace}}",
+	"chat.notification.browserBody": "Она добавлена во вкладки этого рабочего пространства — вас туда не переключили.",
 	"chat.greeting": "Чем могу помочь?",
 	"chat.close": "Закрыть чат",
 	"chat.closeHint": "Закрыть этот чат и вернуться на главную",

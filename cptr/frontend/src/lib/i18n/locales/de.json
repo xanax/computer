@@ -885,6 +885,8 @@
 	"chat.notification.inputBody": "Beantworte die Eingabeaufforderung, um fortzufahren.",
 	"chat.notification.finishedBody": "Aufgabe abgeschlossen.",
 	"chat.notification.thisTool": "dieses Tool",
+	"chat.notification.browserTitle": "Seite in {{workspace}} geöffnet",
+	"chat.notification.browserBody": "Sie wurde den Tabs dieses Arbeitsbereichs hinzugefügt – Sie wurden nicht dorthin gewechselt.",
 	"chat.greeting": "Wie kann ich Ihnen helfen?",
 	"chat.close": "Chat schließen",
 	"chat.closeHint": "Diesen Chat schließen und zur Startseite zurückkehren",

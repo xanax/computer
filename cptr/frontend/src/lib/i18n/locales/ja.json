@@ -885,6 +885,8 @@
 	"chat.notification.inputBody": "続行するにはプロンプトに回答してください。",
 	"chat.notification.finishedBody": "タスクが完了しました。",
 	"chat.notification.thisTool": "このツール",
+	"chat.notification.browserTitle": "{{workspace}} でページを開きました",
+	"chat.notification.browserBody": "そのワークスペースのタブに追加されました。表示は移動していません。",
 	"chat.greeting": "何かお手伝いできますか？",
 	"chat.close": "チャットを閉じる",
 	"chat.closeHint": "このチャットを閉じてホームに戻る",

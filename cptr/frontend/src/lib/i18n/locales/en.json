@@ -1055,6 +1055,8 @@
 	"chat.notification.inputBody": "Answer the prompt to continue.",
 	"chat.notification.finishedBody": "Task finished.",
 	"chat.notification.thisTool": "this tool",
+	"chat.notification.browserTitle": "Page opened in {{workspace}}",
+	"chat.notification.browserBody": "It was added to that workspace's tabs — you were not moved there.",
 	"chat.greeting": "What can I help you with?",
 	"chat.close": "Close chat",
 	"chat.closeHint": "Close this chat and return to the landing page",

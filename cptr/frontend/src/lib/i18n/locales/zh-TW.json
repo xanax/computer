@@ -885,6 +885,8 @@
 	"chat.notification.inputBody": "回答提示以繼續。",
 	"chat.notification.finishedBody": "任務已完成。",
 	"chat.notification.thisTool": "此工具",
+	"chat.notification.browserTitle": "已在 {{workspace}} 中開啟頁面",
+	"chat.notification.browserBody": "該頁面已加入該工作區的分頁中，您並未被切換過去。",
 	"chat.greeting": "有什麼可以幫您的？",
 	"chat.close": "關閉聊天",
 	"chat.closeHint": "關閉此聊天並返回首頁",

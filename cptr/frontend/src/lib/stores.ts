@@ -1526,6 +1526,51 @@ export async function openBrowserTab(
 }
 
 /**
+ * Attach a Browser tab that the server already created for this workspace.
+ *
+ * `open_browser` writes the tab into the owning workspace's persisted layout
+ * (see `emit_open_browser`) so it can land there whether or not the user is
+ * looking at it. When they *are*, the tab strip on screen is live client state
+ * built from that same layout but is not itself re-read, so the server's copy
+ * would only be rediscovered on the next load -- and opening a fresh tab here
+ * would stack a second one on the same page. So: find the tab the server made
+ * and give it its session.
+ */
+export function adoptBrowserTab(
+	sessionId: string,
+	tabId: string,
+	url: string,
+	label?: string
+): boolean {
+	const ws = get(currentWorkspace);
+	if (!ws) return false;
+	for (const group of ws.groups) {
+		const tab = group.tabs.find((t) => t.id === tabId);
+		if (!tab) continue;
+		// Reuse the tab the server named rather than trusting the label: the
+		// user's own rename must not be undone by a chat asking for a page.
+		updateGroupTabs(group.id, () => ({
+			tabs: group.tabs.map((t) =>
+				t.id === tabId ? { ...t, type: 'browser' as const, path: url, browserSessionId: sessionId } : t
+			),
+			activeTabId: tabId
+		}));
+		return true;
+	}
+	// The layout the server wrote is not the one on screen (a group was split,
+	// or the workspace reloaded since). Fall back to the page itself.
+	if (label) {
+		for (const group of ws.groups) {
+			if (group.tabs.some((t) => t.type === 'browser' && t.path === url)) {
+				void openBrowserTab(group.id, url, label);
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/**
  * Show a page served on this machine in cptr's Browser tab (see
  * `$lib/utils/localPage`). Used by chat markdown links to loopback URLs, so
  * `localhost:5173` works even when the user's own browser cannot route to the
@@ -1535,26 +1580,30 @@ export async function openBrowserTab(
  * plain browser window: the click came from a real user gesture, so it will not
  * be blocked, and doing nothing would be worse than leaving cptr.
  *
- * `targetWorkspace` is the workspace the page belongs to. It is a switch, not a
- * hint: pass it when the caller knows the owning workspace (the `open_browser`
- * socket event), and pass nothing for a link the user clicked, which should
- * open where the user already is.
+ * `targetWorkspace` is the workspace the page belongs to, and it is **not** a
+ * switch. It used to be: a chat in workspace A calling `open_browser` while the
+ * user read workspace B used to yank them across to A, losing their place in
+ * whatever they were doing, to show them a page they had not asked for. Now the
+ * owning workspace's layout is written server-side (see `emit_open_browser`), so
+ * the page is already in that workspace's tab strip. Passing the path here only
+ * means "this is not the one the user is looking at" — and when it is not, the
+ * right answer is to leave their screen alone.
  */
 export async function openLocalPage(
 	url: string,
 	label?: string,
 	targetWorkspace?: string
 ): Promise<void> {
-	// A chat in workspace A calling open_browser while the user is looking at
-	// workspace B used to drop the tab into B: the event carried `workspace`
-	// but the client dropped it and opened wherever it happened to be. Switch
-	// to the owning workspace first, so the page lands beside the chat that
-	// asked for it.
-	//
-	// An unusable target is not a reason to swallow the page: fall through and
-	// open it here rather than leaving the user with nothing.
-	if (targetWorkspace && isSupportedWorkspacePath(targetWorkspace)) {
-		await switchToWorkspace(targetWorkspace);
+	const current = get(currentWorkspace);
+	// The chat that asked for this page lives elsewhere. It is already open in
+	// that workspace's own tab strip; switching to put it in front of them would
+	// be taking the wheel. Return so the caller can say where it went.
+	if (
+		targetWorkspace &&
+		isSupportedWorkspacePath(targetWorkspace) &&
+		current?.path !== targetWorkspace
+	) {
+		return;
 	}
 
 	const ws = get(currentWorkspace);

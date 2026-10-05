@@ -186,19 +186,101 @@ notificationSound.subscribe((v) => {
  * there is no tab strip to add to, so fall back to a plain browser tab and let
  * the browser decide whether to allow it.
  */
-async function openBrowserFromChat(url: string, label?: string, workspace?: string) {
+async function openBrowserFromChat(
+	url: string,
+	label?: string,
+	workspace?: string,
+	sessionId?: string,
+	tabId?: string
+) {
 	const stores = await import('$lib/stores');
-	// `workspace` is the chat's own workspace. When it differs from the one on
-	// screen, openLocalPage switches first so the page lands next to the chat
-	// that asked for it rather than in whatever the user was last looking at.
-	// An empty/absent value still means "open where I am" -- a home chat has
-	// no workspace, and switching on that would throw you off the home page.
+	// `workspace` is the chat's own workspace, and it is where the tab belongs.
+	// An empty/absent value means "open where I am" -- a home chat has no
+	// workspace and no tab strip of its own.
 	const target = workspace || undefined;
-	if (!get(stores.currentWorkspace) && !target) {
+
+	// A home chat, or no workspace anywhere on screen: nothing to add a tab to,
+	// so hand the page to the user's own browser. This path is only reached from
+	// a click or a live window, so it will not be popup-blocked.
+	if (!target && !get(stores.currentWorkspace)) {
 		window.open(url, '_blank', 'noopener');
 		return;
 	}
-	await stores.openLocalPage(url, label, target);
+
+	// The server already put the tab in the owning workspace's layout. If that is
+	// the workspace on screen, the tab strip is live state the client owns, so
+	// the server's copy is not loaded here -- adopt the session rather than
+	// opening a second tab for the same page.
+	if (target && get(stores.currentWorkspace)?.path === target) {
+		if (sessionId && tabId) {
+			stores.adoptBrowserTab(sessionId, tabId, url, label);
+			return;
+		}
+	}
+
+	// Otherwise the page is in another workspace's tab strip, which is where it
+	// should stay: it must not pull the user out of the one they are in. Tell
+	// them where it went instead. `openLocalPage` with the target returns without
+	// opening anything precisely for this case.
+	if (target && get(stores.currentWorkspace)?.path !== target) {
+		notifyBackgroundOpen(target, url, label);
+		return;
+	}
+
+	await stores.openLocalPage(url, label);
+}
+
+/**
+ * Tell the user a chat opened a page in a workspace they are not looking at.
+ *
+ * The page is already in that workspace's tab strip; this is the only thing the
+ * user gets, so it has to answer "what opened, and where do I go". Clicking it
+ * switches -- deliberately, on a gesture, which is the whole difference from
+ * the tool deciding to switch underneath them.
+ */
+function notifyBackgroundOpen(workspace: string, url: string, label?: string) {
+	const name = getPathDisplayName(workspace);
+	const title = i18next.t('chat.notification.browserTitle', { workspace: name });
+	const body = `${label || url} · ${i18next.t('chat.notification.browserBody', { workspace: name })}`;
+
+	const goThere = async () => {
+		const { goto } = await import('$app/navigation');
+		await goto(`/?workspace=${encodeURIComponent(workspace)}`);
+	};
+
+	import('$lib/components/NotificationToast.svelte').then((mod) => {
+		const toastId = toast.custom(mod.default, {
+			componentProps: {
+				title,
+				content: body,
+				onClick: async () => {
+					await goThere();
+					toast.dismiss(toastId);
+				},
+				onclose: () => {
+					toast.dismiss(toastId);
+				}
+			},
+			duration: 10000,
+			unstyled: true
+		});
+	});
+
+	// The user may have this window in the background entirely -- which is the
+	// likeliest case, since the chat that asked for it is in another workspace.
+	if (document.hidden && get(notificationsEnabled)) {
+		try {
+			const notification = new Notification(`${title} • Computer`, {
+				body: body.slice(0, 200),
+				icon: '/favicon.png'
+			});
+			notification.onclick = () => {
+				window.focus();
+				void goThere();
+				notification.close();
+			};
+		} catch {}
+	}
 }
 
 export function bindGlobalChatListener() {
@@ -218,13 +300,21 @@ export function bindGlobalChatListener() {
 			label?: string;
 			workspace?: string;
 			workspace_name?: string;
+			browser_session_id?: string;
+			tab_id?: string;
 			active?: boolean;
 			updated_at?: number;
 			last_read_at?: number;
 			closed_at?: number | null;
 		}) => {
 			if (data.type === 'open_browser' && typeof data.url === 'string') {
-				void openBrowserFromChat(data.url, data.label, data.workspace);
+				void openBrowserFromChat(
+					data.url,
+					data.label,
+					data.workspace,
+					data.browser_session_id,
+					data.tab_id
+				);
 			}
 			if (data.type === 'chat:active' && typeof data.active === 'boolean') {
 				setChatActive(data.chat_id, data.active, data.workspace);

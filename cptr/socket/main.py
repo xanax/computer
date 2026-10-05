@@ -7,6 +7,10 @@ Usage in app.py:
 
 from __future__ import annotations
 
+import logging
+import uuid
+from pathlib import Path
+
 import socketio
 
 from cptr.models import Chat
@@ -162,11 +166,27 @@ async def emit_open_browser(
     """Ask the user's connected tabs to open a Browser tab at ``url``.
 
     Used by the ``open_browser`` tool so a chat can show the user a page it just
-    built or started. ``workspace`` is the chat's own workspace: the client
-    switches to it before opening the tab (see ``openBrowserFromChat`` in
-    lib/stores/chat.ts), so the page lands beside the chat that asked for it
-    instead of in whichever workspace the user happened to be looking at.
+    built or started.
+
+    ``workspace`` is the chat's own workspace, and that is where the tab goes —
+    but opening it is **not** a workspace switch. Switching yanked the user out
+    of whatever they were doing to look at a page they had not asked for, and it
+    lost their place in the chat they were reading. So the tab is added to that
+    workspace's own layout here, on the server, where the workspace's row is the
+    thing that owns a tab strip. The client then only has to notice that the tab
+    is already there; if the user happens to be *in* that workspace they see it
+    immediately, and if they are not, nothing on their screen moves and
+    ``notify_background_open`` tells them where it went.
+
+    A home chat has no workspace, and there is no tab strip to add to, so the
+    event carries no session and the client falls back to a plain browser window.
     """
+    session_id = tab_id = ""
+    if workspace:
+        session_id, tab_id = await _add_browser_tab_to_workspace(
+            user_id, workspace, url, label
+        )
+
     await emit_to_user(
         user_id,
         {
@@ -174,9 +194,102 @@ async def emit_open_browser(
             "url": url,
             "chat_id": chat_id,
             "workspace": workspace,
+            "workspace_name": Path(workspace).name if workspace else "",
             "label": label,
+            "browser_session_id": session_id,
+            "tab_id": tab_id,
         },
     )
+    if workspace and session_id:
+        await emit_to_user(
+            user_id,
+            {
+                "type": "workspace_browser_opened",
+                "workspace": workspace,
+                "workspace_name": Path(workspace).name if workspace else "",
+                "url": url,
+                "label": label,
+            },
+        )
+
+
+async def _add_browser_tab_to_workspace(
+    user_id: str, workspace: str, url: str, label: str
+) -> tuple[str, str]:
+    """Add a Browser tab to ``workspace``'s persisted layout.
+
+    Returns ``(session_id, tab_id)``, either of which is "" when the tab already
+    existed or the write failed.
+
+    Written here rather than in the client because a tab belongs to a workspace's
+    stored ``groups``, and a workspace the user is not looking at has no live
+    client-side store to add it to. Best effort throughout: this runs inside a
+    tool call that has already probed the URL and decided to show it, so failing
+    to pre-create the tab must not turn a working page into an error. Return ""
+    and the client falls back to opening it where it can.
+    """
+    from cptr.models import Workspace
+    from cptr.utils.browser.proxy import manager
+
+    session_id = ""
+    try:
+        session = await manager.create(user_id)
+        await manager.update(session.session_id, user_id, url=url, title=label or None)
+        session_id = session.session_id
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Could not pre-create a Browser session for %s", workspace, exc_info=True
+        )
+        return "", ""
+
+    try:
+        row = await Workspace.get_by_user_path(user_id, workspace)
+        data = dict(row.data or {}) if row else {}
+        groups = data.get("groups")
+        if not isinstance(groups, list) or not groups:
+            groups = [{"id": "default", "tabs": [], "activeTabId": "files"}]
+
+        tab_id = uuid.uuid4().hex[:12]
+        tab = {
+            "id": tab_id,
+            "type": "browser",
+            "label": label or url,
+            "path": url,
+            "browserSessionId": session_id,
+        }
+        # The first group is the one the pinned Dash/Files/Chat tabs live in, so
+        # it is the tab strip the user reads. Fall back to whatever the
+        # workspace has rather than dropping the tab on the floor.
+        target = next(
+            (g for g in groups if isinstance(g, dict) and any(
+                t.get("type") in {"dash", "files"} for t in g.get("tabs", []) if isinstance(t, dict)
+            )),
+            groups[0],
+        )
+        tabs = target.setdefault("tabs", [])
+        # A page already open in this workspace is the same tab; do not stack.
+        if any(
+            isinstance(t, dict) and t.get("type") == "browser" and t.get("path") == url
+            for t in tabs
+        ):
+            await manager.close(session_id, user_id)
+            return "", ""
+        tabs.append(tab)
+        target["activeTabId"] = tab_id
+        data["groups"] = groups
+        await Workspace.upsert(
+            user_id,
+            workspace,
+            row.name if row and row.name else Path(workspace).name or workspace,
+            data,
+        )
+        return session_id, tab_id
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Could not add a Browser tab to workspace %s", workspace, exc_info=True
+        )
+        await manager.close(session_id, user_id)
+        return "", ""
 
 
 async def broadcast_chat_read_state(user_id: str, chat_id: str, last_read_at: int) -> None:
