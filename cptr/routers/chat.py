@@ -19,6 +19,7 @@ from cptr.utils.config import check_access, now_ms, _get_jwt_secret
 from cptr.utils.crypto import decrypt_key
 from cptr.utils.db import get_db
 from cptr.utils.chat_export import chat_directory
+from cptr.utils.effort import resolve_effort_levels
 from cptr.utils.runtime import Runtime, FileError
 
 log = logging.getLogger(__name__)
@@ -318,6 +319,9 @@ async def get_models(request: Request):
     """
     _get_user(request)
     connections = [c for c in await _get_connections() if c.get("enabled", True)]
+    # Effort capability is per (connection, model), so the connection has to be
+    # reachable by id once the models are flattened.
+    _connection_by_id = {conn["id"]: conn for conn in connections}
     models = []
 
     for conn in connections:
@@ -347,6 +351,17 @@ async def get_models(request: Request):
     inactive = {k for k, v in chat_models_config.items() if v.get("is_active") is False}
     if inactive:
         models = [m for m in models if m["id"] not in inactive]
+
+    # Attach reasoning-effort capability so the composer can offer the dropdown
+    # only for models that actually take one. See cptr/utils/effort.py.
+    for model in models:
+        levels = resolve_effort_levels(
+            model["id"],
+            _connection_by_id.get(model.get("connection_id")),
+            chat_models_config,
+        )
+        # More than the no-op level means the model takes a real value.
+        model["effort_levels"] = levels if len(levels) > 1 else []
 
     return {"models": models, "default": default_model}
 
@@ -1025,6 +1040,19 @@ async def update_chat_settings(request: Request, chat_id: str, body: UpdateChatS
     meta["last_model"] = body.model_id
     meta["params"] = body.params
     await Chat.update_meta(chat_id, meta, now_ms())
+
+    # Switching auto-continue on (or editing it) re-arms its run budget;
+    # otherwise a chat that hit the cap could never auto-continue again
+    # without a trip through the settings round-trip.
+    previous_auto = ((chat.meta or {}).get("params") or {}).get("auto_continue")
+    new_auto = (body.params or {}).get("auto_continue")
+    if isinstance(new_auto, dict) and new_auto != previous_auto:
+        try:
+            from cptr.utils.auto_continue import reset_runs
+
+            await reset_runs(chat_id, config_on=bool(new_auto.get("enabled")))
+        except Exception:
+            log.debug("[chat-settings] auto-continue reset failed", exc_info=True)
     params = body.params if isinstance(body.params, dict) else {}
     approval_mode = params.get("tool_approval_mode")
     if approval_mode not in {"ask", "auto", "full"}:
@@ -1318,6 +1346,16 @@ async def send_message(request: Request, body: SendMessageRequest):
             subject_type="chat",
             source="chat",
         )
+
+        # A human prompt starts a fresh chain, so give auto-continue its full
+        # run budget back. (Its own follow-ups arrive via the pending-input
+        # queue, not here, so this never fires for them.)
+        try:
+            from cptr.utils.auto_continue import reset_runs
+
+            await reset_runs(chat.id, config_on=True)
+        except Exception:
+            log.debug("[chat] auto-continue reset failed", exc_info=True)
 
     if queued_msg:
         await process_pending_chat_inputs(request, chat.id, user_id, workspace or "")

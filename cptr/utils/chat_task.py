@@ -51,6 +51,7 @@ from cptr.utils.ai import (
 )
 from cptr.utils.config import _get_jwt_secret, now_ms
 from cptr.utils.crypto import decrypt_key
+from cptr.utils.effort import effort_request_params
 from cptr.utils.tools import (
     ALL_TOOLS,
     clear_active_tasks,
@@ -2331,6 +2332,19 @@ async def run_chat_task(
         compact_token_threshold = compact_token_threshold or resolve_compact_token_threshold()
         request_params = {**global_rp, **model_rp, **chat_request_params} or None
 
+        # The composer's effort dropdown is a named level over a per-provider
+        # wire shape, resolved here so the dropdown itself stays provider-blind.
+        # It is applied last: it is the most immediate control the user has, so
+        # it outranks the admin defaults and a hand-typed request_params key.
+        effort_params = effort_request_params(
+            chat_params.get("effort") or "",
+            configured_model,
+            connection,
+            chat_models_config,
+        )
+        if effort_params:
+            request_params = {**(request_params or {}), **effort_params}
+
         for _iteration in range(CHAT_MAX_ITERATIONS):
             # ── Context compaction: summarize older messages if too large ──
             if should_compact(
@@ -2981,6 +2995,24 @@ async def run_chat_task(
                     message=preview,
                 )
                 task_completed_success = True
+                # Auto-continue: the only exit that counts. Cancels, errors and
+                # max-iterations all leave before here, and so do the
+                # tool-approval and ask_user returns above, which is exactly the
+                # set of turns that must not queue a follow-up.
+                try:
+                    from cptr.utils.auto_continue import maybe_queue_auto_continue
+
+                    queued = await maybe_queue_auto_continue(
+                        chat_id=chat_id,
+                        assistant_message_id=message_id,
+                        model=msg.model if msg else None,
+                        content=content,
+                        output_items=output_items,
+                    )
+                    if queued:
+                        logger.info("[task %s] auto-continue: %s", message_id[:8], queued)
+                except Exception:
+                    logger.debug("[task %s] auto-continue failed", message_id[:8], exc_info=True)
                 return
 
         # Max iterations reached
