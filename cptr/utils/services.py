@@ -106,8 +106,62 @@ def is_server_command(command: str) -> bool:
     return bool(_SERVER_RE.search(command or ""))
 
 
+# Probes and readers. Naming a service's port in one of these is a *question*
+# about a server, never an attempt to start one, so they must not be refused as
+# duplicate starts (B-028).
+_READ_ONLY_PROGRAMS = frozenset(
+    {
+        "awk", "cat", "curl", "dig", "echo", "egrep", "fgrep", "grep", "head",
+        "host", "ifconfig", "ip", "jq", "less", "lsof", "ls", "more", "ncat",
+        "netstat", "nl", "nslookup", "pgrep", "pidof", "ping", "printf", "ps",
+        "sed", "sort", "ss", "tail", "telnet", "top", "tr", "uniq", "wc", "wget",
+    }
+)
+_PIPELINE_BREAKS = {"|", "||", "&&", ";", ";;", "&", ">(", "<(", ">", "<"}
+
+
+def _runs_read_only(command: str) -> bool:
+    """True when ``command``'s first stage is a probe or a reader, not a server.
+
+    Only the *first* stage counts, so ``vite --port 8181 | grep ready`` is still
+    seen as a server start while ``ss -ltn | grep 8181`` is seen as a probe.
+    """
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError:
+        argv = (command or "").split()
+    for tok in argv:
+        if tok in _PIPELINE_BREAKS:
+            break
+        if not tok or tok.startswith("-"):
+            continue
+        if os.path.basename(tok) in _READ_ONLY_PROGRAMS:
+            return True
+    return False
+
+
+def _token_uses_port(tok: str, text: str) -> bool:
+    """True when ``tok`` binds the port, without matching a longer number.
+
+    Covers the shapes a real bind takes -- ``8181``, ``--port=8181``,
+    ``PORT=8181``, ``127.0.0.1:8181``, ``http://host:8181/path`` -- including
+    ones carrying a trailing path or space, which used to slip past.
+    """
+    return bool(re.search(rf"(?:^|[=:\s]){re.escape(text)}(?!\d)", tok))
+
+
 def command_uses_port(command: str, port: int | None) -> bool:
+    """Does ``command`` try to *start* something bound to ``port``?
+
+    A plain token scan conflated three different things: a probe that mentions
+    the port, a bind that carries a path or trailing space, and a real
+    duplicate. The first blocked all debugging of a live service, the second
+    slipped through, so the heuristic missed exactly what it exists to catch.
+    The old name is kept because callers and tests refer to it.
+    """
     if not port:
+        return False
+    if not is_server_command(command) and _runs_read_only(command):
         return False
     text = str(port)
     try:
@@ -115,14 +169,12 @@ def command_uses_port(command: str, port: int | None) -> bool:
     except ValueError:
         argv = (command or "").split()
     for index, tok in enumerate(argv):
-        if tok == text:
+        if _token_uses_port(tok, text):
             return True
-        if tok in {f"--port={text}", f"-p={text}", f"--port={text}"}:
-            return True
-        if tok in {"--port", "-p"} and index + 1 < len(argv) and argv[index + 1] == text:
-            return True
-        if ":" in tok and tok.rsplit(":", 1)[-1] == text:
-            return True
+        if tok in {"--port", "-p", "--bind"} and index + 1 < len(argv):
+            nxt = argv[index + 1]
+            if _token_uses_port(nxt, text) or nxt.rsplit("/", 1)[-1] == text:
+                return True
     return False
 
 
