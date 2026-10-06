@@ -1,8 +1,8 @@
 ---
 area: silent-turn-truncation
 title: Why a chat turn stops with no error
-aliases: [finish_reason, truncated turn, stops for no reason, B-023]
-updated: 2026-10-04
+aliases: [finish_reason, truncated turn, stops for no reason, B-023, B-027, response.incomplete, stop_reason]
+updated: 2026-10-06
 ---
 
 # Silent turn truncation
@@ -14,6 +14,11 @@ updated: 2026-10-04
 - `cptr/env.py:90` — `CHAT_MAX_ITERATIONS`, default 2048.
 
 ## Facts
+
+> The facts below describe the **pre-fix** state (verified 2026-10-04) and are
+> kept because they are the evidence for *why* the fix looks the way it does.
+> Any line numbers in them are stale — see **Built** for what the code does now.
+
 - [ran 2026-10-04 chat `457af6a2` task `d519b071`] A turn that "stops for no reason" ends through the normal `done` path at `chat_task.py:2587` with `_save_message("done", …)`, which writes `done=1` and **no** `meta`. That is why there is no error to see: the truncation is recorded identically to a genuine completion.
 - [verified 2026-10-04 `cptr/utils/ai.py:798`] The completions adapter reads `finish_reason` only to detect `"tool_calls"`. Every other value — `length`, `content_filter`, `stop` — is discarded, and the adapter then unconditionally yields `{"type": "done"}` (`ai.py:846`).
 - [verified 2026-10-04 `cptr/utils/chat_task.py:2567`] The `done` handler never reads `event["finish_reason"]`, so a `length` stop is indistinguishable from a real end-of-turn.
@@ -26,7 +31,21 @@ updated: 2026-10-04
 - [ran 2026-10-04 chat `457af6a2`] `usage.output_tokens` was 442 with `input_tokens` 67482 — a single short final turn. The prompt had just been compacted, so the model's next call had ample context; size was not the constraint.
 
 ## Built
-- Nothing yet. This is a diagnosis only; no fix is applied.
+- **Fixed 2026-10-06.** All three adapters now emit `{"type": "done",
+  "finish_reason": ...}` and `chat_task.py` threads it through: it logs a
+  warning when truncated and `auto_continue.is_truncated` refuses to iterate on
+  one (B-027). `gateway._collect` returns the real reason instead of a hardcoded
+  `"stop"`. Tests `tests/test_finish_reason_truncation.py` (20), both halves
+  mutation-checked (dropping the reason from a `done` yield, and removing the
+  consumer guard, each fail loudly).
+- Where the reason hides differs per transport and is easy to get wrong: the
+  Anthropic one is on `message_delta` (`delta.stop_reason`) and **not** on
+  `message_stop`; the Responses one needs a `response.incomplete` branch that
+  simply did not exist; completions must record the chunk's value
+  *unconditionally*, since it was previously read only for `tool_calls`.
+- `None` deliberately means "unknown, treat as clean": the agent-target path
+  reports no reason, so guessing truncation there would disable auto-continue on
+  every turn of that transport.
 
 ## Decisions
 - Diagnose first, do not patch silently. A truncation guard is a behaviour change (auto-continuing a turn) and needs the user's call on whether to auto-resume or just surface the reason.
@@ -39,5 +58,7 @@ updated: 2026-10-04
 - The stop is provable from `chat_messages.output` alone: if the last item is a `message` and the turn is `done=1` with no `meta.error`, the turn was truncated by the provider. No server-log spelunking needed.
 
 ## Open
-- Whether to auto-continue on `finish_reason: "length"` or surface it as a visible notice.
+- Auto-continue now **declines** a truncated turn (decided: iterating on a
+  half-answer wastes the run cap). Whether to *surface* it in the chat UI — a
+  badge on the message, rather than the log line it gets today — is still open.
 - Whether `log_upstream_request` should gain a response counterpart, since without it a truncation can never be attributed to a provider.

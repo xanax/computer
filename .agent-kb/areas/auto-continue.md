@@ -81,7 +81,9 @@ transport, and each ends the turn its own way:
 Consequence of the miss: auto-continue was **silently dead on two of the three
 providers** — no error, no log, the chat just stopped iterating depending on
 which transport you happened to use. All three now call one shared
-`_auto_continue_after_turn()` closure defined next to `_save_message`.
+`_auto_continue_after_turn(finish_reason)` closure defined next to
+`_save_message`; only the stream site has a real reason to pass, so the other
+two pass nothing and that is correct.
 
 - Grep for `task_completed_success = True` (there are exactly 3) whenever you
   touch completion. A fourth exit appearing later must get the hook too.
@@ -97,14 +99,40 @@ which transport you happened to use. All three now call one shared
 - Do not look for a place to schedule a delayed re-send; `process_pending_chat_inputs`
   in the task `finally` already covers the whole loop.
 
+## Truncated turns (B-023 → B-027, fixed)
+
+Auto-continue reads the *success* signal, and that signal was ambiguous: the
+provider's `finish_reason` was read only to detect `tool_calls` and then thrown
+away, so a turn cut off at `length` reached the hook looking exactly like a
+finished one and the chain re-prompted onto a half-answer until the run cap.
+
+Where the stop reason hides, per transport — it is **not** uniformly on the
+terminal event:
+
+| Adapter | Stop reason lives on |
+| --- | --- |
+| `stream_anthropic` | `message_delta` → `delta.stop_reason` (`message_stop` carries **nothing**; reading it there yields `None` forever) |
+| `stream_openai_completions` | each chunk's `finish_reason`; the *last non-empty* one wins, so record it unconditionally, never only for `tool_calls` |
+| `stream_openai_responses` | `response.incomplete` → `incomplete_details.reason`. There was **no** `incomplete` branch at all before this fix, so a truncated response ended the stream with no `done`. A `response.completed` that still carries `incomplete_details` counts as truncated too. |
+
+All three now yield `{"type": "done", "finish_reason": ...}`; `chat_task` passes
+it to the helper, logs a warning when truncated, and `auto_continue.is_truncated`
+declines to queue. `gateway._collect` returns the reason instead of a hardcoded
+`"stop"` so OpenAI-compatible clients can see it.
+
+- `None` is deliberately **not** truncation: the agent-target path reports no
+  reason, and guessing "unknown = truncated" would disable auto-continue there
+  for every turn — a worse bug than the one being fixed.
+- A declined truncated turn must **not** advance the run counter, or repeated
+  truncations silently exhaust the cap of a chat that never iterated.
+- The parent bug stays open upstream: the fork can carry the signal, not stop the
+  provider truncating. See B-023 in `BUGS.md`.
+
 ## Open
-- Per [silent-turn-truncation](silent-turn-truncation.md) (B-023), a turn
-  truncated by the provider (`finish_reason: "length"`) is recorded identically
-  to a genuine completion, so **auto-continue cannot currently tell them apart**
-  and will happily iterate on a truncated turn. Fixing that means teaching the
-  `done` handler to capture `finish_reason`; unaddressed here.
 - Whether the chain should also stop when a turn's only output is tool calls with
   no prose at all (no signal to judge, so currently it keeps going).
+- Whether truncation should be surfaced *in the chat* (a badge on the message),
+  not just in the log. It is visible to API clients and to the log today.
 
 ## Do not redo
 - The 10 locale files are edited by **text append**, not a JSON round-trip;

@@ -235,7 +235,7 @@ async def create_chat_completion(request: Request, body: ChatCompletionRequest):
         )
     else:
         # Non-streaming: collect all text, return as single response
-        full_text = await _collect(output_queue)
+        full_text, finish_reason = await _collect(output_queue)
         return {
             "id": completion_id,
             "object": "chat.completion",
@@ -245,7 +245,7 @@ async def create_chat_completion(request: Request, body: ChatCompletionRequest):
                 {
                     "index": 0,
                     "message": {"role": "assistant", "content": full_text},
-                    "finish_reason": "stop",
+                    "finish_reason": finish_reason,
                 }
             ],
             "usage": {
@@ -469,13 +469,20 @@ async def _stream(
         # Other output types are persisted in cptr's DB and visible in its sidebar.
 
 
-async def _collect(queue: asyncio.Queue) -> str:
-    """Collect all text from the queue for non-streaming mode."""
+async def _collect(queue: asyncio.Queue) -> tuple[str, str]:
+    """Collect all text from the queue for non-streaming mode.
+
+    Returns ``(text, finish_reason)``. The reason used to be dropped here and
+    replaced with a hardcoded ``"stop"``, so an OpenAI-compatible client could
+    not tell a truncated answer from a finished one (B-023).
+    """
     parts = []
+    finish_reason = "stop"
     while True:
         try:
             event = await asyncio.wait_for(queue.get(), timeout=300)
         except asyncio.TimeoutError:
+            finish_reason = "length"  # the loop timed out, not the model
             break
         if event is None:
             break
@@ -488,8 +495,11 @@ async def _collect(queue: asyncio.Queue) -> str:
         elif event.get("type") in ("done", "error"):
             if event.get("type") == "error":
                 parts.append(f"\n\n> **Error:** {event.get('message', '')}")
+                finish_reason = "error"
+            else:
+                finish_reason = event.get("finish_reason") or "stop"
             break
-    return "".join(parts)
+    return "".join(parts), finish_reason
 
 
 # ── Utility task interception ────────────────────────────────

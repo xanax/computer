@@ -1713,7 +1713,7 @@ async def run_chat_task(
         log("[task %s] db save (%s) result: updated=%s", message_id[:8], save_reason, saved)
         return saved
 
-    async def _auto_continue_after_turn() -> None:
+    async def _auto_continue_after_turn(finish_reason: str | None = None) -> None:
         """Queue the auto-continue follow-up for a *clean* finished turn.
 
         Called from every clean-completion exit -- the agent target, the
@@ -1726,9 +1726,24 @@ async def run_chat_task(
         earlier, which is exactly the set of turns that must not queue a
         follow-up. Failures are swallowed so a follow-up can never disturb a
         turn that already succeeded.
+
+        ``finish_reason`` is threaded through because a turn the provider cut
+        off is *not* a clean completion (B-023): before this was plumbed, a
+        truncated turn reached here looking identical to a genuine one and the
+        chain kept iterating on a half-answer (B-027).
         """
         try:
-            from cptr.utils.auto_continue import maybe_queue_auto_continue
+            from cptr.utils.auto_continue import is_truncated, maybe_queue_auto_continue
+
+            if finish_reason and is_truncated(finish_reason):
+                # B-023: surface the truncation. Before this the turn was saved
+                # exactly like a genuine finish, so a chat that "stopped for no
+                # reason" left no trace at all.
+                logger.warning(
+                    "[task %s] turn ended with finish_reason=%s; output was truncated by the provider",
+                    message_id[:8],
+                    finish_reason,
+                )
 
             queued = await maybe_queue_auto_continue(
                 chat_id=chat_id,
@@ -1736,6 +1751,7 @@ async def run_chat_task(
                 model=msg.model if msg else None,
                 content=content,
                 output_items=output_items,
+                finish_reason=finish_reason,
             )
             if queued:
                 logger.info("[task %s] auto-continue: %s", message_id[:8], queued)
@@ -2689,7 +2705,10 @@ async def run_chat_task(
                             message=preview,
                         )
                         task_completed_success = True
-                        await _auto_continue_after_turn()
+                        # B-023/B-027: carry the provider's stop reason so a
+                        # truncated turn (`length`, `content_filter`, ...) is not
+                        # treated as a clean completion.
+                        await _auto_continue_after_turn(event.get("finish_reason"))
                         return
 
             # ── Process collected tool calls ────────────────────

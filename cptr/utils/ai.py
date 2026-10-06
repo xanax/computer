@@ -675,6 +675,12 @@ async def stream_anthropic(
     headers = {"x-api-key": key, "anthropic-version": "2023-06-01", **_openrouter_headers(url)}
 
     emitted = False
+    # B-023: the provider's stop reason used to be discarded, so a truncated
+    # completion was persisted exactly like a genuine finish. Anthropic reports
+    # it on `message_delta` (`stop_reason`: end_turn / max_tokens / tool_use /
+    # stop_sequence / refusal), NOT on `message_stop`, so it has to be caught
+    # one event earlier and carried to the terminal yield.
+    stop_reason: str | None = None
     for attempt in range(_STREAM_RETRY_ATTEMPTS):
         try:
             async with httpx.AsyncClient(timeout=_STREAM_TIMEOUT) as client:
@@ -737,10 +743,14 @@ async def stream_anthropic(
                                 usage_data["output_tokens"] = delta_usage.get("output_tokens", 0)
                                 emitted = True
                                 yield {"type": "usage", **usage_data}
+                            # B-023: stop_reason rides this event, not message_stop.
+                            _seen_stop = event.get("delta", {}).get("stop_reason")
+                            if _seen_stop:
+                                stop_reason = _seen_stop
 
                         elif etype == "message_stop":
                             emitted = True
-                            yield {"type": "done"}
+                            yield {"type": "done", "finish_reason": stop_reason}
             return
         except _STREAM_RETRY_ERRORS as exc:
             if (
@@ -920,6 +930,9 @@ async def stream_openai_completions(
     headers = {"Authorization": f"Bearer {key}", **_openrouter_headers(url)}
 
     emitted = False
+    # B-023: carried from each chunk's `finish_reason` to the terminal yield, so
+    # `length`/`content_filter` survive instead of being discarded.
+    finish_reason: str | None = None
     for attempt in range(_STREAM_RETRY_ATTEMPTS):
         try:
             async with httpx.AsyncClient(timeout=_STREAM_TIMEOUT) as client:
@@ -1018,6 +1031,14 @@ async def stream_openai_completions(
                                 }
                             tool_calls[idx]["arguments_json"] += tc["function"].get("arguments", "")
 
+                        # B-023: record the stop reason whatever it is. This used
+                        # to be read *only* for the "tool_calls" case and then
+                        # discarded, so `length` and `content_filter` reached the
+                        # consumer indistinguishable from a genuine finish.
+                        _chunk_finish = choices[0].get("finish_reason") if choices else None
+                        if _chunk_finish:
+                            finish_reason = _chunk_finish
+
                         if choices and choices[0].get("finish_reason") == "tool_calls":
                             # Emit accumulated reasoning before tool calls
                             item = complete_reasoning_item()
@@ -1068,7 +1089,7 @@ async def stream_openai_completions(
                             "output items, tool calls, or usage tokens."
                         )
                     emitted = True
-                    yield {"type": "done"}
+                    yield {"type": "done", "finish_reason": finish_reason}
             return
         except _STREAM_RETRY_ERRORS as exc:
             if (
@@ -1385,7 +1406,18 @@ async def stream_openai_responses(
                             msg = error.get("message", "Response failed")
                             raise RuntimeError(f"Responses API error: {msg}")
 
-                        elif etype == "response.completed":
+                        elif etype in ("response.completed", "response.incomplete"):
+                            # B-023: `response.incomplete` is the Responses API's
+                            # truncation signal (max_output_tokens / content_filter)
+                            # and previously had no branch at all, so a truncated
+                            # turn ended the stream with no `done` carrying the
+                            # reason. A `response.completed` that still reports
+                            # incomplete_details is treated as truncated too.
+                            _resp = event.get("response", {})
+                            _details = _resp.get("incomplete_details") or {}
+                            _incomplete_reason = _details.get("reason")
+                            if etype == "response.incomplete":
+                                _incomplete_reason = _incomplete_reason or "incomplete"
                             if active_reasoning_item is not None and _reasoning_items_to_content(
                                 [active_reasoning_item]
                             ):
@@ -1395,12 +1427,21 @@ async def stream_openai_responses(
                                     "type": "output",
                                     "item": copy.deepcopy(active_reasoning_item),
                                 }
-                            usage = event.get("response", {}).get("usage", {})
+                            usage = _resp.get("usage", {})
                             if usage:
                                 emitted = True
                                 yield {"type": "usage", **usage}
+                            if _incomplete_reason:
+                                logger.warning(
+                                    "[stream] responses API returned an incomplete "
+                                    "response: %s (output was truncated)",
+                                    _incomplete_reason,
+                                )
                             emitted = True
-                            yield {"type": "done"}
+                            yield {
+                                "type": "done",
+                                "finish_reason": _incomplete_reason or "stop",
+                            }
             return
         except _STREAM_RETRY_ERRORS as exc:
             if (

@@ -160,6 +160,35 @@ def said_stop(text: str) -> bool:
     return any(marker in tail for marker in STOP_MARKERS)
 
 
+# ── Truncation (B-023 / B-027) ────────────────────────────────
+
+#: Stop reasons that mean the provider cut the answer short, i.e. the turn is
+#: NOT a clean completion. Auto-continue must not iterate on one: doing so
+#: burns tokens finishing a half-answer instead of surfacing the truncation.
+TRUNCATION_FINISH_REASONS = frozenset(
+    {
+        "length",  # OpenAI / xAI / OpenRouter
+        "max_tokens",  # Anthropic
+        "max_output_tokens",  # Responses API
+        "content_filter",  # OpenAI
+        "refusal",  # Anthropic
+        "incomplete",  # Responses API fallback
+    }
+)
+
+
+def is_truncated(finish_reason: str | None) -> bool:
+    """Whether a provider stop reason means the output was cut short.
+
+    ``None`` is *not* truncation: several transports report no reason at all
+    (the agent-target path never does), so treating "unknown" as truncation
+    would silently disable auto-continue on those for every single turn.
+    """
+    if not finish_reason:
+        return False
+    return finish_reason.strip().lower() in TRUNCATION_FINISH_REASONS
+
+
 # ── Queueing ──────────────────────────────────────────────────
 
 
@@ -170,12 +199,16 @@ async def maybe_queue_auto_continue(
     model: str | None,
     content: str = "",
     output_items: list | None = None,
+    finish_reason: str | None = None,
 ) -> str | None:
     """Append the follow-up prompt if this chat wants one. Returns a reason.
 
     Returns a short string when it queued (for the log) and None when it
     declined. Never raises: a failed follow-up must not disturb a turn that
     already succeeded.
+
+    ``finish_reason`` is the provider's stop signal when the transport reports
+    one; a truncated turn is declined rather than iterated on (B-027).
     """
     try:
         chat = await Chat.get_by_id(chat_id)
@@ -187,6 +220,12 @@ async def maybe_queue_auto_continue(
         # would spawn work nobody is watching, forever.
         if is_internal_chat(chat.meta):
             return None
+
+        # B-023/B-027: a truncated turn is not a completion. Re-prompting here
+        # would ask the agent to continue from a half-written answer, so the
+        # chain would burn the entire run cap on it and never say why.
+        if is_truncated(finish_reason):
+            return f"turn was truncated ({finish_reason})"
 
         if said_stop(assistant_plain_text(content, output_items)):
             return "agent asked to stop"
