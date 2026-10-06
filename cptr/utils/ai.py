@@ -14,10 +14,8 @@ import asyncio
 import copy
 import json
 import logging
-import time
 import uuid
 from collections.abc import AsyncIterator
-from email.utils import parsedate_to_datetime
 from typing import Dict, List
 
 import httpx
@@ -29,6 +27,13 @@ from cptr.env import (
     STREAM_WRITE_TIMEOUT_SECONDS,
 )
 from cptr.utils.logger import log_upstream_request
+from cptr.utils.retry import (
+    RETRY_ATTEMPTS,
+    describe_exception,
+    is_retryable_exception,
+    retry_async,
+    retry_delay,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +58,6 @@ def _openrouter_headers(url: str) -> dict[str, str]:
     return {}
 
 
-_STREAM_RETRY_ATTEMPTS = 3
-_STREAM_RETRY_MAX_DELAY_SECONDS = 30
-_STREAM_RETRY_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
 _STREAM_TIMEOUT = httpx.Timeout(
     STREAM_CONNECT_TIMEOUT_SECONDS,
     read=STREAM_READ_TIMEOUT_SECONDS,
@@ -288,18 +290,6 @@ class EmptyCompletionError(RuntimeError):
     pass
 
 
-_STREAM_RETRY_ERRORS = (
-    EmptyCompletionError,
-    httpx.ConnectError,
-    httpx.ConnectTimeout,
-    httpx.HTTPStatusError,
-    httpx.ReadError,
-    httpx.ReadTimeout,
-    httpx.RemoteProtocolError,
-    httpx.WriteTimeout,
-)
-
-
 class ChatCompletionForm(BaseModel):
     """Mirrors OpenAI Responses API request shape."""
 
@@ -307,32 +297,6 @@ class ChatCompletionForm(BaseModel):
     messages: List[Dict]
     instructions: str = ""
     tools: List[Dict] = []
-
-
-def _is_retryable_stream_error(exc: BaseException) -> bool:
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in _STREAM_RETRY_STATUS_CODES
-    return isinstance(exc, _STREAM_RETRY_ERRORS)
-
-
-def _stream_retry_delay(exc: BaseException, attempt: int) -> float:
-    delay = 0.5 * (attempt + 1)
-    if not isinstance(exc, httpx.HTTPStatusError):
-        return delay
-
-    retry_after = exc.response.headers.get("retry-after")
-    if not retry_after:
-        return delay
-
-    try:
-        delay = float(retry_after)
-    except ValueError:
-        try:
-            delay = parsedate_to_datetime(retry_after).timestamp() - time.time()
-        except (TypeError, ValueError, OverflowError):
-            return delay
-
-    return min(max(delay, 0), _STREAM_RETRY_MAX_DELAY_SECONDS)
 
 
 # ── Non-streaming completion ────────────────────────────────
@@ -353,91 +317,85 @@ async def chat_completion(
 
     Works with Anthropic, OpenAI Chat Completions, and OpenAI Responses API.
     Useful for lightweight tasks like title/summary generation.
+
+    Retried like the streaming paths (see `cptr.utils.retry`): a title that
+    failed on one 503 used to be silently dropped, because `generate_text`
+    swallows the exception and returns None.
     """
-    async with httpx.AsyncClient(timeout=httpx.Timeout(15)) as client:
-        if provider == "anthropic":
-            body: dict = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-            }
-            if system:
-                body["system"] = system
-            if request_params:
-                body.update(request_params)
-            log_upstream_request(
-                provider="anthropic",
-                endpoint=f"{base_url}/messages",
-                model=model,
-                api_type="messages",
-                body=body,
-            )
-            resp = await client.post(
-                f"{base_url}/messages",
-                json=body,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    **_openrouter_headers(base_url),
-                },
-            )
-        elif api_type == "responses":
-            # OpenAI Responses API
-            body_r: dict = {
-                "model": model,
-                "input": messages,
-                "max_output_tokens": max_tokens,
-            }
-            if system:
-                body_r["instructions"] = system
-            if request_params:
-                body_r.update(request_params)
-            log_upstream_request(
-                provider=provider,
-                endpoint=f"{base_url}/responses",
-                model=model,
-                api_type="responses",
-                body=body_r,
-            )
-            resp = await client.post(
-                f"{base_url}/responses",
-                json=body_r,
-                headers={"Authorization": f"Bearer {api_key}", **_openrouter_headers(base_url)},
-            )
-        else:
-            # OpenAI Chat Completions (default)
-            all_messages = messages[:]
-            if system:
-                all_messages.insert(0, {"role": "system", "content": system})
-            body_cc: dict = {
-                "model": model,
-                "messages": all_messages,
-                "max_completion_tokens": max_tokens,
-            }
-            if request_params:
-                body_cc.update(request_params)
-            log_upstream_request(
-                provider=provider,
-                endpoint=f"{base_url}/chat/completions",
-                model=model,
-                api_type="chat_completions",
-                body=body_cc,
-            )
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                json=body_cc,
-                headers={"Authorization": f"Bearer {api_key}", **_openrouter_headers(base_url)},
-            )
-        if resp.status_code >= 400:
-            logger.debug(
-                "[chat_completion] %s %s → %s: %s",
-                provider,
-                model,
-                resp.status_code,
-                resp.text[:500],
-            )
-        resp.raise_for_status()
-        data = resp.json()
+    if provider == "anthropic":
+        endpoint = f"{base_url}/messages"
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            **_openrouter_headers(base_url),
+        }
+        body: dict = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
+        if system:
+            body["system"] = system
+        if request_params:
+            body.update(request_params)
+        api_type = "messages"
+    elif api_type == "responses":
+        # OpenAI Responses API
+        endpoint = f"{base_url}/responses"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            **_openrouter_headers(base_url),
+        }
+        body = {
+            "model": model,
+            "input": messages,
+            "max_output_tokens": max_tokens,
+        }
+        if system:
+            body["instructions"] = system
+        if request_params:
+            body.update(request_params)
+    else:
+        # OpenAI Chat Completions (default)
+        endpoint = f"{base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            **_openrouter_headers(base_url),
+        }
+        all_messages = messages[:]
+        if system:
+            all_messages.insert(0, {"role": "system", "content": system})
+        body = {
+            "model": model,
+            "messages": all_messages,
+            "max_completion_tokens": max_tokens,
+        }
+        if request_params:
+            body.update(request_params)
+
+    log_upstream_request(
+        provider=provider,
+        endpoint=endpoint,
+        model=model,
+        api_type=api_type,
+        body=body,
+    )
+
+    async def _post() -> dict:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15)) as client:
+            resp = await client.post(endpoint, json=body, headers=headers)
+            if resp.status_code >= 400:
+                logger.debug(
+                    "[chat_completion] %s %s → %s: %s",
+                    provider,
+                    model,
+                    resp.status_code,
+                    resp.text[:500],
+                )
+            resp.raise_for_status()
+            return resp.json()
+
+    data = await retry_async(_post, label=f"chat_completion {provider}/{model}")
 
     if provider == "anthropic":
         return data.get("content", [{}])[0].get("text", "")
@@ -681,7 +639,7 @@ async def stream_anthropic(
     # stop_sequence / refusal), NOT on `message_stop`, so it has to be caught
     # one event earlier and carried to the terminal yield.
     stop_reason: str | None = None
-    for attempt in range(_STREAM_RETRY_ATTEMPTS):
+    for attempt in range(RETRY_ATTEMPTS):
         try:
             async with httpx.AsyncClient(timeout=_STREAM_TIMEOUT) as client:
                 logger.info("[stream] anthropic POST %s/messages model=%s", url, form_data.model)
@@ -752,20 +710,23 @@ async def stream_anthropic(
                             emitted = True
                             yield {"type": "done", "finish_reason": stop_reason}
             return
-        except _STREAM_RETRY_ERRORS as exc:
+        except Exception as exc:
             if (
                 emitted
-                or attempt == _STREAM_RETRY_ATTEMPTS - 1
-                or not _is_retryable_stream_error(exc)
+                or attempt == RETRY_ATTEMPTS - 1
+                or not is_retryable_exception(exc, extra=(EmptyCompletionError,))
             ):
                 raise
+            delay = retry_delay(exc, attempt)
             logger.warning(
-                "[stream] anthropic transient stream failure before first event; retrying (%s/%s)",
+                "[stream] anthropic transient failure before first event (%s); "
+                "retrying in %.1fs (%s/%s)",
+                describe_exception(exc),
+                delay,
                 attempt + 1,
-                _STREAM_RETRY_ATTEMPTS,
-                exc_info=True,
+                RETRY_ATTEMPTS - 1,
             )
-            await asyncio.sleep(_stream_retry_delay(exc, attempt))
+            await asyncio.sleep(delay)
 
 
 # ── OpenAI Chat Completions ──────────────────────────────────
@@ -933,7 +894,7 @@ async def stream_openai_completions(
     # B-023: carried from each chunk's `finish_reason` to the terminal yield, so
     # `length`/`content_filter` survive instead of being discarded.
     finish_reason: str | None = None
-    for attempt in range(_STREAM_RETRY_ATTEMPTS):
+    for attempt in range(RETRY_ATTEMPTS):
         try:
             async with httpx.AsyncClient(timeout=_STREAM_TIMEOUT) as client:
                 logger.info(
@@ -1091,20 +1052,23 @@ async def stream_openai_completions(
                     emitted = True
                     yield {"type": "done", "finish_reason": finish_reason}
             return
-        except _STREAM_RETRY_ERRORS as exc:
+        except Exception as exc:
             if (
                 emitted
-                or attempt == _STREAM_RETRY_ATTEMPTS - 1
-                or not _is_retryable_stream_error(exc)
+                or attempt == RETRY_ATTEMPTS - 1
+                or not is_retryable_exception(exc, extra=(EmptyCompletionError,))
             ):
                 raise
+            delay = retry_delay(exc, attempt)
             logger.warning(
-                "[stream] openai completions transient stream failure before first event; retrying (%s/%s)",
+                "[stream] openai completions transient failure before first event (%s); "
+                "retrying in %.1fs (%s/%s)",
+                describe_exception(exc),
+                delay,
                 attempt + 1,
-                _STREAM_RETRY_ATTEMPTS,
-                exc_info=True,
+                RETRY_ATTEMPTS - 1,
             )
-            await asyncio.sleep(_stream_retry_delay(exc, attempt))
+            await asyncio.sleep(delay)
 
 
 # ── OpenAI Responses API ─────────────────────────────────────
@@ -1283,7 +1247,7 @@ async def stream_openai_responses(
     headers = {"Authorization": f"Bearer {key}", **_openrouter_headers(url)}
 
     emitted = False
-    for attempt in range(_STREAM_RETRY_ATTEMPTS):
+    for attempt in range(RETRY_ATTEMPTS):
         try:
             async with httpx.AsyncClient(timeout=_STREAM_TIMEOUT) as client:
                 logger.info(
@@ -1443,17 +1407,20 @@ async def stream_openai_responses(
                                 "finish_reason": _incomplete_reason or "stop",
                             }
             return
-        except _STREAM_RETRY_ERRORS as exc:
+        except Exception as exc:
             if (
                 emitted
-                or attempt == _STREAM_RETRY_ATTEMPTS - 1
-                or not _is_retryable_stream_error(exc)
+                or attempt == RETRY_ATTEMPTS - 1
+                or not is_retryable_exception(exc, extra=(EmptyCompletionError,))
             ):
                 raise
+            delay = retry_delay(exc, attempt)
             logger.warning(
-                "[stream] openai responses transient stream failure before first event; retrying (%s/%s)",
+                "[stream] openai responses transient failure before first event (%s); "
+                "retrying in %.1fs (%s/%s)",
+                describe_exception(exc),
+                delay,
                 attempt + 1,
-                _STREAM_RETRY_ATTEMPTS,
-                exc_info=True,
+                RETRY_ATTEMPTS - 1,
             )
-            await asyncio.sleep(_stream_retry_delay(exc, attempt))
+            await asyncio.sleep(delay)

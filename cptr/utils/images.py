@@ -16,6 +16,7 @@ import httpx
 from cptr.models import Config, File
 from cptr.utils.config import _get_jwt_secret, now_ms
 from cptr.utils.crypto import decrypt_key
+from cptr.utils.retry import retry_async
 from cptr.utils.runtime import Runtime
 from cptr.utils.storage import get_storage
 
@@ -211,13 +212,17 @@ async def generate_images(
 
     headers = {"Authorization": f"Bearer {cfg['api_key']}"}
     async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as client:
-        resp = await client.post(
-            f"{cfg['base_url']}/images/generations",
-            headers={**headers, "Content-Type": "application/json"},
-            json=payload,
-        )
-        resp.raise_for_status()
-        body = resp.json()
+
+        async def _generate() -> dict:
+            resp = await client.post(
+                f"{cfg['base_url']}/images/generations",
+                headers={**headers, "Content-Type": "application/json"},
+                json=payload,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        body = await retry_async(_generate, label="images/generations")
 
         results = []
         for item in body.get("data", []):
@@ -323,14 +328,18 @@ async def edit_images(
 
     headers = {"Authorization": f"Bearer {cfg['api_key']}"}
     async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as client:
-        resp = await client.post(
-            f"{cfg['base_url']}/images/edits",
-            headers=headers,
-            data=payload,
-            files=files,
-        )
-        resp.raise_for_status()
-        body = resp.json()
+
+        async def _edit() -> dict:
+            resp = await client.post(
+                f"{cfg['base_url']}/images/edits",
+                headers=headers,
+                data=payload,
+                files=files,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        body = await retry_async(_edit, label="images/edits")
 
         results = []
         for item in body.get("data", []):

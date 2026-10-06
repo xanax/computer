@@ -2,6 +2,8 @@
 
 Newest first. One line per task. Current truth is in `areas/`, not here.
 
+2026-10-07 — provider-retry-policy — Retried every outbound provider call instead of only 429/5xx: one policy module (`cptr/utils/retry.py`) consulted by the three streaming transports (which drive their own loop, because replaying a request whose text is already on screen would duplicate it — an `emitted` flag guards that), by `chat_completion` (which had **no** retry at all, so a transient 5xx silently dropped every title/summary call), and by image generate/edit plus STT/TTS. The old streaming policy was 429-only with a 0.5/1.0 s linear wait, shorter than a drained upstream pool stays drained; now 4 attempts, 1/2/4 s with jitter, `Retry-After` obeyed and clamped to 30 s. Live check with the real key: `inclusionai/ling-3.1-flash` 429'd three times and returned 200 on the fourth attempt (10.2 s) — the model that started this now works. 40 tests incl. a structural per-file wrapper count, since the original bug was a missing wrapper; suite 477.
+
 2026-10-06 — provider-error-surfacing — ling-3.1-flash 429s from OpenRouter's shared free pool; cptr keeps only "Provider returned error".
 
 2026-10-06 — dev-instance-and-restart — Found by checking rather than assuming, on the way out of the global-profile build: the user's instance is `cptr run --port 4200 --headless` with no `--reload`, so the backend half of the feature is not live until `bash _restart_server.sh`; the frontend half already is, because `cptr/frontend/build` is served from disk per request. Route existence can be settled without a restart by walking `app.routes` via `_IncludedRouter.original_router` (a `TestClient` cannot tell you, since the auth middleware 401s every path, real or invented).

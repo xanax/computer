@@ -127,6 +127,11 @@ STREAM_CONNECT_TIMEOUT_SECONDS = float(os.environ.get("CPTR_STREAM_CONNECT_TIMEO
 STREAM_READ_TIMEOUT_SECONDS = float(os.environ.get("CPTR_STREAM_READ_TIMEOUT", "300"))
 STREAM_WRITE_TIMEOUT_SECONDS = float(os.environ.get("CPTR_STREAM_WRITE_TIMEOUT", "600"))
 
+# Provider retries. `ATTEMPTS` counts the first try, so 4 = 3 retries. See
+# cptr/utils/retry.py for the policy (retry everything except a real 4xx).
+PROVIDER_RETRY_ATTEMPTS = _env_int("CPTR_PROVIDER_RETRY_ATTEMPTS", 4)
+PROVIDER_RETRY_MAX_DELAY_SECONDS = float(os.environ.get("CPTR_PROVIDER_RETRY_MAX_DELAY", "30"))
+
 # ── Job scheduler ───────────────────────────────────────────
 # The automation and timer intervals that used to live here are gone with their
 # loops: automations and timers are rows in `jobs` now, so JOB_POLL_INTERVAL is

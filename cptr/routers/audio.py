@@ -26,6 +26,7 @@ from cptr.utils.config import _get_jwt_secret, check_access
 from cptr.utils.crypto import decrypt_key
 from cptr.utils.native_tts import NativeTtsError, is_available as native_tts_available
 from cptr.utils.native_tts import synthesize as native_synthesize
+from cptr.utils.retry import retry_async
 from cptr.utils.runtime import Runtime, FileError
 
 logger = logging.getLogger(__name__)
@@ -247,14 +248,18 @@ async def _transcribe_chunk(
 ) -> str:
     """Send a single audio chunk to the STT API."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as client:
-        resp = await client.post(
-            f"{base_url}/audio/transcriptions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            files={"file": (filename, data, content_type)},
-            data={"model": model},
-        )
-        resp.raise_for_status()
-    return resp.json().get("text", "")
+
+        async def _transcribe() -> str:
+            resp = await client.post(
+                f"{base_url}/audio/transcriptions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                files={"file": (filename, data, content_type)},
+                data={"model": model},
+            )
+            resp.raise_for_status()
+            return resp.json().get("text", "")
+
+        return await retry_async(_transcribe, label="audio/transcriptions")
 
 
 @router.post("/transcribe")
@@ -579,12 +584,17 @@ async def speech(request: Request, body: SpeechRequest):
     else:
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as client:
-                resp = await client.post(
-                    f"{base_url}/audio/speech",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json=payload,
-                )
-                resp.raise_for_status()
+
+                async def _speak() -> bytes:
+                    resp = await client.post(
+                        f"{base_url}/audio/speech",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    return resp.content
+
+                audio_bytes = await retry_async(_speak, label="audio/speech")
         except httpx.HTTPStatusError as exc:
             logger.warning(
                 "[speech] TTS API error %s: %s",
@@ -594,7 +604,6 @@ async def speech(request: Request, body: SpeechRequest):
             raise HTTPException(502, f"TTS API error: {exc.response.status_code}")
         except httpx.ConnectError:
             raise HTTPException(502, "Could not connect to TTS API")
-        audio_bytes = resp.content
 
     if not audio_bytes:
         raise HTTPException(502, "Text-to-speech returned empty audio.")
