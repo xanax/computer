@@ -204,6 +204,11 @@ class Auth(Base):
             return auth, user
 
 
+#: Longest global profile kept, in characters. It opens *every* chat the user
+#: starts, so it is the one preference whose size is paid on every request.
+MAX_PROFILE_CHARS = 8000
+
+
 class UserStates(Base):
     """Workspace layout state. 1:1 with User."""
 
@@ -236,3 +241,30 @@ class UserStates(Base):
             else:
                 db.add(UserStates(user_id=user_id, data=data))
             await db.commit()
+
+    # ── Global profile ───────────────────────────────────────
+    #
+    # The one prompt that opens every chat this user starts, in every workspace
+    # and on the home page. It lives in `data["profile"]` beside the other
+    # preferences — no migration — but it is *not* written through the
+    # preferences endpoint: it has its own, so a stale preferences autosave
+    # cannot revert it (the B-019 failure, one layer up).
+
+    @staticmethod
+    def profile_from(data: dict | None) -> str:
+        """The global profile text a state blob carries ("" when unset)."""
+        profile = (data or {}).get("profile")
+        return profile.strip() if isinstance(profile, str) else ""
+
+    @staticmethod
+    def clean_profile(text: str) -> str:
+        """Trim and cap a profile on the way in. Blank means "clear it"."""
+        text = (text or "").strip()
+        return text[:MAX_PROFILE_CHARS]
+
+    @staticmethod
+    async def get_profile(user_id: str) -> str:
+        """The prompt this user opens every chat with."""
+        if not user_id:
+            return ""
+        return UserStates.profile_from(await UserStates.get_data(user_id))

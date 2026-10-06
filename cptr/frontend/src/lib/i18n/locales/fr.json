@@ -1389,5 +1389,10 @@
 	"effortSelector.high": "Élevé",
 	"models.effortLevels": "Effort de raisonnement",
 	"models.effortLevelsAuto": "Automatique",
-	"models.effortLevelsHint": "En mode automatique, cptr décide d'après le nom du modèle. Ne sélectionnez aucun niveau pour retirer le sélecteur d'effort de la zone de saisie."
+	"models.effortLevelsHint": "En mode automatique, cptr décide d'après le nom du modèle. Ne sélectionnez aucun niveau pour retirer le sélecteur d'effort de la zone de saisie.",
+	"general.profile": "Profil",
+	"general.profileDesc": "Envoyé au début de chaque conversation — dans chaque espace et sur la page d’accueil.",
+	"general.profilePlaceholder": "Comment les conversations doivent-elles vous traiter ?",
+	"general.profileEmpty": "Pas encore de profil.",
+	"general.profileSaveFailed": "Échec de l’enregistrement du profil"
 }

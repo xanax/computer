@@ -1389,5 +1389,10 @@
 	"effortSelector.high": "Hoch",
 	"models.effortLevels": "Denkaufwand",
 	"models.effortLevelsAuto": "Automatisch",
-	"models.effortLevelsHint": "Automatisch lässt cptr anhand des Modellnamens entscheiden. Wähle keine Stufe aus, um die Auswahl im Eingabefeld zu entfernen."
+	"models.effortLevelsHint": "Automatisch lässt cptr anhand des Modellnamens entscheiden. Wähle keine Stufe aus, um die Auswahl im Eingabefeld zu entfernen.",
+	"general.profile": "Profil",
+	"general.profileDesc": "Wird am Anfang jedes Chats gesendet – in jedem Arbeitsbereich und auf der Startseite.",
+	"general.profilePlaceholder": "Wie sollen Chats mit dir umgehen?",
+	"general.profileEmpty": "Noch kein Profil.",
+	"general.profileSaveFailed": "Profil konnte nicht gespeichert werden"
 }

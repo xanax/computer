@@ -1389,5 +1389,10 @@
 	"effortSelector.high": "Alto",
 	"models.effortLevels": "Esforço de raciocínio",
 	"models.effortLevelsAuto": "Automático",
-	"models.effortLevelsHint": "Automático deixa o cptr decidir pelo nome do modelo. Não selecione nenhum nível para remover o seletor de esforço do campo de mensagem."
+	"models.effortLevelsHint": "Automático deixa o cptr decidir pelo nome do modelo. Não selecione nenhum nível para remover o seletor de esforço do campo de mensagem.",
+	"general.profile": "Perfil",
+	"general.profileDesc": "Enviado no início de cada chat — em todos os espaços e na página inicial.",
+	"general.profilePlaceholder": "Como os chats devem tratar você?",
+	"general.profileEmpty": "Ainda sem perfil.",
+	"general.profileSaveFailed": "Falha ao salvar o perfil"
 }

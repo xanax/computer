@@ -15,6 +15,28 @@ export const getPreferences = () => fetchJSON<Record<string, unknown>>('/api/sta
 export const savePreferences = (data: Record<string, unknown>) =>
 	fetchHandler('/api/state/preferences', { ...jsonBody(data), method: 'PUT' });
 
+// ── Global profile ──────────────────────────────────────────────
+
+/**
+ * The one prompt that opens *every* chat: every workspace, and the home page.
+ * Written once, read everywhere — the per-user counterpart of the workspace
+ * prompt. It is deliberately not part of the preferences blob: prefs are saved
+ * wholesale by an autosave, and a stale echo there would revert an edit.
+ */
+export interface GlobalProfile {
+	profile: string;
+	/** Longest profile the server will keep, in characters. */
+	max_chars: number;
+}
+
+export const getProfile = () => fetchJSON<GlobalProfile>('/api/state/profile');
+
+export const saveProfile = (profile: string) =>
+	fetchJSON<GlobalProfile & { status: string }>('/api/state/profile', {
+		...jsonBody({ profile }),
+		method: 'PUT'
+	});
+
 // ── Workspace list (sidebar) ────────────────────────────────────
 
 export interface WorkspaceListItem {
@@ -50,9 +72,7 @@ export const getWorkspacePriority = (current?: string | null) => {
 	const params = new URLSearchParams();
 	if (current) params.set('current', current);
 	const qs = params.toString();
-	return fetchJSON<WorkspacePriorityResult>(
-		`/api/state/workspaces/priority${qs ? `?${qs}` : ''}`
-	);
+	return fetchJSON<WorkspacePriorityResult>(`/api/state/workspaces/priority${qs ? `?${qs}` : ''}`);
 };
 
 // ── Single workspace CRUD ───────────────────────────────────────

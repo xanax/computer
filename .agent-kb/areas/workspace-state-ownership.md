@@ -1,11 +1,16 @@
 ---
 area: workspace-state-ownership
-title: Who owns a workspace field — dedicated endpoints vs the layout autosave
-aliases: [workspace-prompt, workspace-services, workspace-notes, toolServers, put_workspace, autosave, stale-echo, B-019]
-updated: 2026-10-03
+title: Who owns a state field — dedicated endpoints vs the wholesale autosave
+aliases: [workspace-prompt, workspace-services, workspace-notes, toolServers, put_workspace, autosave, stale-echo, B-019, global profile, put_preferences, user_states.data, profile]
+updated: 2026-10-06
 ---
 
-# Who owns a workspace field — dedicated endpoints vs the layout autosave
+# Who owns a state field — dedicated endpoints vs the wholesale autosave
+
+Scope note: the same failure and the same fix appear at **two** levels — a
+*workspace* field echoed by the layout autosave (`PUT /api/state/workspace`), and a
+*user* field echoed by the preferences autosave (`PUT /api/state/preferences`).
+The global profile below is the user-level instance of it.
 
 ## Map
 - `cptr/frontend/src/lib/stores.ts:864` — `loadWorkspace` builds `currentWorkspace` from
@@ -14,7 +19,12 @@ updated: 2026-10-03
 - `cptr/routers/state.py:184 put_workspace` — the layout save. Dedicated writers:
   `/workspace/prompt` (`:280`/`:291`), `/workspace/tool-servers` (`:233`/`:258`), `/workspace/services` (`:334`/`:362`),
   `/workspace/notes` (`:324`/`:334`/`:357` — the same key lives in `workspaces.data`, guarded the same way).
-- `notes/NOTES-workspace-prompt.md` — the prompt feature and the B-019 write-up; `notes/NOTES-workspace-notes.md` — notes (human + agent); `BUGS.md` B-019.
+- `notes/NOTES-workspace-prompt.md` — the prompt feature and the B-019 write-up; `notes/NOTES-workspace-notes.md` — notes (human + agent); `notes/NOTES-global-profile.md` — the user-level profile; `BUGS.md` B-019.
+- `cptr/routers/state.py` — the user-level side: `get_preferences`/`put_preferences` (the prefs autosave, and the guard),
+  `get_profile`/`put_profile` (the profile's own endpoints), `ProfileBody`, `MAX_PROFILE_CHARS` in `cptr/models/users.py`,
+  `UserStates.profile_from`/`clean_profile`/`get_profile`.
+- `cptr/utils/prompt_templates.py` — `load_system_prompt`, where `{{PROFILE}}`/`{{WORKSPACE_PROMPT}}`/`{{WORKSPACE_NOTES}}`
+  are prepended (`format_user_profile`); the Settings card is `frontend/src/lib/components/Settings/General.svelte`.
 
 ## Facts
 - [verified 2026-10-03 cptr/routers/state.py] `get_workspace` returns the stored data dict **merged with name/path**,
@@ -35,6 +45,19 @@ updated: 2026-10-03
   `workspaces.data["notes"]` (no migration), per user + `canonical_path`, `MAX_NOTES = 200`,
   `MAX_NOTE_CHARS = 4000`. `put_workspace` drops `notes` too, and `loadWorkspace` deletes it. The endpoint's query
   param is **`path`** — `?workspace=…` is a 422.
+- [verified 2026-10-06 cptr/routers/state.py] The **user**-level twin: `PUT /api/state/preferences` (the ~300 ms
+  autosave from `stores.ts`) saves the whole prefs object, and `user_states.data` is where the global profile lives. It
+  now drops `profile` from the body unconditionally, so the stored value always wins. `GET /preferences` still *carries*
+  the key, so a client keeps echoing it — harmless once the write ignores it, and the same read-carries-more shape as
+  `get_workspace`. There is no endpoint that deletes the prefs blob, so only `PUT /profile` can clear a profile.
+- [verified 2026-10-06 `app.routes` walk of `_IncludedRouter.original_router`] **"Profile" is three endpoints**:
+  `PUT /api/auth/profile` is the account display name, `PUT /api/admin/users/{id}/profile` is an admin editing someone
+  else's, and `GET|PUT /api/state/profile` (new) is the chat *persona* — `user_states.data["profile"]`, unrelated to the
+  account. No path collides, but a grep for `profile` finds all three.
+- [verified 2026-10-06 cptr/utils/prompt_templates.py] All three `{{…}}` blocks that prepend themselves to the front of
+  the template — `{{PROFILE}}`, `{{WORKSPACE_PROMPT}}`, `{{WORKSPACE_NOTES}}` — are prepended in that order, and the last
+  prepend ends up *first* in the prompt. So the order in `load_system_prompt` **is** the precedence, and reordering those
+  lines silently reorders every chat's system prompt with nothing else to catch it.
 - [verified 2026-10-03 cptr/utils/prompt_templates.py] `load_system_prompt` renders notes as a `[WORKSPACE NOTES]`
   block (newest first, 20 notes / 500 chars each, then `(N older notes not shown.)`) right after the
   `{{WORKSPACE_SERVICES}}`/`{{WORKSPACE_PROMPT}}` anchor, else prepends it; a home chat (`workspace == ""`) gets none.
@@ -42,6 +65,11 @@ updated: 2026-10-03
 
 ## Built
 - `put_workspace` server-owned keys + `loadWorkspace` deleting `prompt`/`services`/`notes` from the stored object.
+- **Global profile** (2026-10-06): one prompt that opens every chat this user starts — every workspace *and* the home
+  page. `user_states.data["profile"]` (no migration, `MAX_PROFILE_CHARS = 8000`, blank clears the key),
+  `GET|PUT /api/state/profile` (`ProfileBody`, both return `max_chars`), `[PROFILE]` block prepended ahead of
+  `[WORKSPACE PROMPT]`, `put_preferences` dropping the key, and a Settings → General card. 16 tests in
+  `tests/test_global_profile.py`; design in `notes/NOTES-global-profile.md`.
 - Workspace notes end to end: dashboard card (`WorkspaceDashboard.svelte`) ⇄ `GET|POST /api/state/workspace/notes`
   and `DELETE …/notes/{id}` ⇄ `workspaces.data["notes"]` ⇄ the `[WORKSPACE NOTES]` prompt block ⇄ the `notes` tool
   group (`list_workspace_notes`, `add_workspace_note`, `approval: allow`, in `GLOBAL_CHAT_DISABLED_TOOLS` because a
@@ -55,6 +83,9 @@ updated: 2026-10-03
 ## Decisions
 - Fix both layers, not just the client: a tab still on the old build, or any other client that echoes, would keep
   clobbering. Rejected: making the client re-read the workspace after a prompt save — hides the race, does not close it.
+- The global profile is **not** part of the preferences blob even though it is stored in the same row: a field whose
+  write is wholesale-autosaved by another surface needs its own endpoint, or the B-019 revert comes back. Rejected:
+  keeping it in prefs and deleting the key client-side on load — fixes one client, and a stale tab would still clobber.
 - Keep `toolServers` in the store type (the client still sends it; the server ignores it) rather than widening this fix.
 
 ## Dead ends
@@ -74,3 +105,6 @@ updated: 2026-10-03
 ## Open
 - The autosave still writes the full layout ~300 ms after every load (a write on read); see `frontend-reactivity.md`.
 - `services` is echoed by other clients the same way; only the layout endpoint's guard covers it today.
+- Both endpoints still do read-modify-write (`get_data` → merge → `save_data`), so two requests interleaving between the
+  read and the write can still lose the other's field — a profile save during the prefs autosave window is the live case.
+  Only true locking closes it; every state endpoint in this file shares it today.

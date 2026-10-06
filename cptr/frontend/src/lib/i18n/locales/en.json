@@ -1503,5 +1503,10 @@
 	"effortSelector.high": "High",
 	"models.effortLevels": "Reasoning effort",
 	"models.effortLevelsAuto": "Automatic",
-	"models.effortLevelsHint": "Automatic lets cptr decide from the model name. Select no levels to remove the effort selector from the composer."
+	"models.effortLevelsHint": "Automatic lets cptr decide from the model name. Select no levels to remove the effort selector from the composer.",
+	"general.profile": "Profile",
+	"general.profileDesc": "Sent at the start of every chat — in every workspace, and on the home page.",
+	"general.profilePlaceholder": "How should chats treat you?",
+	"general.profileEmpty": "No profile yet.",
+	"general.profileSaveFailed": "Failed to save profile"
 }

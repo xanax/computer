@@ -1389,5 +1389,10 @@
 	"effortSelector.high": "Alto",
 	"models.effortLevels": "Esfuerzo de razonamiento",
 	"models.effortLevelsAuto": "Automático",
-	"models.effortLevelsHint": "Automático deja que cptr decida según el nombre del modelo. No selecciones ningún nivel para quitar el selector de esfuerzo del compositor."
+	"models.effortLevelsHint": "Automático deja que cptr decida según el nombre del modelo. No selecciones ningún nivel para quitar el selector de esfuerzo del compositor.",
+	"general.profile": "Perfil",
+	"general.profileDesc": "Se envía al inicio de cada chat, en todos los espacios y en la página de inicio.",
+	"general.profilePlaceholder": "¿Cómo deben tratarte los chats?",
+	"general.profileEmpty": "Aún no hay perfil.",
+	"general.profileSaveFailed": "No se pudo guardar el perfil"
 }

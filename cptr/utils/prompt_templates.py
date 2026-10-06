@@ -67,6 +67,32 @@ async def load_workspace_prompt(user_id: str | None, workspace: str) -> str:
         return ""
 
 
+def format_user_profile(text: str) -> str:
+    """The block the user's global profile is injected as ("" when unset)."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    return f"[PROFILE]\n{text}"
+
+
+async def load_user_profile(user_id: str | None) -> str:
+    """The one prompt that opens every chat this user starts.
+
+    Unlike the workspace prompt this has no workspace to hang off, so it is read
+    from the user's own state — which also means it is the only standing
+    instruction that reaches a home chat, where there is no workspace at all.
+    """
+    if not user_id:
+        return ""
+    try:
+        from cptr.models import UserStates
+
+        return await UserStates.get_profile(user_id)
+    except Exception:
+        logger.debug("[profile] lookup failed", exc_info=True)
+        return ""
+
+
 MAX_NOTES_IN_PROMPT = 20
 MAX_NOTE_CHARS_IN_PROMPT = 500
 
@@ -335,6 +361,7 @@ def _build_template_variables(
     workspace_prompt: str = "",
     workspace_services: str = "",
     workspace_notes: str = "",
+    profile: str = "",
 ) -> dict[str, str]:
     """Build the dict of template variable values for the current context."""
     ws_path = Path(workspace) if workspace else None
@@ -358,6 +385,7 @@ def _build_template_variables(
     return {
         "WORKSPACE_NAME": _workspace_name(ws_path),
         "WORKSPACE_PATH": str(ws_path) if ws_path else "",
+        "PROFILE": format_user_profile(profile),
         "WORKSPACE_PROMPT": format_workspace_prompt(workspace_prompt),
         "WORKSPACE_SERVICES": workspace_services,
         "WORKSPACE_NOTES": workspace_notes,
@@ -483,6 +511,13 @@ async def load_system_prompt(
         else:
             template = "{{WORKSPACE_NOTES}}\n\n" + template.lstrip()
 
+    # The user's global profile is the one thing true of *every* chat they start,
+    # so it leads even the workspace's description. Prepended last because the
+    # workspace blocks above prepend themselves to the front of the template.
+    profile = await load_user_profile(user_id)
+    if profile and "{{PROFILE}}" not in template:
+        template = "{{PROFILE}}\n\n" + template.lstrip()
+
     try:
         skills_enabled = (await Config.get("skills.enabled")) not in (False, "false", "0")
     except Exception:
@@ -508,5 +543,6 @@ async def load_system_prompt(
         workspace_prompt,
         workspace_services,
         workspace_notes,
+        profile,
     )
     return _render_system_template(template, variables)

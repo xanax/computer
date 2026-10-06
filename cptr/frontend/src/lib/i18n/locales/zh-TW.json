@@ -1389,5 +1389,10 @@
 	"effortSelector.high": "高",
 	"models.effortLevels": "推理強度",
 	"models.effortLevelsAuto": "自動",
-	"models.effortLevelsHint": "設為自動時，cptr 會依模型名稱判斷。不選擇任何級別，即可從輸入框移除推理強度選擇器。"
+	"models.effortLevelsHint": "設為自動時，cptr 會依模型名稱判斷。不選擇任何級別，即可從輸入框移除推理強度選擇器。",
+	"general.profile": "個人資料",
+	"general.profileDesc": "在每個工作區以及首頁的每次對話開頭傳送。",
+	"general.profilePlaceholder": "對話應該如何對待你？",
+	"general.profileEmpty": "還沒有個人資料。",
+	"general.profileSaveFailed": "儲存個人資料失敗"
 }

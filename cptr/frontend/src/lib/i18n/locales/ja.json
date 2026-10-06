@@ -1389,5 +1389,10 @@
 	"effortSelector.high": "高",
 	"models.effortLevels": "推論の深さ",
 	"models.effortLevelsAuto": "自動",
-	"models.effortLevelsHint": "自動にすると、cptr がモデル名から判断します。ステージを1つも選択しない場合は、入力欄から推論の深さの選択を削除します。"
+	"models.effortLevelsHint": "自動にすると、cptr がモデル名から判断します。ステージを1つも選択しない場合は、入力欄から推論の深さの選択を削除します。",
+	"general.profile": "プロフィール",
+	"general.profileDesc": "すべてのワークスペースとホーム画面で、各チャットの冒頭に送信されます。",
+	"general.profilePlaceholder": "チャットはあなたをどう扱うべき？",
+	"general.profileEmpty": "プロフィールはまだありません。",
+	"general.profileSaveFailed": "プロフィールを保存できませんでした"
 }

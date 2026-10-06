@@ -1389,5 +1389,10 @@
 	"effortSelector.high": "高",
 	"models.effortLevels": "推理强度",
 	"models.effortLevelsAuto": "自动",
-	"models.effortLevelsHint": "设为自动时，cptr 会根据模型名称判断。不选择任何级别，即可从输入框移除推理强度选择器。"
+	"models.effortLevelsHint": "设为自动时，cptr 会根据模型名称判断。不选择任何级别，即可从输入框移除推理强度选择器。",
+	"general.profile": "个人资料",
+	"general.profileDesc": "在每个工作区以及主页的每次聊天开头发送。",
+	"general.profilePlaceholder": "聊天应该如何对待你？",
+	"general.profileEmpty": "还没有个人资料。",
+	"general.profileSaveFailed": "保存个人资料失败"
 }

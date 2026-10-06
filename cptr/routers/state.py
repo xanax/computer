@@ -136,9 +136,61 @@ async def put_preferences(request: Request):
     if not user_id:
         return {"status": "skipped"}
     body = await request.json()
+    if not isinstance(body, dict):
+        body = {}
+    # The global profile has its own endpoint, and this one is saved wholesale
+    # by a 300 ms autosave from a client that read the blob minutes ago. Letting
+    # the key through would let that echo revert a profile the user had just
+    # typed — the same way a stale layout save used to revert a workspace prompt
+    # (B-019). The stored value always wins here.
+    body.pop("profile", None)
     current = await UserStates.get_data(user_id)
     await UserStates.save_data(user_id, {**current, **body})
     return {"status": "saved"}
+
+
+# ── Global profile ───────────────────────────────────────────────
+#
+# One prompt that opens *every* chat the user starts: every workspace, and the
+# home page with no workspace at all. It is the per-user counterpart of the
+# workspace prompt — written once, read everywhere. Stored in
+# `user_states.data["profile"]`, so it needs no migration.
+
+
+class ProfileBody(BaseModel):
+    profile: str | None = ""
+
+
+@router.get("/profile")
+async def get_profile(request: Request):
+    """Return the user's global profile and the length it is kept to."""
+    from cptr.models.users import MAX_PROFILE_CHARS
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        return {"profile": "", "max_chars": MAX_PROFILE_CHARS}
+    return {
+        "profile": await UserStates.get_profile(user_id),
+        "max_chars": MAX_PROFILE_CHARS,
+    }
+
+
+@router.put("/profile")
+async def put_profile(request: Request, body: ProfileBody):
+    """Set the user's global profile without touching any other preference."""
+    from cptr.models.users import MAX_PROFILE_CHARS
+
+    user_id = await _get_user_id(request)
+    if not user_id:
+        return {"status": "skipped"}
+    profile = UserStates.clean_profile(body.profile)
+    data = await UserStates.get_data(user_id)
+    if profile:
+        data["profile"] = profile
+    else:
+        data.pop("profile", None)
+    await UserStates.save_data(user_id, data)
+    return {"status": "saved", "profile": profile, "max_chars": MAX_PROFILE_CHARS}
 
 
 # ── Workspace list ───────────────────────────────────────────────

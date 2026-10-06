@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import {
 		appVersion,
 		showChangelog,
@@ -10,6 +11,7 @@
 	import type { StreamingBehavior } from '$lib/stores';
 	import { t, locale, changeLocale, supportedLocales } from '$lib/i18n';
 	import { session } from '$lib/session';
+	import { getProfile, saveProfile } from '$lib/apis/state';
 	import ToggleSwitch from '../common/ToggleSwitch.svelte';
 
 	interface Props {
@@ -38,6 +40,62 @@
 
 	let copied = $state(false);
 	let resetting = $state(false);
+
+	// ── Global profile ─────────────────────────────────────────────
+	//
+	// The one prompt that opens *every* chat: every workspace, and the home page.
+	// It is deliberately not part of the preferences blob — that blob is autosaved
+	// wholesale, so a stale echo of it could revert an edit made a moment earlier.
+	let profile = $state('');
+	let profileDraft = $state('');
+	let profileEditing = $state(false);
+	let profileBusy = $state(false);
+	let profileSaved = $state(false);
+	let profileError = $state(false);
+	let profileMax = $state(8000);
+
+	onMount(() => {
+		getProfile()
+			.then((res) => {
+				profile = res.profile ?? '';
+				profileMax = res.max_chars ?? profileMax;
+				if (!profileEditing) profileDraft = profile;
+			})
+			.catch(() => {});
+	});
+
+	function startProfileEdit() {
+		profileDraft = profile;
+		profileSaved = false;
+		profileError = false;
+		profileEditing = true;
+	}
+
+	function cancelProfileEdit() {
+		profileDraft = profile;
+		profileEditing = false;
+		profileSaved = false;
+		profileError = false;
+	}
+
+	async function handleSaveProfile() {
+		if (profileBusy) return;
+		profileBusy = true;
+		profileError = false;
+		try {
+			const res = await saveProfile(profileDraft.trim());
+			profile = res.profile ?? '';
+			profileDraft = profile;
+			profileEditing = false;
+			profileSaved = true;
+			setTimeout(() => (profileSaved = false), 2000);
+		} catch {
+			// Keep the box open with the user's text so the save can be retried.
+			profileError = true;
+		} finally {
+			profileBusy = false;
+		}
+	}
 
 	function copyLink() {
 		navigator.clipboard.writeText(REPO_URL);
@@ -123,6 +181,68 @@
 					{copied ? $t('about.copied') : $t('about.copyLink')}
 				</button>
 			</div>
+		</div>
+
+		<div class="mb-5">
+			<div class="flex items-baseline justify-between gap-2 mb-2">
+				<h3 class="text-xs text-gray-400 dark:text-gray-600">{$t('general.profile')}</h3>
+				<div class="flex items-baseline gap-2">
+					{#if profileSaved}
+						<span class="text-[0.6875rem] text-gray-400 dark:text-gray-600"
+							>{$t('settings.saved')}</span
+						>
+					{/if}
+					{#if !profileEditing}
+						<button
+							class="text-[0.6875rem] text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-300 transition-colors cursor-pointer"
+							onclick={startProfileEdit}
+						>
+							{profile ? $t('common.edit') : $t('common.add')}
+						</button>
+					{/if}
+				</div>
+			</div>
+
+			{#if profileEditing}
+				<textarea
+					class="block w-full rounded-lg border border-gray-200 dark:border-white/10 bg-transparent px-2.5 py-2 text-[0.8125rem] text-gray-700 dark:text-gray-300 placeholder:text-gray-300 dark:placeholder:text-gray-700 outline-none resize-y"
+					rows="5"
+					maxlength={profileMax}
+					bind:value={profileDraft}
+					placeholder={$t('general.profilePlaceholder')}
+				></textarea>
+				<div class="flex items-center gap-2 mt-2">
+					<button
+						class="h-7 px-2.5 rounded-lg text-xs font-medium bg-gray-200/50 dark:bg-white/8 text-gray-900 dark:text-white transition-colors disabled:opacity-40 disabled:pointer-events-none"
+						onclick={handleSaveProfile}
+						disabled={profileBusy}
+					>
+						{$t('common.save')}
+					</button>
+					<button
+						class="h-7 px-2.5 rounded-lg text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+						onclick={cancelProfileEdit}
+						disabled={profileBusy}
+					>
+						{$t('common.cancel')}
+					</button>
+					<span class="ml-auto font-mono text-[0.6875rem] text-gray-400 dark:text-gray-600"
+						>{profileDraft.trim().length}/{profileMax}</span
+					>
+				</div>
+			{:else}
+				<p
+					class="text-[0.8125rem] leading-relaxed whitespace-pre-line {profile
+						? 'text-gray-700 dark:text-gray-300'
+						: 'text-gray-400 dark:text-gray-600'}"
+				>
+					{profile || $t('general.profileEmpty')}
+				</p>
+			{/if}
+
+			<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 mt-1">
+				{profileError ? $t('general.profileSaveFailed') : $t('general.profileDesc')}
+			</p>
 		</div>
 
 		<h3 class="text-xs text-gray-400 dark:text-gray-600 mb-2">{$t('general.language')}</h3>
