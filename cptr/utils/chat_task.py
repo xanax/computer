@@ -1713,6 +1713,35 @@ async def run_chat_task(
         log("[task %s] db save (%s) result: updated=%s", message_id[:8], save_reason, saved)
         return saved
 
+    async def _auto_continue_after_turn() -> None:
+        """Queue the auto-continue follow-up for a *clean* finished turn.
+
+        Called from every clean-completion exit -- the agent target, the
+        Responses/chat-completions stream, and the collected-tool-calls path --
+        because each transport ends the turn its own way and a chat must not
+        stop iterating just because it used a different one.
+
+        Only clean completions reach these call sites: cancels, errors, tool
+        approval waits, ask_user returns and the max-iterations exit all leave
+        earlier, which is exactly the set of turns that must not queue a
+        follow-up. Failures are swallowed so a follow-up can never disturb a
+        turn that already succeeded.
+        """
+        try:
+            from cptr.utils.auto_continue import maybe_queue_auto_continue
+
+            queued = await maybe_queue_auto_continue(
+                chat_id=chat_id,
+                assistant_message_id=message_id,
+                model=msg.model if msg else None,
+                content=content,
+                output_items=output_items,
+            )
+            if queued:
+                logger.info("[task %s] auto-continue: %s", message_id[:8], queued)
+        except Exception:
+            logger.debug("[task %s] auto-continue failed", message_id[:8], exc_info=True)
+
     async def save_session(agent_target: AgentModelTarget, resume_state: dict | None):
         if not resume_state:
             return
@@ -2020,6 +2049,7 @@ async def run_chat_task(
                     message=preview,
                 )
                 task_completed_success = True
+                await _auto_continue_after_turn()
                 return
 
         flushed_item = _flush_text()
@@ -2659,6 +2689,7 @@ async def run_chat_task(
                             message=preview,
                         )
                         task_completed_success = True
+                        await _auto_continue_after_turn()
                         return
 
             # ── Process collected tool calls ────────────────────
@@ -2995,24 +3026,7 @@ async def run_chat_task(
                     message=preview,
                 )
                 task_completed_success = True
-                # Auto-continue: the only exit that counts. Cancels, errors and
-                # max-iterations all leave before here, and so do the
-                # tool-approval and ask_user returns above, which is exactly the
-                # set of turns that must not queue a follow-up.
-                try:
-                    from cptr.utils.auto_continue import maybe_queue_auto_continue
-
-                    queued = await maybe_queue_auto_continue(
-                        chat_id=chat_id,
-                        assistant_message_id=message_id,
-                        model=msg.model if msg else None,
-                        content=content,
-                        output_items=output_items,
-                    )
-                    if queued:
-                        logger.info("[task %s] auto-continue: %s", message_id[:8], queued)
-                except Exception:
-                    logger.debug("[task %s] auto-continue failed", message_id[:8], exc_info=True)
+                await _auto_continue_after_turn()
                 return
 
         # Max iterations reached

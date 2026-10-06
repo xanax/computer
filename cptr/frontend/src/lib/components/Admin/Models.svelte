@@ -28,8 +28,26 @@
 		systemPrompt: string;
 		compactTokenThreshold: number | null;
 		builtinTools: BuiltinToolsConfig;
+		/**
+		 * Reasoning-effort levels this model takes. `null` = not configured, so the
+		 * server heuristic decides; `[]` = explicitly none, which is how a model the
+		 * heuristic would guess at gets the composer's dropdown removed.
+		 */
+		effortLevels: string[] | null;
+		/** Wire key for the effort value, for a provider this build doesn't know. */
+		effortParam: string;
 		dirty: boolean;
 	};
+
+	// The named levels a model can accept, in the order the dropdown shows them.
+	// Mirrors NAMED_LEVELS in cptr/utils/effort.py.
+	const EFFORT_LEVEL_OPTIONS = ['minimal', 'low', 'medium', 'high'] as const;
+
+	function parseEffortLevels(mc: any): string[] | null {
+		const raw = mc?.effort_levels;
+		if (!Array.isArray(raw)) return null;
+		return raw.filter((level: unknown) => EFFORT_LEVEL_OPTIONS.includes(level as any));
+	}
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -236,6 +254,9 @@ Files:
 				systemPrompt: (mc?.params as any)?.system_prompt || '',
 				compactTokenThreshold: parseCompactTokenThreshold(mc),
 				builtinTools: parseBuiltinTools(mc),
+				effortLevels: parseEffortLevels(mc),
+				effortParam:
+					typeof mc?.reasoning_effort_param === 'string' ? mc.reasoning_effort_param : '',
 				dirty: false
 			};
 		});
@@ -341,7 +362,11 @@ Files:
 								model.compactTokenThreshold,
 								model.builtinTools,
 								globalBuiltinTools
-							)
+							),
+							// `null` leaves the server heuristic in charge; `[]` removes the
+							// dropdown. Both are meaningful, so both are sent.
+							effort_levels: model.effortLevels ?? undefined,
+							reasoning_effort_param: model.effortParam.trim() || ''
 						})
 					);
 				}
@@ -484,6 +509,57 @@ Files:
 				>{$t('admin.compactTokenThresholdUnit')}</span
 			>
 		</div>
+	</div>
+{/snippet}
+
+{#snippet effortLevelsField(
+	levels: string[] | null,
+	onChange: (levels: string[] | null) => void
+)}
+	<div class="mb-2">
+		<label class="text-[0.625rem] text-gray-400 dark:text-gray-600 uppercase tracking-wide">
+			{$t('models.effortLevels')}
+		</label>
+		<div class="flex flex-wrap items-center gap-1.5 mt-1">
+			{#each EFFORT_LEVEL_OPTIONS as level (level)}
+				<button
+					type="button"
+					class="px-1.5 h-6 rounded-lg text-[0.6875rem] border transition-colors duration-75 {levels?.includes(
+						level
+					)
+						? 'border-blue-400 dark:border-blue-500 text-blue-600 dark:text-blue-400'
+						: 'border-gray-200 dark:border-white/8 text-gray-400 dark:text-gray-600 hover:border-gray-300 dark:hover:border-white/15'}"
+					onclick={() => {
+						if (levels === null) {
+							// First click starts from "server decides": take the full
+							// set, then remove the one just clicked.
+							onChange(EFFORT_LEVEL_OPTIONS.filter((option) => option !== level));
+							return;
+						}
+						const next = levels.includes(level)
+							? levels.filter((option) => option !== level)
+							: [...levels, level];
+						// Back to empty means "no effort knob", which is [] and not null:
+						// null would hand the decision back to the heuristic.
+						onChange(next);
+					}}
+				>
+					{$t(`effortSelector.${level}`)}
+				</button>
+			{/each}
+			{#if levels !== null}
+				<button
+					type="button"
+					class="text-[0.625rem] text-gray-400 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 transition-colors duration-75 underline"
+					onclick={() => onChange(null)}
+				>
+					{$t('models.effortLevelsAuto')}
+				</button>
+			{/if}
+		</div>
+		<p class="text-[0.625rem] text-gray-400 dark:text-gray-600 mt-1">
+			{$t('models.effortLevelsHint')}
+		</p>
 	</div>
 {/snippet}
 
@@ -646,6 +722,13 @@ Files:
 						model.compactTokenThreshold,
 						(value) => {
 							model.compactTokenThreshold = value;
+							model.dirty = true;
+						}
+					)}
+					{@render effortLevelsField(
+						model.effortLevels,
+						(value) => {
+							model.effortLevels = value;
 							model.dirty = true;
 						}
 					)}

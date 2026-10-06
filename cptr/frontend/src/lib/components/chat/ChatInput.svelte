@@ -22,7 +22,9 @@
 	import { getSkills } from '$lib/apis/skills';
 	import { uploadFile } from '$lib/apis/files';
 	import type { ChatTask, ContextUsage } from '$lib/apis/chat';
+	import { chatModels } from '$lib/stores/chat';
 	import ModelSelector from '../common/ModelSelector.svelte';
+	import EffortSelector from '../common/EffortSelector.svelte';
 	import SendButton from './SendButton.svelte';
 	import PlusMenu from './PlusMenu.svelte';
 	import DictateButton from './DictateButton.svelte';
@@ -30,7 +32,7 @@
 	import Tasks from './Tasks.svelte';
 	import AskUserCard from './AskUserCard.svelte';
 	import Icon from '../Icon.svelte';
-	import type { ToolApprovalMode } from '$lib/apis/chat';
+	import type { ToolApprovalMode, AutoContinueConfig } from '$lib/apis/chat';
 	import {
 		sttConfigured,
 		ttsConfigured,
@@ -69,6 +71,9 @@
 		toolApprovalMode?: ToolApprovalMode;
 		planMode?: boolean;
 		requestParams?: Record<string, unknown>;
+		/** Named reasoning-effort level; null/undefined means the provider default. */
+		effort?: string | null;
+		autoContinue?: AutoContinueConfig;
 		voiceModeEnabled?: boolean;
 		sending: boolean;
 		streaming?: boolean;
@@ -105,6 +110,8 @@
 		toolApprovalMode = $bindable('auto'),
 		planMode = $bindable(false),
 		requestParams = $bindable({}),
+		effort = $bindable(null),
+		autoContinue = $bindable({ enabled: false }),
 		voiceModeEnabled = $bindable(false),
 		sending,
 		streaming = false,
@@ -396,8 +403,7 @@
 	let cachedSkillsWorkspace = '';
 	let activeSlashRange = $state<{ from: number; to: number } | null>(null);
 	type SlashSuggestionItem =
-		| { kind: 'command'; id: string }
-		| { kind: 'skill'; id: string; skill: SkillMentionAttrs };
+		{ kind: 'command'; id: string } | { kind: 'skill'; id: string; skill: SkillMentionAttrs };
 	let slashSuggestionItems = $state<SlashSuggestionItem[]>([]);
 	let slashCommandsEl: HTMLDivElement | undefined = $state();
 
@@ -1223,6 +1229,15 @@
 
 	// Allow sending during streaming (message will be enqueued server-side)
 	const canSend = $derived(!!(inputText.trim() && selectedModel && !sending));
+
+	//
+	// Effort levels for the selected model. The list is resolved server-side
+	// per (connection, model) — see cptr/utils/effort.py — and an empty list
+	// (or a lone 'default') makes EffortSelector render nothing, so a model
+	// without an effort knob shows no dropdown at all.
+	const effortLevels = $derived(
+		$chatModels.find((m) => m.id === selectedModel)?.effort_levels ?? []
+	);
 </script>
 
 <div
@@ -1676,6 +1691,7 @@
 					bind:toolApprovalMode
 					bind:planMode
 					bind:requestParams
+					bind:autoContinue
 					onchange={onsettingschange}
 					{ontoolapprovalchange}
 					onfiles={(files) => {
@@ -1745,6 +1761,12 @@
 				<ModelSelector
 					bind:this={modelSelector}
 					bind:selectedModel
+					onchange={onsettingschange}
+					onclose={focusAfterModelSelectorClose}
+				/>
+				<EffortSelector
+					bind:selected={effort}
+					levels={effortLevels}
 					onchange={onsettingschange}
 					onclose={focusAfterModelSelectorClose}
 				/>

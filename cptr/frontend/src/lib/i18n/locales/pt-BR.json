@@ -1260,8 +1260,7 @@
 	"dashboard.deferManualHint": "Nada é executado: a linha espera por você.",
 	"dashboard.reminderWaiting": "esperando por você",
 	"dashboard.reminderDue": "é agora",
-	"connections.providerType": "Tipo de provedor"
-,
+	"connections.providerType": "Tipo de provedor",
 	"tasks.title": "Tarefas",
 	"tasks.manage": "Tarefas",
 	"tasks.toggleSidebar": "Alternar barra lateral",
@@ -1306,8 +1305,7 @@
 	"tasks.failedToReview": "Falha ao atualizar a tarefa",
 	"tasks.failedToCancel": "Falha ao parar a tarefa",
 	"tasks.failedToDelete": "Falha ao excluir",
-	"tasks.failedToCreate": "Falha ao salvar automação"
-,
+	"tasks.failedToCreate": "Falha ao salvar automação",
 	"dashboard.title": "Painel",
 	"dashboard.backToWorkspace": "Voltar ao espaço de trabalho",
 	"dashboard.newChat": "Novo chat",
@@ -1347,8 +1345,7 @@
 	"dashboard.jobStop": "Parar a execução",
 	"dashboard.jobClearRun": "Limpar a execução agendada",
 	"dashboard.jobDismissRun": "Descartar esta execução concluída",
-	"dashboard.jobOpenRun": "Abrir o chat da execução"
-,
+	"dashboard.jobOpenRun": "Abrir o chat da execução",
 	"tasks.schedule": "Agendamento",
 	"tasks.once": "Uma vez",
 	"tasks.hourly": "A cada hora",
@@ -1365,13 +1362,11 @@
 	"tasks.dayFr": "Sex",
 	"tasks.daySa": "Sáb",
 	"tasks.daySu": "Dom",
-	"tasks.model": "Modelo"
-,
+	"tasks.model": "Modelo",
 	"dashboard.promptTitle": "Prompt do espaço",
 	"dashboard.promptHint": "Mostrado aqui e enviado no início de cada chat neste espaço.",
 	"dashboard.promptPlaceholder": "Para que serve este espaço?",
-	"dashboard.promptEmpty": "Ainda sem prompt."
-,
+	"dashboard.promptEmpty": "Ainda sem prompt.",
 	"dashboard.notesTitle": "Notas",
 	"dashboard.notesHint": "Enviadas a cada chat deste espaço — o agente também pode adicionar as suas notas.",
 	"dashboard.notesPlaceholder": "Uma nota para o próximo chat aqui",
@@ -1380,5 +1375,19 @@
 	"dashboard.notesByAgent": "de um chat",
 	"dashboard.notesByYou": "você",
 	"sidebar.showMoreCount": "Mostrar mais ({{count}})",
-	"sidebar.showFewer": "Mostrar menos"
+	"sidebar.showFewer": "Mostrar menos",
+	"plusMenu.autoContinue": "Continuação automática",
+	"plusMenu.autoContinueRuns": "Máximo de iterações",
+	"plusMenu.autoContinueRunsHint": "pedidos seguidos",
+	"plusMenu.autoContinuePrompt": "Instrução de continuação",
+	"plusMenu.autoContinuePromptPlaceholder": "usa o texto padrão",
+	"effortSelector.title": "Esforço de raciocínio",
+	"effortSelector.default": "Padrão",
+	"effortSelector.minimal": "Mínimo",
+	"effortSelector.low": "Baixo",
+	"effortSelector.medium": "Médio",
+	"effortSelector.high": "Alto",
+	"models.effortLevels": "Esforço de raciocínio",
+	"models.effortLevelsAuto": "Automático",
+	"models.effortLevelsHint": "Automático deixa o cptr decidir pelo nome do modelo. Não selecione nenhum nível para remover o seletor de esforço do campo de mensagem."
 }

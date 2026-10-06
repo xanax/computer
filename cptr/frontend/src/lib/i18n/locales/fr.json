@@ -1260,8 +1260,7 @@
 	"dashboard.deferManualHint": "Rien ne s'exécute : la ligne vous attend.",
 	"dashboard.reminderWaiting": "vous attend",
 	"dashboard.reminderDue": "à faire maintenant",
-	"connections.providerType": "Type de fournisseur"
-,
+	"connections.providerType": "Type de fournisseur",
 	"tasks.title": "Tâches",
 	"tasks.manage": "Tâches",
 	"tasks.toggleSidebar": "Afficher/masquer la barre latérale",
@@ -1306,8 +1305,7 @@
 	"tasks.failedToReview": "Impossible de mettre à jour la tâche",
 	"tasks.failedToCancel": "Impossible d'arrêter la tâche",
 	"tasks.failedToDelete": "Échec de la suppression",
-	"tasks.failedToCreate": "Échec de la sauvegarde de l'automatisation"
-,
+	"tasks.failedToCreate": "Échec de la sauvegarde de l'automatisation",
 	"dashboard.title": "Tableau de bord",
 	"dashboard.backToWorkspace": "Retour à l’espace de travail",
 	"dashboard.newChat": "Nouveau chat",
@@ -1347,8 +1345,7 @@
 	"dashboard.jobStop": "Arrêter l'exécution",
 	"dashboard.jobClearRun": "Effacer l’exécution planifiée",
 	"dashboard.jobDismissRun": "Masquer cette exécution terminée",
-	"dashboard.jobOpenRun": "Ouvrir la conversation de l’exécution"
-,
+	"dashboard.jobOpenRun": "Ouvrir la conversation de l’exécution",
 	"tasks.schedule": "Planification",
 	"tasks.once": "Une fois",
 	"tasks.hourly": "Toutes les heures",
@@ -1365,13 +1362,11 @@
 	"tasks.dayFr": "Ve",
 	"tasks.daySa": "Sam",
 	"tasks.daySu": "Di",
-	"tasks.model": "Modèle"
-,
+	"tasks.model": "Modèle",
 	"dashboard.promptTitle": "Invite de l’espace",
 	"dashboard.promptHint": "Affiché ici et envoyé au début de chaque conversation de cet espace.",
 	"dashboard.promptPlaceholder": "À quoi sert cet espace ?",
-	"dashboard.promptEmpty": "Pas encore d’invite."
-,
+	"dashboard.promptEmpty": "Pas encore d’invite.",
 	"dashboard.notesTitle": "Notes",
 	"dashboard.notesHint": "Envoyées à chaque conversation de cet espace — l’agent peut y ajouter ses propres notes.",
 	"dashboard.notesPlaceholder": "Une note pour la prochaine conversation",
@@ -1380,5 +1375,19 @@
 	"dashboard.notesByAgent": "depuis une conversation",
 	"dashboard.notesByYou": "vous",
 	"sidebar.showMoreCount": "Afficher plus ({{count}})",
-	"sidebar.showFewer": "Afficher moins"
+	"sidebar.showFewer": "Afficher moins",
+	"plusMenu.autoContinue": "Poursuite automatique",
+	"plusMenu.autoContinueRuns": "Nombre max d’itérations",
+	"plusMenu.autoContinueRunsHint": "relances successives",
+	"plusMenu.autoContinuePrompt": "Invite de relance",
+	"plusMenu.autoContinuePromptPlaceholder": "le texte par défaut est utilisé",
+	"effortSelector.title": "Effort de raisonnement",
+	"effortSelector.default": "Par défaut",
+	"effortSelector.minimal": "Minimal",
+	"effortSelector.low": "Faible",
+	"effortSelector.medium": "Moyen",
+	"effortSelector.high": "Élevé",
+	"models.effortLevels": "Effort de raisonnement",
+	"models.effortLevelsAuto": "Automatique",
+	"models.effortLevelsHint": "En mode automatique, cptr décide d'après le nom du modèle. Ne sélectionnez aucun niveau pour retirer le sélecteur d'effort de la zone de saisie."
 }

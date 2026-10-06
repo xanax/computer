@@ -430,6 +430,12 @@ export interface ChatModel {
 	name: string;
 	provider: string;
 	connection_id: string;
+	/**
+	 * Reasoning-effort levels this model accepts, empty when it takes none.
+	 * Resolved server-side from the model id, the connection and the admin
+	 * `chat.models` config — see cptr/utils/effort.py.
+	 */
+	effort_levels?: string[];
 }
 
 export const chatModels = writable<ChatModel[]>([]);
@@ -440,7 +446,9 @@ export async function refreshChatState() {
 		const data = await fetchJSON<{ models: ChatModel[]; default: string | null }>(
 			'/api/chats/models'
 		);
-		chatModels.set(data.models);
+		// A server predating the effort selector sends no levels; normalise to
+		// an empty array so consumers can index it without a guard.
+		chatModels.set(data.models.map((model) => ({ ...model, effort_levels: model.effort_levels ?? [] })));
 		defaultModel.set(data.default);
 		chatEnabled.set(data.models.length > 0);
 	} catch {

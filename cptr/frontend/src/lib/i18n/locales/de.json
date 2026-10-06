@@ -1260,8 +1260,7 @@
 	"dashboard.deferManualHint": "Es läuft nichts – die Aufgabe wartet auf dich.",
 	"dashboard.reminderWaiting": "wartet auf dich",
 	"dashboard.reminderDue": "jetzt fällig",
-	"connections.providerType": "Anbietertyp"
-,
+	"connections.providerType": "Anbietertyp",
 	"tasks.title": "Aufgaben",
 	"tasks.manage": "Aufgaben",
 	"tasks.toggleSidebar": "Seitenleiste umschalten",
@@ -1306,8 +1305,7 @@
 	"tasks.failedToReview": "Aufgabe konnte nicht aktualisiert werden",
 	"tasks.failedToCancel": "Aufgabe konnte nicht gestoppt werden",
 	"tasks.failedToDelete": "Löschen fehlgeschlagen",
-	"tasks.failedToCreate": "Automatisierung konnte nicht gespeichert werden"
-,
+	"tasks.failedToCreate": "Automatisierung konnte nicht gespeichert werden",
 	"dashboard.title": "Dashboard",
 	"dashboard.backToWorkspace": "Zurück zum Arbeitsbereich",
 	"dashboard.newChat": "Neuer Chat",
@@ -1347,8 +1345,7 @@
 	"dashboard.jobStop": "Lauf stoppen",
 	"dashboard.jobClearRun": "Geplanten Lauf löschen",
 	"dashboard.jobDismissRun": "Diesen beendeten Lauf ausblenden",
-	"dashboard.jobOpenRun": "Chat des Laufs öffnen"
-,
+	"dashboard.jobOpenRun": "Chat des Laufs öffnen",
 	"tasks.schedule": "Zeitplan",
 	"tasks.once": "Einmal",
 	"tasks.hourly": "Stündlich",
@@ -1365,13 +1362,11 @@
 	"tasks.dayFr": "Fr.",
 	"tasks.daySa": "Sa.",
 	"tasks.daySu": "So",
-	"tasks.model": "Modell"
-,
+	"tasks.model": "Modell",
 	"dashboard.promptTitle": "Prompt des Arbeitsbereichs",
 	"dashboard.promptHint": "Erscheint hier und wird am Anfang jedes Chats in diesem Arbeitsbereich gesendet.",
 	"dashboard.promptPlaceholder": "Wofür ist dieser Arbeitsbereich?",
-	"dashboard.promptEmpty": "Noch kein Prompt."
-,
+	"dashboard.promptEmpty": "Noch kein Prompt.",
 	"dashboard.notesTitle": "Notizen",
 	"dashboard.notesHint": "Wird an jeden Chat in diesem Arbeitsbereich gesendet – der Agent kann eigene Notizen hinzufügen.",
 	"dashboard.notesPlaceholder": "Eine Notiz für den nächsten Chat hier",
@@ -1380,5 +1375,19 @@
 	"dashboard.notesByAgent": "aus einem Chat",
 	"dashboard.notesByYou": "von dir",
 	"sidebar.showMoreCount": "Mehr anzeigen ({{count}})",
-	"sidebar.showFewer": "Weniger anzeigen"
+	"sidebar.showFewer": "Weniger anzeigen",
+	"plusMenu.autoContinue": "Auto-Fortsetzung",
+	"plusMenu.autoContinueRuns": "Höchstzahl an Durchläufen",
+	"plusMenu.autoContinueRunsHint": "nacheinander folgende Aufforderungen",
+	"plusMenu.autoContinuePrompt": "Folgeaufforderung",
+	"plusMenu.autoContinuePromptPlaceholder": "Standardtext wird verwendet",
+	"effortSelector.title": "Denkaufwand",
+	"effortSelector.default": "Standard",
+	"effortSelector.minimal": "Minimal",
+	"effortSelector.low": "Niedrig",
+	"effortSelector.medium": "Mittel",
+	"effortSelector.high": "Hoch",
+	"models.effortLevels": "Denkaufwand",
+	"models.effortLevelsAuto": "Automatisch",
+	"models.effortLevelsHint": "Automatisch lässt cptr anhand des Modellnamens entscheiden. Wähle keine Stufe aus, um die Auswahl im Eingabefeld zu entfernen."
 }

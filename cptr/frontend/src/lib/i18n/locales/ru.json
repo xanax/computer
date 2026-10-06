@@ -1260,8 +1260,7 @@
 	"dashboard.deferManualHint": "Ничего не запускается — дело ждёт вас.",
 	"dashboard.reminderWaiting": "ждёт вас",
 	"dashboard.reminderDue": "пора делать",
-	"connections.providerType": "Тип провайдера"
-,
+	"connections.providerType": "Тип провайдера",
 	"tasks.title": "Задачи",
 	"tasks.manage": "Задачи",
 	"tasks.toggleSidebar": "Переключить боковую панель",
@@ -1306,8 +1305,7 @@
 	"tasks.failedToReview": "Не удалось обновить задачу",
 	"tasks.failedToCancel": "Не удалось остановить задачу",
 	"tasks.failedToDelete": "Не удалось удалить",
-	"tasks.failedToCreate": "Не удалось сохранить автоматизацию"
-,
+	"tasks.failedToCreate": "Не удалось сохранить автоматизацию",
 	"dashboard.title": "Панель",
 	"dashboard.backToWorkspace": "Назад в рабочую область",
 	"dashboard.newChat": "Новый чат",
@@ -1347,8 +1345,7 @@
 	"dashboard.jobStop": "Остановить запуск",
 	"dashboard.jobClearRun": "Очистить запуск по расписанию",
 	"dashboard.jobDismissRun": "Убрать завершённый запуск",
-	"dashboard.jobOpenRun": "Открыть чат запуска"
-,
+	"dashboard.jobOpenRun": "Открыть чат запуска",
 	"tasks.schedule": "Расписание",
 	"tasks.once": "Один раз",
 	"tasks.hourly": "Ежечасно",
@@ -1365,13 +1362,11 @@
 	"tasks.dayFr": "Пт",
 	"tasks.daySa": "Сб",
 	"tasks.daySu": "Вс",
-	"tasks.model": "Модель"
-,
+	"tasks.model": "Модель",
 	"dashboard.promptTitle": "Промпт рабочего пространства",
 	"dashboard.promptHint": "Показывается здесь и отправляется в начале каждого чата в этом пространстве.",
 	"dashboard.promptPlaceholder": "Для чего это пространство?",
-	"dashboard.promptEmpty": "Промпта пока нет."
-,
+	"dashboard.promptEmpty": "Промпта пока нет.",
 	"dashboard.notesTitle": "Заметки",
 	"dashboard.notesHint": "Отправляются в каждый чат этого пространства — агент может добавлять свои заметки.",
 	"dashboard.notesPlaceholder": "Заметка для следующего чата здесь",
@@ -1380,5 +1375,19 @@
 	"dashboard.notesByAgent": "из чата",
 	"dashboard.notesByYou": "вы",
 	"sidebar.showMoreCount": "Показать ещё ({{count}})",
-	"sidebar.showFewer": "Показать меньше"
+	"sidebar.showFewer": "Показать меньше",
+	"plusMenu.autoContinue": "Автопродолжение",
+	"plusMenu.autoContinueRuns": "Максимум итераций",
+	"plusMenu.autoContinueRunsHint": "повторных запросов подряд",
+	"plusMenu.autoContinuePrompt": "Текст продолжения",
+	"plusMenu.autoContinuePromptPlaceholder": "используется текст по умолчанию",
+	"effortSelector.title": "Глубина рассуждений",
+	"effortSelector.default": "По умолчанию",
+	"effortSelector.minimal": "Минимум",
+	"effortSelector.low": "Низкий",
+	"effortSelector.medium": "Средний",
+	"effortSelector.high": "Высокий",
+	"models.effortLevels": "Глубина рассуждений",
+	"models.effortLevelsAuto": "Автоматически",
+	"models.effortLevelsHint": "В автоматическом режиме cptr определяет уровень по названию модели. Не выбирайте ни одного уровня, чтобы убрать выбор глубины из поля ввода."
 }

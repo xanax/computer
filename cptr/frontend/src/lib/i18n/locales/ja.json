@@ -1260,8 +1260,7 @@
 	"dashboard.deferManualHint": "実行はされず、この行はあなたを待ちます。",
 	"dashboard.reminderWaiting": "あなた待ち",
 	"dashboard.reminderDue": "そろそろです",
-	"connections.providerType": "プロバイダーの種類"
-,
+	"connections.providerType": "プロバイダーの種類",
 	"tasks.title": "タスク",
 	"tasks.manage": "タスク",
 	"tasks.toggleSidebar": "サイドバーを切り替え",
@@ -1306,8 +1305,7 @@
 	"tasks.failedToReview": "タスクを更新できませんでした",
 	"tasks.failedToCancel": "タスクを停止できませんでした",
 	"tasks.failedToDelete": "削除に失敗しました",
-	"tasks.failedToCreate": "自動化の保存に失敗しました"
-,
+	"tasks.failedToCreate": "自動化の保存に失敗しました",
 	"dashboard.title": "ダッシュボード",
 	"dashboard.backToWorkspace": "ワークスペースに戻る",
 	"dashboard.newChat": "新しいチャット",
@@ -1347,8 +1345,7 @@
 	"dashboard.jobStop": "実行を停止",
 	"dashboard.jobClearRun": "予定された実行を消去",
 	"dashboard.jobDismissRun": "完了した実行を消す",
-	"dashboard.jobOpenRun": "実行のチャットを開く"
-,
+	"dashboard.jobOpenRun": "実行のチャットを開く",
 	"tasks.schedule": "スケジュール",
 	"tasks.once": "1回",
 	"tasks.hourly": "毎時",
@@ -1365,13 +1362,11 @@
 	"tasks.dayFr": "金",
 	"tasks.daySa": "土",
 	"tasks.daySu": "日",
-	"tasks.model": "モデル"
-,
+	"tasks.model": "モデル",
 	"dashboard.promptTitle": "ワークスペースのプロンプト",
 	"dashboard.promptHint": "ここに表示され、このワークスペースのすべてのチャットの冒頭で送信されます。",
 	"dashboard.promptPlaceholder": "このワークスペースは何のため？",
-	"dashboard.promptEmpty": "プロンプトはまだありません。"
-,
+	"dashboard.promptEmpty": "プロンプトはまだありません。",
 	"dashboard.notesTitle": "ノート",
 	"dashboard.notesHint": "このワークスペースのすべてのチャットに送信されます。エージェントも自分のノートを追加できます。",
 	"dashboard.notesPlaceholder": "次のチャットへのメモ",
@@ -1380,5 +1375,19 @@
 	"dashboard.notesByAgent": "チャットから",
 	"dashboard.notesByYou": "あなた",
 	"sidebar.showMoreCount": "もっと見る（{{count}}）",
-	"sidebar.showFewer": "表示を減らす"
+	"sidebar.showFewer": "表示を減らす",
+	"plusMenu.autoContinue": "自動継続",
+	"plusMenu.autoContinueRuns": "最大反復回数",
+	"plusMenu.autoContinueRunsHint": "連続する追加プロンプトの数",
+	"plusMenu.autoContinuePrompt": "継続プロンプト",
+	"plusMenu.autoContinuePromptPlaceholder": "空欄なら既定の文を使います",
+	"effortSelector.title": "推論の深さ",
+	"effortSelector.default": "デフォルト",
+	"effortSelector.minimal": "最小",
+	"effortSelector.low": "低",
+	"effortSelector.medium": "中",
+	"effortSelector.high": "高",
+	"models.effortLevels": "推論の深さ",
+	"models.effortLevelsAuto": "自動",
+	"models.effortLevelsHint": "自動にすると、cptr がモデル名から判断します。ステージを1つも選択しない場合は、入力欄から推論の深さの選択を削除します。"
 }

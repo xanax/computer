@@ -182,6 +182,16 @@ export interface ModelConfigEntry {
 		compact_token_threshold?: number;
 		builtin_tools?: Record<string, boolean> | null;
 	};
+	/**
+	 * Reasoning-effort capability override. `undefined` = not configured, so the
+	 * server heuristic decides; `[]` = the model takes no effort knob. Read by
+	 * cptr/utils/effort.py.
+	 */
+	effort_levels?: string[];
+	/** Rename the wire key, for a provider this build doesn't know about. */
+	reasoning_effort_param?: string;
+	/** Anthropic thinking budget in output tokens, overriding the level table. */
+	anthropic_thinking_budget?: number;
 }
 
 export interface ModelConfigResponse {
@@ -204,7 +214,18 @@ export const refreshModelList = async (): Promise<ModelConfigResponse> =>
 
 export const updateModelConfig = (
 	modelId: string,
-	update: { is_active?: boolean; params?: Record<string, unknown> }
+	update: {
+		is_active?: boolean;
+		params?: Record<string, unknown>;
+		/**
+		 * Reasoning-effort capability override. `undefined` leaves the server
+		 * heuristic in charge; `[]` means the model takes no effort knob.
+		 * See cptr/utils/effort.py.
+		 */
+		effort_levels?: string[];
+		/** Rename the wire key, for a provider this build doesn't know about. */
+		reasoning_effort_param?: string;
+	}
 ) =>
 	fetchJSON(`/api/admin/models/${encodeURIComponent(modelId)}/config`, {
 		...jsonBody(update),

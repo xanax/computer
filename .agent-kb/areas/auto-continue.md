@@ -66,6 +66,33 @@ static follow-up user prompt so the agent starts another round on its own.
   already outstanding and decline rather than forking the chat into two racing
   branches.
 
+## Three clean exits, not one (fixed)
+
+The first cut wired the hook into a single `task_completed_success = True` site
+and called it "the only exit that counts". There are **three**, one per
+transport, and each ends the turn its own way:
+
+| Site | Transport |
+| --- | --- |
+| `_run_agent_target` (~line 2052) | agent target / SDK |
+| inside the `event["type"] == "done"` branch (~2692) | Responses / chat-completions stream |
+| after the iteration loop (~3029) | collected-tool-calls path |
+
+Consequence of the miss: auto-continue was **silently dead on two of the three
+providers** — no error, no log, the chat just stopped iterating depending on
+which transport you happened to use. All three now call one shared
+`_auto_continue_after_turn()` closure defined next to `_save_message`.
+
+- Grep for `task_completed_success = True` (there are exactly 3) whenever you
+  touch completion. A fourth exit appearing later must get the hook too.
+- `tests/test_auto_continue_wiring.py` asserts the invariant structurally (AST,
+  not behaviour): each clean exit is within 4 lines of a helper call. Behavioural
+  tests cannot see this, because the failure mode is a *missing* call site.
+- Verify the guard bites by deleting one hook and re-running; it fails with
+  `assert not [2051]`.
+- The helper swallows its own exceptions, so a broken follow-up can never
+  disturb a turn that already succeeded.
+
 ## Dead ends
 - Do not look for a place to schedule a delayed re-send; `process_pending_chat_inputs`
   in the task `finally` already covers the whole loop.
@@ -83,3 +110,14 @@ static follow-up user prompt so the agent starts another round on its own.
 - The 10 locale files are edited by **text append**, not a JSON round-trip;
   `json.loads` on the patched text must be asserted, which is what caught a
   trailing-comma bug before it hit a real file.
+- Don't trust a passing test suite as proof of coverage. The queueing decision
+  shipped with 25 green tests that were **all pure-helper tests**; nothing
+  exercised `maybe_queue_auto_continue` against a DB. `tests/test_auto_continue_db.py`
+  now does, and `scripts/mutate-auto-continue.py` proves it bites (7/7 mutants
+  killed: run cap, cap off-by-one, stacking, internal-chat, stop phrase, enabled
+  flag, custom prompt). Re-run the mutator after touching any guard.
+- `Chat.update_meta` defaults to `updated_at=0`, which **zeroes** the column
+  rather than leaving it. Any state write must pass `now_ms()`. Guarded by
+  `test_reset_does_not_zero_updated_at`.
+- `_write_state` merges into existing `meta`; it must not replace it, or a
+  queued prompt drops `params`, `last_model` and anything else the chat holds.

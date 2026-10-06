@@ -20,6 +20,7 @@
 		type ChatMessageRow,
 		type ChatSendParams,
 		type ChatInfo,
+		type AutoContinueConfig,
 		type ToolApprovalMode,
 		type ContextUsage,
 		type ChatTask
@@ -105,6 +106,11 @@
 	let toolApprovalMode = $state<ToolApprovalMode>('auto');
 	let planMode = $state(false);
 	let requestParams = $state<Record<string, unknown>>({});
+	// Named reasoning-effort level for this chat. Resolved to a provider body
+	// fragment server-side (cptr/utils/effort.py), so nothing here is
+	// provider-specific. null = the provider's own default.
+	let effort = $state<string | null>(null);
+	let autoContinue = $state<AutoContinueConfig>({ enabled: false });
 	let voiceModeEnabled = $state(false);
 	let allMessages = $state<ChatMessageRow[]>([]);
 	const pendingAskUser = $derived.by(() => {
@@ -834,6 +840,8 @@
 		toolApprovalMode = get(defaultToolApprovalMode);
 		planMode = false;
 		requestParams = {};
+		effort = null;
+		autoContinue = { enabled: false };
 		voiceModeEnabled = false;
 	}
 
@@ -849,9 +857,23 @@
 			toolApprovalMode = params.tool_approval_mode;
 		}
 		planMode = params.plan_mode === true;
+		autoContinue =
+			params.auto_continue && typeof params.auto_continue === 'object'
+				? (params.auto_continue as AutoContinueConfig)
+				: { enabled: false };
 		if (params.request_params && typeof params.request_params === 'object') {
 			requestParams = params.request_params;
 		}
+		// Only restore a level the model still offers, so switching to a model
+		// without an effort knob cannot resurrect a stale value that would then be
+		// sent for a model that has no such parameter.
+		effort =
+			typeof params.effort === 'string' &&
+			get(chatModels)
+				.find((m) => m.id === (meta?.last_model ?? selectedModel))
+				?.effort_levels?.includes(params.effort)
+				? params.effort
+				: null;
 		voiceModeEnabled = params.voice_mode === true;
 		const models = get(chatModels);
 		if (
@@ -1163,8 +1185,10 @@
 		const params: ChatSendParams = {
 			tool_approval_mode: toolApprovalMode,
 			plan_mode: planMode,
-			request_params: requestParams
+			request_params: requestParams,
+			auto_continue: autoContinue
 		};
+		if (effort) params.effort = effort;
 		if (voiceModeEnabled) params.voice_mode = true;
 		return params;
 	}
@@ -2112,6 +2136,8 @@
 					bind:toolApprovalMode
 					bind:planMode
 					bind:requestParams
+					bind:effort
+					bind:autoContinue
 					bind:voiceModeEnabled
 					{sending}
 					{workspace}
@@ -2257,6 +2283,8 @@
 					bind:toolApprovalMode
 					bind:planMode
 					bind:requestParams
+					bind:effort
+					bind:autoContinue
 					bind:voiceModeEnabled
 					{sending}
 					{streaming}

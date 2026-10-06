@@ -19,7 +19,7 @@ from cptr.utils.config import check_access, now_ms, _get_jwt_secret
 from cptr.utils.crypto import decrypt_key
 from cptr.utils.db import get_db
 from cptr.utils.chat_export import chat_directory
-from cptr.utils.effort import resolve_effort_levels
+from cptr.utils.effort import known_reasoning_models, resolve_effort_levels
 from cptr.utils.runtime import Runtime, FileError
 
 log = logging.getLogger(__name__)
@@ -294,6 +294,52 @@ async def _get_connection_models(conn: dict, app_state) -> list[str]:
     return cache.get(conn_id, [])
 
 
+async def _fetch_openrouter_reasoning_models(conn: dict) -> None:
+    """Record which OpenRouter models publish ``reasoning`` support.
+
+    OpenRouter's /models response carries ``supported_parameters`` per model,
+    which is authoritative capability data — strictly better than inferring it
+    from the model id. It is fetched once and shared by every OpenRouter
+    connection, and a failure is non-fatal: the vendor fallback in
+    ``cptr/utils/effort.py`` takes over and the dropdown simply appears on fewer
+    models until the next successful fetch.
+    """
+    import httpx
+
+    from cptr.utils.ai import _openrouter_headers
+    from cptr.utils.effort import set_openrouter_reasoning_models
+
+    if known_reasoning_models():
+        return
+
+    base_url = (conn.get("base_url") or "https://openrouter.ai/api/v1").rstrip("/")
+    url = f"{base_url}/models"
+    try:
+        secret = _get_jwt_secret()
+        api_key = decrypt_key(conn.get("api_key", ""), secret) if conn.get("api_key") else None
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key or ''}",
+                    **_openrouter_headers(url),
+                },
+            )
+            if r.status_code != 200:
+                log.warning("OpenRouter capability fetch failed: HTTP %d", r.status_code)
+                return
+            data = r.json().get("data") or []
+            ids = [
+                m["id"]
+                for m in data
+                if m.get("id") and "reasoning" in (m.get("supported_parameters") or [])
+            ]
+        set_openrouter_reasoning_models(ids)
+        log.info("OpenRouter: %d/%d models declare reasoning support", len(ids), len(data))
+    except Exception:
+        log.exception("OpenRouter capability fetch error")
+
+
 async def warm_model_cache(app_state) -> None:
     """Pre-fetch chat model sources before the application accepts requests."""
     connections = [c for c in await _get_connections() if c.get("enabled", True)]
@@ -303,6 +349,12 @@ async def warm_model_cache(app_state) -> None:
 
     tasks.append(get_available_agent_model_entries(app_state))
     await asyncio.gather(*tasks)
+
+    # Capability metadata, once, for any OpenRouter connection present.
+    for conn in connections:
+        if any(host in (conn.get("base_url") or "") for host in ("openrouter.ai",)):
+            await _fetch_openrouter_reasoning_models(conn)
+            break
 
 
 def invalidate_model_cache(app_state):
@@ -328,6 +380,10 @@ async def get_models(request: Request):
         model_ids = await _get_connection_models(conn, request.app.state)
 
         prefix = (conn.get("prefix_id") or "").strip()
+        if not prefix and "openrouter.ai" in (conn.get("base_url") or ""):
+            # Normally done in warm_model_cache; this covers a cache cold start
+            # that skipped the warm-up.
+            await _fetch_openrouter_reasoning_models(conn)
 
         for model_id in model_ids or []:
             prefixed_id = f"{prefix}/{model_id}" if prefix else model_id

@@ -424,6 +424,10 @@ class UpdateConnectionRequest(BaseModel):
 
 CONFIG_KEY_CHAT_MODELS = "chat.models"
 
+# Config keys that carry no per-model configuration of their own: an entry with
+# only these set (and is_active not False) is treated as empty and dropped.
+_DEFAULT_ONLY_CONFIG_KEYS = {"is_active"}
+
 
 @router.get("/models/config")
 async def get_model_config(request: Request):
@@ -474,6 +478,13 @@ async def refresh_model_list(request: Request):
 class UpdateModelConfigRequest(BaseModel):
     is_active: Optional[bool] = None
     params: Optional[dict] = None
+    # Reasoning-effort capability, read by cptr.utils.effort. `effort_levels`
+    # restricts the dropdown to named levels; `reasoning_effort_param` renames
+    # the wire key for a provider this build does not know about. Sending
+    # effort_levels: [] is how an admin says "this model takes no effort knob".
+    effort_levels: Optional[List[str]] = None
+    reasoning_effort_param: Optional[str] = None
+    anthropic_thinking_budget: Optional[int] = None
 
 
 @router.put("/models/{model_id:path}/config")
@@ -490,8 +501,27 @@ async def update_model_config(request: Request, model_id: str, body: UpdateModel
     if body.params is not None:
         entry["params"] = body.params
 
-    # Clean up empty entries
-    if not entry or (entry.keys() <= {"is_active"} and entry.get("is_active") is not False):
+    if body.effort_levels is not None:
+        entry["effort_levels"] = body.effort_levels
+
+    if body.reasoning_effort_param is not None:
+        key = body.reasoning_effort_param.strip()
+        if key:
+            entry["reasoning_effort_param"] = key
+        else:
+            entry.pop("reasoning_effort_param", None)
+
+    if body.anthropic_thinking_budget is not None:
+        if body.anthropic_thinking_budget > 0:
+            entry["anthropic_thinking_budget"] = body.anthropic_thinking_budget
+        else:
+            entry.pop("anthropic_thinking_budget", None)
+
+    # Clean up empty entries. An entry that declares effort capability is kept
+    # even when everything else is default, since it is not empty config.
+    if not entry:
+        all_config.pop(model_id, None)
+    elif entry.keys() <= _DEFAULT_ONLY_CONFIG_KEYS and entry.get("is_active") is not False:
         if not entry.get("params"):
             all_config.pop(model_id, None)
         else:

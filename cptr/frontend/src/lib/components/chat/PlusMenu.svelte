@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { ToolApprovalMode } from '$lib/apis/chat';
+	import type { ToolApprovalMode, AutoContinueConfig } from '$lib/apis/chat';
 	import { tooltip } from '$lib/tooltip';
 	import { t } from '$lib/i18n';
 	import Icon from '../Icon.svelte';
@@ -12,6 +12,7 @@
 		toolApprovalMode?: ToolApprovalMode;
 		planMode?: boolean;
 		requestParams?: Record<string, unknown>;
+		autoContinue?: AutoContinueConfig;
 		onchange?: () => void;
 		ontoolapprovalchange?: (mode: ToolApprovalMode) => void;
 	}
@@ -21,12 +22,13 @@
 		toolApprovalMode = $bindable('auto'),
 		planMode = $bindable(false),
 		requestParams = $bindable({}),
+		autoContinue = $bindable({ enabled: false }),
 		onchange,
 		ontoolapprovalchange
 	}: Props = $props();
 
 	let open = $state(false);
-	let tab = $state<'' | 'tools' | 'request_params'>('');
+	let tab = $state<'' | 'tools' | 'request_params' | 'auto_continue'>('');
 	let btnEl: HTMLButtonElement | undefined = $state();
 	let menuEl: HTMLDivElement | undefined = $state();
 	let inputEl: HTMLInputElement | undefined = $state();
@@ -95,6 +97,31 @@
 			requestAnimationFrame(updatePosition);
 		}
 	}
+
+	// ── Auto-continue state ────────────────────────
+	// Kept as a local draft so typing does not fire a settings save per
+	// keystroke; `syncAutoContinue` is the only writer back to the bound prop.
+	let autoPromptDraft = $state('');
+	let autoMaxRunsDraft = $state(String(autoContinue.max_runs ?? 25));
+
+	function syncAutoContinue() {
+		const trimmed = autoPromptDraft.trim();
+		autoContinue = {
+			enabled: autoContinue.enabled,
+			...(trimmed ? { prompt: trimmed } : {}),
+			max_runs: clampRuns(autoMaxRunsDraft)
+		};
+	}
+
+	function clampRuns(raw: string): number {
+		const n = Number.parseInt(raw, 10);
+		if (!Number.isFinite(n)) return 25;
+		return Math.max(1, Math.min(n, 200));
+	}
+
+	$effect(() => {
+		autoPromptDraft = autoContinue.prompt ?? '';
+	});
 
 	function updatePosition() {
 		if (!btnEl || !menuEl) return;
@@ -250,7 +277,8 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		bind:this={menuEl}
-		class="app-theme app-surface fixed z-[101] w-56 rounded-xl border shadow-xl p-0.5 overflow-hidden"
+		class="app-theme app-surface fixed z-[101] rounded-xl border shadow-xl p-0.5 overflow-hidden
+			{tab === 'auto_continue' ? 'w-72' : 'w-56'}"
 		style="left: {pos.x}px; bottom: {pos.bottom}px; opacity: {ready ? 1 : 0}; pointer-events: {ready
 			? 'auto'
 			: 'none'};"
@@ -336,6 +364,28 @@
 
 				<div class="app-divider h-px mx-1 my-0.5"></div>
 
+				<!-- Auto-continue: the one toggle that changes what happens *after*
+				     a turn ends, so it opens a panel (prompt text + run cap)
+				     rather than flipping straight from the main menu. -->
+				<button
+					class="flex items-center gap-2 w-full h-7 px-2 rounded-xl text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white transition-colors duration-75"
+					onclick={() => (tab = 'auto_continue')}
+				>
+					<Icon name="refresh" size={14} class="shrink-0" />
+					<span class="flex-1 text-left truncate">{$t('plusMenu.autoContinue')}</span>
+					<ToggleSwitch
+						value={autoContinue.enabled}
+						ariaLabel={$t('plusMenu.autoContinue')}
+						onchange={(v) => {
+							autoContinue = { ...autoContinue, enabled: v };
+							syncAutoContinue();
+							onchange?.();
+						}}
+					/>
+				</button>
+
+				<div class="app-divider h-px mx-1 my-0.5"></div>
+
 				<button
 					class="flex items-center gap-2 w-full h-7 px-2 rounded-xl text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white transition-colors duration-75"
 					onclick={() => (tab = 'tools')}
@@ -374,6 +424,63 @@
 					{/if}
 					<Icon name="chevron-right" size={12} class="shrink-0 text-gray-400 dark:text-gray-500" />
 				</button>
+			</div>
+		{:else if tab === 'auto_continue'}
+			<!-- Auto-continue submenu -->
+			<div class="plus-menu-slide-in-right">
+				<button
+					class="flex items-center gap-2 w-full h-7 px-2 rounded-xl text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white transition-colors duration-75"
+					onclick={() => (tab = '')}
+				>
+					<Icon name="chevron-left" size={12} />
+					<span class="flex-1 text-left font-medium">{$t('plusMenu.autoContinue')}</span>
+					<ToggleSwitch
+						value={autoContinue.enabled}
+						ariaLabel={$t('plusMenu.autoContinue')}
+						onchange={(v) => {
+							autoContinue = { ...autoContinue, enabled: v };
+							syncAutoContinue();
+							onchange?.();
+						}}
+					/>
+				</button>
+
+				<div class="app-divider h-px mx-1 my-0.5"></div>
+
+				<div class="px-2 py-1 flex flex-col gap-1.5">
+					<label class="text-[0.6875rem] text-gray-500 dark:text-gray-400" for="ac-runs">
+						{$t('plusMenu.autoContinueRuns')}
+					</label>
+					<div class="flex items-center gap-1.5">
+						<input
+							id="ac-runs"
+							type="number"
+							min="1"
+							max="200"
+							bind:value={autoMaxRunsDraft}
+							onblur={syncAutoContinue}
+							onchange={syncAutoContinue}
+							disabled={!autoContinue.enabled}
+							class="w-16 bg-transparent text-[0.6875rem] font-mono text-gray-600 dark:text-gray-400 outline-none disabled:opacity-40"
+						/>
+						<span class="text-[0.625rem] text-gray-400 dark:text-gray-500">
+							{$t('plusMenu.autoContinueRunsHint')}
+						</span>
+					</div>
+
+					<label class="text-[0.6875rem] text-gray-500 dark:text-gray-400" for="ac-prompt">
+						{$t('plusMenu.autoContinuePrompt')}
+					</label>
+					<textarea
+						id="ac-prompt"
+						rows="3"
+						placeholder={$t('plusMenu.autoContinuePromptPlaceholder')}
+						bind:value={autoPromptDraft}
+						onblur={syncAutoContinue}
+						disabled={!autoContinue.enabled}
+						class="w-full resize-none bg-transparent text-[0.6875rem] text-gray-600 dark:text-gray-400 placeholder:text-gray-300 dark:placeholder:text-gray-600 outline-none disabled:opacity-40"
+					></textarea>
+				</div>
 			</div>
 		{:else if tab === 'tools'}
 			<!-- Tool permissions submenu -->

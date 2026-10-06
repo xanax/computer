@@ -1260,8 +1260,7 @@
 	"dashboard.deferManualHint": "不會自動執行，這一列等你來做。",
 	"dashboard.reminderWaiting": "等你來做",
 	"dashboard.reminderDue": "現在該做了",
-	"connections.providerType": "供應商類型"
-,
+	"connections.providerType": "供應商類型",
 	"tasks.title": "任務",
 	"tasks.manage": "任務",
 	"tasks.toggleSidebar": "切換側邊欄",
@@ -1306,8 +1305,7 @@
 	"tasks.failedToReview": "更新任務失敗",
 	"tasks.failedToCancel": "停止任務失敗",
 	"tasks.failedToDelete": "刪除失敗",
-	"tasks.failedToCreate": "儲存自動化失敗"
-,
+	"tasks.failedToCreate": "儲存自動化失敗",
 	"dashboard.title": "面板",
 	"dashboard.backToWorkspace": "返回工作區",
 	"dashboard.newChat": "新增聊天",
@@ -1347,8 +1345,7 @@
 	"dashboard.jobStop": "停止執行",
 	"dashboard.jobClearRun": "清除排程執行",
 	"dashboard.jobDismissRun": "清除這次已完成的執行",
-	"dashboard.jobOpenRun": "開啟該執行的對話"
-,
+	"dashboard.jobOpenRun": "開啟該執行的對話",
 	"tasks.schedule": "排程",
 	"tasks.once": "一次",
 	"tasks.hourly": "每小時",
@@ -1365,13 +1362,11 @@
 	"tasks.dayFr": "五",
 	"tasks.daySa": "六",
 	"tasks.daySu": "日",
-	"tasks.model": "模型"
-,
+	"tasks.model": "模型",
 	"dashboard.promptTitle": "工作區提示詞",
 	"dashboard.promptHint": "顯示在這裡，並在該工作區的每次對話開頭傳送。",
 	"dashboard.promptPlaceholder": "這個工作區是做什麼的？",
-	"dashboard.promptEmpty": "還沒有提示詞。"
-,
+	"dashboard.promptEmpty": "還沒有提示詞。",
 	"dashboard.notesTitle": "筆記",
 	"dashboard.notesHint": "會傳送到該工作區的每次對話——代理也可以加入自己的筆記。",
 	"dashboard.notesPlaceholder": "留給下次對話的筆記",
@@ -1380,5 +1375,19 @@
 	"dashboard.notesByAgent": "來自對話",
 	"dashboard.notesByYou": "你",
 	"sidebar.showMoreCount": "顯示更多（{{count}}）",
-	"sidebar.showFewer": "收合"
+	"sidebar.showFewer": "收合",
+	"plusMenu.autoContinue": "自動繼續",
+	"plusMenu.autoContinueRuns": "最多迭代輪數",
+	"plusMenu.autoContinueRunsHint": "連續的後續提示",
+	"plusMenu.autoContinuePrompt": "後續提示詞",
+	"plusMenu.autoContinuePromptPlaceholder": "留空則使用預設文字",
+	"effortSelector.title": "推理強度",
+	"effortSelector.default": "預設",
+	"effortSelector.minimal": "最低",
+	"effortSelector.low": "低",
+	"effortSelector.medium": "中",
+	"effortSelector.high": "高",
+	"models.effortLevels": "推理強度",
+	"models.effortLevelsAuto": "自動",
+	"models.effortLevelsHint": "設為自動時，cptr 會依模型名稱判斷。不選擇任何級別，即可從輸入框移除推理強度選擇器。"
 }

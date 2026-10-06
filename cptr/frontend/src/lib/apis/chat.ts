@@ -69,11 +69,27 @@ export interface SendMessageResult {
 
 export type ToolApprovalMode = 'ask' | 'auto' | 'full';
 
+/** Auto-continue: when a turn of this chat ends cleanly, the server
+ *  appends a static follow-up prompt so the agent iterates on its own. */
+export interface AutoContinueConfig {
+	enabled: boolean;
+	/** The static follow-up text. Empty means the server's default. */
+	prompt?: string;
+	/** Cap on consecutive follow-ups before the chain stops for a human. */
+	max_runs?: number;
+}
+
 export interface ChatSendParams {
 	tool_approval_mode?: ToolApprovalMode;
 	plan_mode?: boolean;
 	request_params?: Record<string, unknown>;
 	voice_mode?: boolean;
+	auto_continue?: AutoContinueConfig;
+	/**
+	 * Named reasoning-effort level, e.g. `low`. `default` (or absent) writes
+	 * nothing to the request. Sent per chat so each conversation keeps its own.
+	 */
+	effort?: string;
 }
 
 export interface CompactChatResult {
@@ -179,10 +195,11 @@ export const updateChatTitle = (chatId: string, title: string) =>
 	});
 
 export const updateChatSettings = (chatId: string, modelId: string, params: ChatSendParams) =>
-	fetchJSON<{ ok: boolean }>(
-		`/api/chats/${chatId}/settings`,
-		{ method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_id: modelId, params }) }
-	);
+	fetchJSON<{ ok: boolean }>(`/api/chats/${chatId}/settings`, {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ model_id: modelId, params })
+	});
 
 export const forkChat = (chatId: string, messageId?: string | null) =>
 	fetchJSON<{ ok: boolean; chat_id: string }>(
@@ -241,8 +258,7 @@ export const answerAskUser = (
 	callId: string,
 	answers: Record<string, string>,
 	timedOut = false
-) =>
-	resolveToolCall(chatId, messageId, callId, 'answer', { answers, timedOut });
+) => resolveToolCall(chatId, messageId, callId, 'answer', { answers, timedOut });
 
 export const cancelTask = (chatId: string, messageId: string) =>
 	fetchJSON(`/api/chats/${chatId}/messages/${messageId}/cancel`, { method: 'POST' });
