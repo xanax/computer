@@ -2,6 +2,8 @@
 
 Newest first. One line per task. Current truth is in `areas/`, not here.
 
+2026-10-06 — provider-error-surfacing — ling-3.1-flash 429s from OpenRouter's shared free pool; cptr keeps only "Provider returned error".
+
 2026-10-06 — dev-instance-and-restart — Found by checking rather than assuming, on the way out of the global-profile build: the user's instance is `cptr run --port 4200 --headless` with no `--reload`, so the backend half of the feature is not live until `bash _restart_server.sh`; the frontend half already is, because `cptr/frontend/build` is served from disk per request. Route existence can be settled without a restart by walking `app.routes` via `_IncludedRouter.original_router` (a `TestClient` cannot tell you, since the auth middleware 401s every path, real or invented).
 
 2026-10-06 — workspace-state-ownership — Built the per-user **global profile**: one prompt that opens every chat (every workspace *and* the home page), stored in `user_states.data["profile"]` with no migration, `[PROFILE]` prepended ahead of `[WORKSPACE PROMPT]` in `load_system_prompt`, edited in Settings → General. Since it lands in `user_states.data` — the same blob the ~300 ms preferences autosave PUTs wholesale — it got its own endpoint and `put_preferences` now drops the key (B-019 one layer up). 16 tests; the ordering of the three self-prepending blocks is itself untested behaviour, so reordering `load_system_prompt` silently reorders every prompt.
