@@ -47,9 +47,27 @@ The run counter deliberately sits in `meta.auto_continue_state`, *outside*
 `meta.params`, because the client rewrites `params` wholesale on every settings
 save and would erase it.
 
+## Truncated turns
+
+Fixed (B-023 / B-027). The three stream adapters now carry the provider's stop
+reason on their terminal `done`, and `maybe_queue_auto_continue` declines to
+queue when it means the answer was cut short (`length`, `max_tokens`,
+`max_output_tokens`, `content_filter`, `refusal`, `incomplete`) — see
+`is_truncated` / `TRUNCATION_FINISH_REASONS` in `cptr/utils/auto_continue.py`.
+
+Two decisions worth keeping:
+
+- **`None` means clean.** The agent-target path never reports a reason, so
+  treating "unknown" as truncated would silently disable the feature on that
+  transport for every turn. Only a *recognised* truncation reason gates.
+- **A declined turn does not advance the run counter.** Otherwise repeated
+  truncations would exhaust the cap of a chat that never actually iterated.
+
+A truncation is logged (`turn ended with finish_reason=…`). Surfacing it in the
+chat itself (a badge on the message) is not done.
+
 ## Known limitation
 
-A turn the provider truncated (`finish_reason: "length"`) is recorded exactly
-like a genuine completion — see `NOTES-silent-turn-truncation.md` / B-023 — so
-auto-continue cannot tell the two apart yet and will iterate on a truncated turn.
-Fixing that means capturing `finish_reason` in the `done` handler.
+Nothing outstanding on the truncation front. `NOTES-silent-turn-truncation.md`
+keeps the original evidence for why the fix looks the way it does; its line
+numbers and "no fix applied" notes are historical.
