@@ -1394,5 +1394,7 @@
 	"general.profileDesc": "Отправляется в начале каждого чата — в любом пространстве и на главной странице.",
 	"general.profilePlaceholder": "Как чаты должны с вами обращаться?",
 	"general.profileEmpty": "Профиля пока нет.",
-	"general.profileSaveFailed": "Не удалось сохранить профиль"
+	"general.profileSaveFailed": "Не удалось сохранить профиль",
+	"modelSelector.pin": "Закрепить сверху",
+	"modelSelector.unpin": "Открепить"
 }

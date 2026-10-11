@@ -1394,5 +1394,7 @@
 	"general.profileDesc": "Se envía al inicio de cada chat, en todos los espacios y en la página de inicio.",
 	"general.profilePlaceholder": "¿Cómo deben tratarte los chats?",
 	"general.profileEmpty": "Aún no hay perfil.",
-	"general.profileSaveFailed": "No se pudo guardar el perfil"
+	"general.profileSaveFailed": "No se pudo guardar el perfil",
+	"modelSelector.pin": "Fijar arriba",
+	"modelSelector.unpin": "Quitar de fijados"
 }

@@ -1394,5 +1394,7 @@
 	"general.profileDesc": "Wird am Anfang jedes Chats gesendet – in jedem Arbeitsbereich und auf der Startseite.",
 	"general.profilePlaceholder": "Wie sollen Chats mit dir umgehen?",
 	"general.profileEmpty": "Noch kein Profil.",
-	"general.profileSaveFailed": "Profil konnte nicht gespeichert werden"
+	"general.profileSaveFailed": "Profil konnte nicht gespeichert werden",
+	"modelSelector.pin": "Oben anheften",
+	"modelSelector.unpin": "Loslösen"
 }

@@ -1394,5 +1394,7 @@
 	"general.profileDesc": "모든 워크스페이스와 홈 화면에서 모든 채팅 시작 부분에 전송됩니다.",
 	"general.profilePlaceholder": "채팅이 당신을 어떻게 대해야 할까요?",
 	"general.profileEmpty": "아직 프로필이 없습니다.",
-	"general.profileSaveFailed": "프로필을 저장하지 못했습니다"
+	"general.profileSaveFailed": "프로필을 저장하지 못했습니다",
+	"modelSelector.pin": "상단에 고정",
+	"modelSelector.unpin": "고정 해제"
 }

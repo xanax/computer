@@ -1508,5 +1508,7 @@
 	"general.profileDesc": "Sent at the start of every chat — in every workspace, and on the home page.",
 	"general.profilePlaceholder": "How should chats treat you?",
 	"general.profileEmpty": "No profile yet.",
-	"general.profileSaveFailed": "Failed to save profile"
+	"general.profileSaveFailed": "Failed to save profile",
+	"modelSelector.pin": "Pin to top",
+	"modelSelector.unpin": "Unpin"
 }

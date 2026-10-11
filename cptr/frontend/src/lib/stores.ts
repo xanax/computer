@@ -39,6 +39,7 @@ import {
 	resurface
 } from '$lib/stores/workspacePriority.svelte';
 import { keybindings, loadKeybindings } from '$lib/stores/keybindings';
+import { applyStoredModelPins, pinnedModels } from '$lib/stores/pinnedModels';
 import { defaultPwaPreferences, type PwaPreferences } from '$lib/intents/types';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
 import { localPage } from '$lib/utils/localPage';
@@ -153,6 +154,7 @@ export interface UserPreferences {
 	locale: string;
 	workspaceOrder?: string[]; // ordered paths for sidebar drag-reorder
 	workspacePinned?: string[]; // sidebar workspaces kept visible, best-first
+	pinnedModels?: string[]; // model ids kept at the top of every model dropdown
 	keybindings?: Record<string, string>; // user-customised keyboard shortcuts
 	version?: string; // last seen app version for changelog
 	showUpdateToast?: boolean; // show version update notifications (default true)
@@ -624,6 +626,7 @@ function persistPreferences(): void {
 			locale: i18next.language,
 			workspaceOrder: get(workspaceOrder),
 			workspacePinned: get(pinnedWorkspaces),
+			pinnedModels: get(pinnedModels),
 			keybindings: get(keybindings),
 			version: get(lastSeenVersion),
 			showUpdateToast: get(showUpdateToastPref),
@@ -673,6 +676,9 @@ function subscribeForPersistence() {
 		if (get(stateLoaded)) persistPreferences();
 	});
 	pinnedWorkspaces.subscribe(() => {
+		if (get(stateLoaded)) persistPreferences();
+	});
+	pinnedModels.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
 	keybindings.subscribe(() => {
@@ -747,6 +753,7 @@ export async function loadPreferences(): Promise<void> {
 		// The sidebar's visible set is the user's, not the server's suggestion:
 		// apply what they last chose before the ranking ever loads.
 		applyStoredPins(prefs.workspacePinned);
+		applyStoredModelPins(prefs.pinnedModels);
 		if (prefs.keybindings) loadKeybindings(prefs.keybindings as Record<string, string>);
 		if (prefs.version) lastSeenVersion.set(prefs.version as string);
 		if (prefs.showUpdateToast !== undefined)

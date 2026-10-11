@@ -22,6 +22,8 @@
 		actionIcon?: string;
 		actionLabel?: string;
 		actionOnclick?: (anchor: HTMLElement) => void;
+		/** Render the trailing action as "on": full-contrast icon, pressed state. */
+		actionActive?: boolean;
 	}
 
 	interface Props {
@@ -437,8 +439,11 @@
 						</button>
 						{#if item.actionIcon && item.actionOnclick}
 							<button
-								class="app-icon-muted app-interactive flex items-center justify-center w-5 h-5 mr-0.5 rounded-lg shrink-0 transition-all duration-75"
+								class="{item.actionActive
+									? 'app-action-active'
+									: 'app-icon-muted'} app-interactive flex items-center justify-center w-5 h-5 mr-0.5 rounded-lg shrink-0 transition-all duration-75"
 								aria-label={item.actionLabel}
+								aria-pressed={item.actionActive}
 								onclick={(e) => {
 									e.stopPropagation();
 									item.actionOnclick?.(e.currentTarget as HTMLElement);

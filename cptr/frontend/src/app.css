@@ -145,6 +145,12 @@
 	color: var(--app-fg-subtle);
 }
 
+/* A trailing row action that is "on" (e.g. a pinned model): full contrast, so
+   the state reads at a glance without an accent colour the themes do not have. */
+.app-action-active {
+	color: var(--app-fg);
+}
+
 .app-interactive:hover {
 	background: var(--app-hover);
 	color: var(--app-fg);

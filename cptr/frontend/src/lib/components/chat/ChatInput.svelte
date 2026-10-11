@@ -669,8 +669,6 @@
 					spellcheck: 'true'
 				},
 				handleKeyDown: (view, event) => {
-					if (event.key === 'Enter' && isMobileInput()) return false;
-
 					if (event.key === 'Enter' && !event.shiftKey) {
 						// Don't send while suggestion popup is open — let it confirm selection
 						if (popupComponent || skillPopupComponent) return false;

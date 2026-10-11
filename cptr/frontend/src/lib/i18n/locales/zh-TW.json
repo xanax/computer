@@ -1394,5 +1394,7 @@
 	"general.profileDesc": "在每個工作區以及首頁的每次對話開頭傳送。",
 	"general.profilePlaceholder": "對話應該如何對待你？",
 	"general.profileEmpty": "還沒有個人資料。",
-	"general.profileSaveFailed": "儲存個人資料失敗"
+	"general.profileSaveFailed": "儲存個人資料失敗",
+	"modelSelector.pin": "固定到頂部",
+	"modelSelector.unpin": "取消固定"
 }

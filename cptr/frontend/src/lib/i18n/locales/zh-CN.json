@@ -1394,5 +1394,7 @@
 	"general.profileDesc": "在每个工作区以及主页的每次聊天开头发送。",
 	"general.profilePlaceholder": "聊天应该如何对待你？",
 	"general.profileEmpty": "还没有个人资料。",
-	"general.profileSaveFailed": "保存个人资料失败"
+	"general.profileSaveFailed": "保存个人资料失败",
+	"modelSelector.pin": "固定到顶部",
+	"modelSelector.unpin": "取消固定"
 }

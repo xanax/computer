@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { chatModels } from '$lib/stores/chat';
+	import { pinnedModels, togglePinnedModel } from '$lib/stores/pinnedModels';
 	import DropdownMenu from '../DropdownMenu.svelte';
 	import { t } from '$lib/i18n';
 
@@ -13,6 +14,22 @@
 		onchange?: (model: string | null) => void;
 		onclose?: () => void;
 	}
+
+	/** One row of the menu: a model, or a divider between the two groups. */
+	interface MenuItem {
+		label: string;
+		tooltip?: string;
+		active?: boolean;
+		check?: boolean;
+		divider?: boolean;
+		highlighted?: boolean;
+		onclick: () => void;
+		actionIcon?: string;
+		actionLabel?: string;
+		actionActive?: boolean;
+		actionOnclick?: (anchor: HTMLElement) => void;
+	}
+
 	let {
 		selectedModel = $bindable(),
 		preferAbove = true,
@@ -32,39 +49,69 @@
 
 	const selectorMaxHeight = $derived(isSmallViewport ? '7.5rem' : '15rem');
 
-	const filtered = $derived(
-		search.trim()
-			? $chatModels.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()))
-			: $chatModels
+	/**
+	 * The list as shown: pinned models first, then the rest, each group keeping
+	 * the order the server sent. Only the pinned set moves, so a model you
+	 * scrolled to yesterday is still where you left it.
+	 */
+	const visibleModels = $derived.by(() => {
+		const query = search.trim().toLowerCase();
+		const matches = query
+			? $chatModels.filter((model) => model.name.toLowerCase().includes(query))
+			: $chatModels;
+		const pinned = new Set($pinnedModels);
+		const isPinned = (model: { id: string }) => pinned.has(model.id);
+		return [
+			...matches.filter(isPinned).map((model) => ({ model, pinned: true })),
+			...matches.filter((model) => !isPinned(model)).map((model) => ({ model, pinned: false }))
+		];
+	});
+
+	/** A divider only earns its space when both groups are actually present. */
+	const showPinDivider = $derived(
+		visibleModels.some((entry) => entry.pinned) && visibleModels.some((entry) => !entry.pinned)
 	);
 
 	const menuItems = $derived.by(() => {
-		const items = [
-			...(nullable
-				? [
-						{
-							label: nullLabel,
-							tooltip: nullLabel,
-							active: selectedModel === null || selectedModel === '',
-							check: true,
-							onclick: () => {
-								selectedModel = null;
-								onchange?.(null);
-							}
-						}
-					]
-				: []),
-			...filtered.map((m) => ({
-				label: m.name,
-				tooltip: m.name,
-				active: m.id === selectedModel,
+		const items: MenuItem[] = [];
+
+		if (nullable) {
+			items.push({
+				label: nullLabel,
+				tooltip: nullLabel,
+				active: selectedModel === null || selectedModel === '',
 				check: true,
 				onclick: () => {
-					selectedModel = m.id;
-					onchange?.(m.id);
+					selectedModel = null;
+					onchange?.(null);
 				}
-			}))
-		];
+			});
+		}
+
+		let dividerAdded = false;
+		for (const entry of visibleModels) {
+			if (showPinDivider && !entry.pinned && !dividerAdded) {
+				items.push({ label: '', divider: true, onclick: () => {} });
+				dividerAdded = true;
+			}
+			items.push({
+				label: entry.model.name,
+				tooltip: entry.model.name,
+				active: entry.model.id === selectedModel,
+				check: true,
+				onclick: () => {
+					selectedModel = entry.model.id;
+					onchange?.(entry.model.id);
+				},
+				// Pinning is the one thing the row's own click cannot do, so it
+				// gets the trailing button. Toggling only reorders the list and
+				// leaves the menu open, so several can be pinned in one go.
+				actionIcon: entry.pinned ? 'pin-filled' : 'pin',
+				actionLabel: entry.pinned ? $t('modelSelector.unpin') : $t('modelSelector.pin'),
+				actionActive: entry.pinned,
+				actionOnclick: () => togglePinnedModel(entry.model.id)
+			});
+		}
 
 		const highlighted = Math.min(highlightedIndex, Math.max(items.length - 1, 0));
 		return items.map((item, index) => ({ ...item, highlighted: index === highlighted }));
@@ -91,21 +138,28 @@
 		searchInputEl?.select();
 	}
 
-	function selectedIndex() {
-		if (nullable && (selectedModel === null || selectedModel === '')) return 0;
-		const index = filtered.findIndex((m) => m.id === selectedModel);
-		return index >= 0 ? index + (nullable ? 1 : 0) : 0;
+	/** Index of the next pickable row, stepping `delta` rows from `from`. */
+	function stepSelectableIndex(from: number, delta: number): number {
+		const total = menuItems.length;
+		if (total === 0) return -1;
+		let index = from;
+		for (let step = 0; step < total; step++) {
+			index = (index + delta + total) % total;
+			if (!menuItems[index]?.divider) return index;
+		}
+		return -1;
 	}
 
 	function resetHighlightedIndex() {
-		const total = filtered.length + (nullable ? 1 : 0);
-		highlightedIndex = total > 0 ? Math.min(selectedIndex(), total - 1) : 0;
+		// Start on what is selected, so Enter means "keep this" and the arrow
+		// keys move from the model the user is actually on.
+		const activeIndex = menuItems.findIndex((item) => item.active && !item.divider);
+		highlightedIndex = activeIndex >= 0 ? activeIndex : Math.max(stepSelectableIndex(-1, 1), 0);
 	}
 
 	function moveHighlightedIndex(delta: number) {
-		const total = menuItems.length;
-		if (total === 0) return;
-		highlightedIndex = (highlightedIndex + delta + total) % total;
+		const next = stepSelectableIndex(highlightedIndex, delta);
+		if (next >= 0) highlightedIndex = next;
 	}
 
 	export async function openSelector() {
@@ -206,7 +260,8 @@
 								moveHighlightedIndex(-1);
 							} else if (e.key === 'Enter') {
 								e.preventDefault();
-								menuItems[Math.min(highlightedIndex, menuItems.length - 1)]?.onclick();
+								const item = menuItems[Math.min(highlightedIndex, menuItems.length - 1)];
+								if (item && !item.divider) item.onclick();
 								closeSelector();
 							}
 						}}

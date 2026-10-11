@@ -1394,5 +1394,7 @@
 	"general.profileDesc": "すべてのワークスペースとホーム画面で、各チャットの冒頭に送信されます。",
 	"general.profilePlaceholder": "チャットはあなたをどう扱うべき？",
 	"general.profileEmpty": "プロフィールはまだありません。",
-	"general.profileSaveFailed": "プロフィールを保存できませんでした"
+	"general.profileSaveFailed": "プロフィールを保存できませんでした",
+	"modelSelector.pin": "上部に固定",
+	"modelSelector.unpin": "固定を解除"
 }

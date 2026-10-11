@@ -1394,5 +1394,7 @@
 	"general.profileDesc": "Envoyé au début de chaque conversation — dans chaque espace et sur la page d’accueil.",
 	"general.profilePlaceholder": "Comment les conversations doivent-elles vous traiter ?",
 	"general.profileEmpty": "Pas encore de profil.",
-	"general.profileSaveFailed": "Échec de l’enregistrement du profil"
+	"general.profileSaveFailed": "Échec de l’enregistrement du profil",
+	"modelSelector.pin": "Épingler en haut",
+	"modelSelector.unpin": "Détacher"
 }
